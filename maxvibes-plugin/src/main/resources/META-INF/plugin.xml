@@ -1,31 +1,33 @@
-<!-- maxvibes-plugin/src/main/resources/META-INF/plugin.xml -->
 <idea-plugin>
     <id>com.maxvibes.plugin</id>
     <name>MaxVibes</name>
     <vendor>MaxVibes Team</vendor>
+    <version>1.0-SNAPSHOT</version>
 
     <description><![CDATA[
-        AI-powered coding assistant for Kotlin.
-        Modify code at file and PSI element level.
+        <h2>MaxVibes - AI-powered Kotlin Assistant</h2>
+        <p>Modify and analyze Kotlin code using AI.</p>
+        <ul>
+            <li>Add functions, properties, and classes</li>
+            <li>Analyze code structure</li>
+            <li>Works at file and PSI element level</li>
+        </ul>
     ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
     <depends>org.jetbrains.kotlin</depends>
 
     <extensions defaultExtensionNs="com.intellij">
+        <!-- Project Service -->
+        <projectService
+                serviceImplementation="com.maxvibes.plugin.service.MaxVibesService"/>
+
         <!-- Tool Window -->
         <toolWindow
                 id="MaxVibes"
                 anchor="right"
                 factoryClass="com.maxvibes.plugin.ui.MaxVibesToolWindowFactory"
                 icon="AllIcons.Actions.Lightning"/>
-
-        <!-- Settings -->
-        <projectConfigurable
-                instance="com.maxvibes.plugin.settings.MaxVibesSettingsConfigurable"
-                displayName="MaxVibes"
-                id="com.maxvibes.settings"
-                parentId="tools"/>
 
         <!-- Notifications -->
         <notificationGroup
@@ -34,6 +36,7 @@
     </extensions>
 
     <actions>
+        <!-- Modify Code Action -->
         <action
                 id="MaxVibes.ModifyCode"
                 class="com.maxvibes.plugin.action.ModifyCodeAction"
@@ -42,6 +45,17 @@
                 icon="AllIcons.Actions.Lightning">
             <add-to-group group-id="EditorPopupMenu" anchor="first"/>
             <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt M"/>
+        </action>
+
+        <!-- Analyze Code Action -->
+        <action
+                id="MaxVibes.AnalyzeCode"
+                class="com.maxvibes.plugin.action.AnalyzeCodeAction"
+                text="MaxVibes: Analyze Code"
+                description="AI-powered code analysis"
+                icon="AllIcons.Actions.Preview">
+            <add-to-group group-id="EditorPopupMenu" anchor="after" relative-to-action="MaxVibes.ModifyCode"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt A"/>
         </action>
     </actions>
 </idea-plugin>
