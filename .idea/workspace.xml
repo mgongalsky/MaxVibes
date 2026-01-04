@@ -4,7 +4,24 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="6b0e4fb8-911a-491d-b25d-1d8736dd714f" name="Changes" comment="" />
+    <list default="true" id="6b0e4fb8-911a-491d-b25d-1d8736dd714f" name="Changes" comment="Add documentation: architecture, status, LLM plan, MVP1 roadmap">
+      <change afterPath="$PROJECT_DIR$/maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/KoogLLMService.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/LLMServiceFactory.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/agent/AnalyzerAgent.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/agent/CoderAgent.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/agent/tools/CodeModificationTools.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/config/LLMProviderConfig.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/maxvibes-adapter-llm/src/test/kotlin/com/maxvibes/adapter/llm/KoogLLMServiceTest.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/maxvibes-adapter-llm/src/test/kotlin/com/maxvibes/adapter/llm/agent/CoderAgentTest.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/maxvibes-adapter-llm/src/test/kotlin/com/maxvibes/adapter/llm/agent/tools/CodeModificationToolsTest.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/gradle.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/gradle.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/vcs.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/build.gradle.kts" beforeDir="false" afterPath="$PROJECT_DIR$/build.gradle.kts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/gradle.properties" beforeDir="false" afterPath="$PROJECT_DIR$/gradle.properties" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/maxvibes-adapter-llm/build.gradle.kts" beforeDir="false" afterPath="$PROJECT_DIR$/maxvibes-adapter-llm/build.gradle.kts" afterDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -15,23 +32,166 @@
       <ProjectState />
     </projectState>
   </component>
+  <component name="ExternalProjectsManager">
+    <system id="GRADLE">
+      <state>
+        <task path="$PROJECT_DIR$">
+          <activation>
+            <after_sync>
+              <task name="setupDependencies" />
+            </after_sync>
+          </activation>
+        </task>
+        <projects_view>
+          <tree_state>
+            <expand>
+              <path>
+                <item name="" type="6a2764b6:ExternalProjectsStructure$RootNode" />
+                <item name="MaxVibes" type="f1a62948:ProjectNode" />
+              </path>
+            </expand>
+            <select />
+          </tree_state>
+        </projects_view>
+      </state>
+    </system>
+  </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Kotlin Class" />
+      </list>
+    </option>
+  </component>
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
+  <component name="GitHubPullRequestSearchHistory"><![CDATA[{
+  "lastFilter": {
+    "state": "OPEN",
+    "assignee": "mgongalsky"
+  }
+}]]></component>
+  <component name="GithubPullRequestsUISettings"><![CDATA[{
+  "selectedUrlAndAccountId": {
+    "url": "https://github.com/mgongalsky/MaxVibes.git",
+    "accountId": "94d6b627-4dd3-445c-82e8-6109f51d6d49"
+  }
+}]]></component>
+  <component name="GradleScriptDefinitionsStorage" workingDir="$PROJECT_DIR$" gradleHome="C:\Users\mgong\.gradle\wrapper\dists\gradle-8.5-bin\5t9huq95ubn472n8rpzujfbqh\gradle-8.5" javaHome="C:\Users\mgong\.jdks\openjdk-21.0.2" gradleVersion="8.5" />
+  <component name="LogFilters">
+    <option name="FILTER_ERRORS" value="false" />
+    <option name="FILTER_WARNINGS" value="false" />
+    <option name="FILTER_INFO" value="true" />
+    <option name="FILTER_DEBUG" value="true" />
+    <option name="CUSTOM_FILTER" />
+  </component>
+  <component name="MarkdownSettingsMigration">
+    <option name="stateVersion" value="1" />
+  </component>
+  <component name="ProjectColorInfo"><![CDATA[{
+  "customColor": "",
+  "associatedIndex": 6
+}]]></component>
   <component name="ProjectId" id="37k2nhXM9gZA9XDmXxyXOJUmcoi" />
-  <component name="ProjectLevelVcsManager" settingsEditedManually="true" />
+  <component name="ProjectLevelVcsManager">
+    <ConfirmationsSetting value="2" id="Add" />
+  </component>
   <component name="ProjectViewState">
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
   <component name="PropertiesComponent"><![CDATA[{
   "keyToString": {
+    "ASKED_ADD_EXTERNAL_FILES": "true",
+    "Gradle.MaxVibes [:test].executor": "Run",
+    "Gradle.MaxVibes [setupDependencies].executor": "Run",
+    "Gradle.MaxVibes [test].executor": "Run",
+    "Gradle.Run Plugin.executor": "Run",
     "RunOnceActivity.OpenProjectViewOnStart": "true",
     "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
+    "RunOnceActivity.git.unshallow": "true",
     "git-widget-placeholder": "master",
-    "kotlin-language-version-configured": "true"
+    "ignore.virus.scanning.warn.message": "true",
+    "kotlin-language-version-configured": "true",
+    "settings.editor.selected.configurable": "project.propVCSSupport.DirectoryMappings"
   }
 }]]></component>
+  <component name="RecentsManager">
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="E:\Programs\Kotlin\MaxPilot\MaxVibes\docs" />
+    </key>
+  </component>
+  <component name="RunManager" selected="Gradle.Run Plugin">
+    <configuration name="MaxVibes [:test]" type="GradleRunConfiguration" factoryName="Gradle" nameIsGenerated="true">
+      <ExternalSystemSettings>
+        <option name="executionName" />
+        <option name="externalProjectPath" value="$PROJECT_DIR$" />
+        <option name="externalSystemIdString" value="GRADLE" />
+        <option name="scriptParameters" value="" />
+        <option name="taskDescriptions">
+          <list />
+        </option>
+        <option name="taskNames">
+          <list>
+            <option value=":test" />
+          </list>
+        </option>
+        <option name="vmOptions" />
+      </ExternalSystemSettings>
+      <ExternalSystemDebugServerProcess>true</ExternalSystemDebugServerProcess>
+      <ExternalSystemReattachDebugProcess>true</ExternalSystemReattachDebugProcess>
+      <ExternalSystemDebugDisabled>false</ExternalSystemDebugDisabled>
+      <DebugAllEnabled>false</DebugAllEnabled>
+      <RunAsTest>false</RunAsTest>
+      <GradleProfilingDisabled>false</GradleProfilingDisabled>
+      <GradleCoverageDisabled>false</GradleCoverageDisabled>
+      <method v="2" />
+    </configuration>
+    <configuration name="MaxVibes [test]" type="GradleRunConfiguration" factoryName="Gradle" temporary="true">
+      <ExternalSystemSettings>
+        <option name="executionName" />
+        <option name="externalProjectPath" value="$PROJECT_DIR$" />
+        <option name="externalSystemIdString" value="GRADLE" />
+        <option name="scriptParameters" />
+        <option name="taskDescriptions">
+          <list />
+        </option>
+        <option name="taskNames">
+          <list>
+            <option value="test" />
+          </list>
+        </option>
+        <option name="vmOptions" />
+      </ExternalSystemSettings>
+      <ExternalSystemDebugServerProcess>true</ExternalSystemDebugServerProcess>
+      <ExternalSystemReattachDebugProcess>true</ExternalSystemReattachDebugProcess>
+      <ExternalSystemDebugDisabled>false</ExternalSystemDebugDisabled>
+      <DebugAllEnabled>false</DebugAllEnabled>
+      <RunAsTest>false</RunAsTest>
+      <GradleProfilingDisabled>false</GradleProfilingDisabled>
+      <GradleCoverageDisabled>false</GradleCoverageDisabled>
+      <method v="2" />
+    </configuration>
+    <list>
+      <item itemvalue="Gradle.Run Plugin" />
+      <item itemvalue="Gradle.MaxVibes [:test]" />
+      <item itemvalue="Gradle.MaxVibes [test]" />
+    </list>
+    <recent_temporary>
+      <list>
+        <item itemvalue="Gradle.MaxVibes [test]" />
+      </list>
+    </recent_temporary>
+  </component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-jdk-30f59d01ecdd-26cb7f24e5b0-intellij.indexing.shared.core-IU-253.29346.138" />
+      </set>
+    </attachedChunks>
+  </component>
   <component name="SpellCheckerSettings" RuntimeDictionaries="0" Folders="0" CustomDictionaries="0" DefaultDictionary="application-level" UseSingleDictionary="true" transferred="true" />
   <component name="TaskManager">
     <task active="true" id="Default" summary="Default task">
@@ -41,6 +201,109 @@
       <option name="presentableId" value="Default" />
       <updated>1767432922030</updated>
     </task>
+    <task id="LOCAL-00001" summary="Initial commit">
+      <option name="closed" value="true" />
+      <created>1767440702239</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1767440702239</updated>
+    </task>
+    <task id="LOCAL-00002" summary="Modules added">
+      <option name="closed" value="true" />
+      <created>1767442039273</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1767442039273</updated>
+    </task>
+    <task id="LOCAL-00003" summary="build gradles added">
+      <option name="closed" value="true" />
+      <created>1767447227301</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1767447227301</updated>
+    </task>
+    <task id="LOCAL-00004" summary="Plugin xml changed">
+      <option name="closed" value="true" />
+      <created>1767447438323</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1767447438323</updated>
+    </task>
+    <task id="LOCAL-00005" summary="Add multi-module structure and domain models">
+      <option name="closed" value="true" />
+      <created>1767448124567</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1767448124567</updated>
+    </task>
+    <task id="LOCAL-00006" summary="Add application layer: ports and use cases">
+      <option name="closed" value="true" />
+      <created>1767448636753</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1767448636753</updated>
+    </task>
+    <task id="LOCAL-00007" summary="Add PSI adapter: mapper, navigator, modifier, repository">
+      <option name="closed" value="true" />
+      <created>1767449049155</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1767449049155</updated>
+    </task>
+    <task id="LOCAL-00008" summary="Add plugin UI: actions, tool window, mock LLM service">
+      <option name="closed" value="true" />
+      <created>1767450322948</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1767450322948</updated>
+    </task>
+    <task id="LOCAL-00009" summary="Add unit tests for domain, shared, application, and PSI adapter">
+      <option name="closed" value="true" />
+      <created>1767451145883</created>
+      <option name="number" value="00009" />
+      <option name="presentableId" value="LOCAL-00009" />
+      <option name="project" value="LOCAL" />
+      <updated>1767451145883</updated>
+    </task>
+    <task id="LOCAL-00010" summary="Add documentation: architecture, status, LLM plan, MVP1 roadmap">
+      <option name="closed" value="true" />
+      <created>1767452848944</created>
+      <option name="number" value="00010" />
+      <option name="presentableId" value="LOCAL-00010" />
+      <option name="project" value="LOCAL" />
+      <updated>1767452848944</updated>
+    </task>
+    <option name="localTasksCounter" value="11" />
     <servers />
+  </component>
+  <component name="UnknownFeatures">
+    <option featureType="dependencySupport" implementationName="java:junit:junit" />
+    <option featureType="dependencySupport" implementationName="java:com.jetbrains:ideaIC" />
+    <option featureType="dependencySupport" implementationName="executable:docker" />
+    <option featureType="dependencySupport" implementationName="java:io.projectreactor:reactor-core" />
+    <option featureType="dependencySupport" implementationName="executable:kubectl" />
+    <option featureType="dependencySupport" implementationName="executable:az" />
+  </component>
+  <component name="VcsManagerConfiguration">
+    <option name="ADD_EXTERNAL_FILES_SILENTLY" value="true" />
+    <MESSAGE value="Initial commit" />
+    <MESSAGE value="Modules added" />
+    <MESSAGE value="build gradles added" />
+    <MESSAGE value="Plugin xml changed" />
+    <MESSAGE value="Add multi-module structure and domain models" />
+    <MESSAGE value="Add application layer: ports and use cases" />
+    <MESSAGE value="Add PSI adapter: mapper, navigator, modifier, repository" />
+    <MESSAGE value="Add plugin UI: actions, tool window, mock LLM service" />
+    <MESSAGE value="Add unit tests for domain, shared, application, and PSI adapter" />
+    <MESSAGE value="Add documentation: architecture, status, LLM plan, MVP1 roadmap" />
+    <option name="LAST_COMMIT_MESSAGE" value="Add documentation: architecture, status, LLM plan, MVP1 roadmap" />
   </component>
 </project>
