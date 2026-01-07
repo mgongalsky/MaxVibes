@@ -7,8 +7,10 @@ dependencies {
     implementation(project(":maxvibes-domain"))
     implementation(project(":maxvibes-application"))
     implementation(project(":maxvibes-adapter-psi"))
-    implementation(project(":maxvibes-adapter-llm"))
     implementation(project(":maxvibes-shared"))
+
+    // Use shadow JAR from adapter-llm
+    implementation(project(path = ":maxvibes-adapter-llm", configuration = "shadow"))
 
     testImplementation(kotlin("test"))
 }
@@ -16,13 +18,13 @@ dependencies {
 intellij {
     version.set("2023.1.5")
     type.set("IC")
-    plugins.set(listOf("org.jetbrains.kotlin"))
+    plugins.set(listOf("com.intellij.java", "org.jetbrains.kotlin"))
 }
 
 tasks {
     patchPluginXml {
         sinceBuild.set("231")
-        untilBuild.set("241.*")
+        untilBuild.set("253.*")
     }
 
     signPlugin {

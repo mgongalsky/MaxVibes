@@ -1,7 +1,7 @@
-// maxvibes-adapter-llm/build.gradle.kts
 plugins {
     kotlin("jvm")
     kotlin("plugin.serialization")
+    id("com.github.johnrengelman.shadow") version "8.1.1"
 }
 
 dependencies {
@@ -21,13 +21,6 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
 
-    // HTTP client
-    implementation("io.ktor:ktor-client-core:2.3.7")
-    implementation("io.ktor:ktor-client-cio:2.3.7")
-    implementation("io.ktor:ktor-client-content-negotiation:2.3.7")
-    implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.7")
-    implementation("io.ktor:ktor-client-logging:2.3.7")
-
     // Testing
     testImplementation(kotlin("test"))
     testImplementation("io.mockk:mockk:1.13.8")
@@ -37,4 +30,38 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
+}
+
+// Shadow JAR - relocate Ktor to avoid IntelliJ conflicts
+tasks.shadowJar {
+    archiveClassifier.set("")
+
+    // Relocate ALL Ktor packages
+    relocate("io.ktor", "com.maxvibes.shadow.ktor")
+
+    // Also relocate transitive dependencies that might conflict
+    relocate("io.netty", "com.maxvibes.shadow.netty")
+    relocate("okhttp3", "com.maxvibes.shadow.okhttp3")
+    relocate("okio", "com.maxvibes.shadow.okio")
+
+    mergeServiceFiles()
+
+    // Exclude signatures that break the JAR
+    exclude("META-INF/*.SF")
+    exclude("META-INF/*.DSA")
+    exclude("META-INF/*.RSA")
+}
+
+// Replace standard JAR with shadow JAR
+tasks.jar {
+    enabled = false
+}
+
+artifacts {
+    archives(tasks.shadowJar)
+}
+
+// Make other tasks depend on shadowJar
+tasks.build {
+    dependsOn(tasks.shadowJar)
 }
