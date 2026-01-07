@@ -17,12 +17,11 @@ import com.maxvibes.application.port.output.*
 import com.maxvibes.domain.model.code.CodeElement
 import com.maxvibes.domain.model.modification.Modification
 import com.maxvibes.shared.result.Result
+import io.ktor.client.plugins.*
 
 /**
  * Реализация LLMService через Koog framework.
  * Поддерживает OpenAI, Anthropic и Ollama провайдеры.
- *
- * OpenAI: по умолчанию GPT-5.2 (ChatGPT 5.2) — OpenAIModels.Chat.GPT5_2
  */
 class KoogLLMService(
     private val config: LLMProviderConfig
@@ -45,9 +44,12 @@ class KoogLLMService(
         context: LLMContext
     ): Result<List<Modification>, LLMError> {
         return try {
+            log("generateModifications: instruction='${instruction.take(50)}...', provider=${config.providerType}, model=${config.modelId}")
             validateConfig()
 
+            log("Calling coderAgent.generateModifications...")
             val modifications = coderAgent.generateModifications(instruction, context)
+            log("Got ${modifications.size} modifications")
 
             if (modifications.isEmpty()) {
                 Result.Failure(
@@ -57,13 +59,23 @@ class KoogLLMService(
                 Result.Success(modifications)
             }
         } catch (e: IllegalStateException) {
+            logError("ConfigurationError", e)
             Result.Failure(LLMError.ConfigurationError(e.message ?: "Configuration error"))
+        } catch (e: HttpRequestTimeoutException) {
+            logError("HttpRequestTimeoutException", e)
+            Result.Failure(LLMError.NetworkError("Request timeout (${TIMEOUT_MS/1000}s). The LLM is taking too long. Try a simpler instruction or check your connection."))
         } catch (e: java.net.ConnectException) {
+            logError("ConnectException", e)
             Result.Failure(LLMError.NetworkError("Cannot connect to LLM provider: ${e.message}"))
         } catch (e: java.net.SocketTimeoutException) {
+            logError("SocketTimeoutException", e)
             Result.Failure(LLMError.NetworkError("Connection timeout: ${e.message}"))
         } catch (e: Exception) {
+            logError("Exception", e)
             when {
+                e.message?.contains("timeout", ignoreCase = true) == true -> {
+                    Result.Failure(LLMError.NetworkError("Timeout: ${e.message}"))
+                }
                 e.message?.contains("rate limit", ignoreCase = true) == true -> {
                     Result.Failure(LLMError.RateLimitError())
                 }
@@ -72,7 +84,7 @@ class KoogLLMService(
                     Result.Failure(LLMError.ConfigurationError("Invalid API key"))
                 }
                 else -> {
-                    Result.Failure(LLMError.InvalidResponse("LLM error: ${e.message}"))
+                    Result.Failure(LLMError.InvalidResponse("LLM error: ${e::class.simpleName}: ${e.message}"))
                 }
             }
         }
@@ -83,18 +95,32 @@ class KoogLLMService(
         codeElements: List<CodeElement>
     ): Result<AnalysisResponse, LLMError> {
         return try {
+            log("analyzeCode: question='${question.take(50)}...', elements=${codeElements.size}")
             validateConfig()
 
+            log("Calling analyzerAgent.analyzeCode...")
             val response = analyzerAgent.analyzeCode(question, codeElements)
+            log("Got analysis response")
+
             Result.Success(response)
         } catch (e: IllegalStateException) {
+            logError("ConfigurationError", e)
             Result.Failure(LLMError.ConfigurationError(e.message ?: "Configuration error"))
+        } catch (e: HttpRequestTimeoutException) {
+            logError("HttpRequestTimeoutException", e)
+            Result.Failure(LLMError.NetworkError("Request timeout. The LLM is taking too long."))
         } catch (e: java.net.ConnectException) {
+            logError("ConnectException", e)
             Result.Failure(LLMError.NetworkError("Cannot connect to LLM provider: ${e.message}"))
         } catch (e: java.net.SocketTimeoutException) {
+            logError("SocketTimeoutException", e)
             Result.Failure(LLMError.NetworkError("Connection timeout: ${e.message}"))
         } catch (e: Exception) {
+            logError("Exception", e)
             when {
+                e.message?.contains("timeout", ignoreCase = true) == true -> {
+                    Result.Failure(LLMError.NetworkError("Timeout: ${e.message}"))
+                }
                 e.message?.contains("rate limit", ignoreCase = true) == true -> {
                     Result.Failure(LLMError.RateLimitError())
                 }
@@ -103,13 +129,14 @@ class KoogLLMService(
                     Result.Failure(LLMError.ConfigurationError("Invalid API key"))
                 }
                 else -> {
-                    Result.Failure(LLMError.InvalidResponse("Analysis error: ${e.message}"))
+                    Result.Failure(LLMError.InvalidResponse("Analysis error: ${e::class.simpleName}: ${e.message}"))
                 }
             }
         }
     }
 
     private fun validateConfig() {
+        log("Validating config: provider=${config.providerType}, apiKey=${config.apiKey.take(10)}..., model=${config.modelId}")
         when (config.providerType) {
             LLMProviderType.OPENAI, LLMProviderType.ANTHROPIC -> {
                 if (config.apiKey.isBlank()) {
@@ -125,19 +152,31 @@ class KoogLLMService(
     }
 
     private fun createPromptExecutor(): PromptExecutor {
+        log("Creating PromptExecutor for ${config.providerType}")
         return when (config.providerType) {
-            LLMProviderType.OPENAI -> simpleOpenAIExecutor(config.apiKey)
-            LLMProviderType.ANTHROPIC -> simpleAnthropicExecutor(config.apiKey)
-            LLMProviderType.OLLAMA -> simpleOllamaAIExecutor(config.baseUrl ?: "http://localhost:11434")
+            LLMProviderType.OPENAI -> {
+                log("Creating OpenAI executor with key: ${config.apiKey.take(10)}...")
+                simpleOpenAIExecutor(config.apiKey)
+            }
+            LLMProviderType.ANTHROPIC -> {
+                log("Creating Anthropic executor")
+                simpleAnthropicExecutor(config.apiKey)
+            }
+            LLMProviderType.OLLAMA -> {
+                log("Creating Ollama executor at ${config.baseUrl}")
+                simpleOllamaAIExecutor(config.baseUrl ?: "http://localhost:11434")
+            }
         }
     }
 
     private fun createLLMModel(): LLModel {
-        return when (config.providerType) {
+        val model = when (config.providerType) {
             LLMProviderType.OPENAI -> resolveOpenAIModel(config.modelId)
             LLMProviderType.ANTHROPIC -> resolveAnthropicModel(config.modelId)
             LLMProviderType.OLLAMA -> resolveOllamaModel(config.modelId)
         }
+        log("Created LLM model: ${model.id}")
+        return model
     }
 
     /**
@@ -146,13 +185,23 @@ class KoogLLMService(
     fun getProviderInfo(): String {
         return "${config.providerType.name} / ${config.modelId}"
     }
-}
 
+    companion object {
+        private const val TAG = "KoogLLMService"
+        private const val TIMEOUT_MS = 120_000L // 2 minutes
+
+        private fun log(message: String) {
+            println("[$TAG] $message")
+        }
+
+        private fun logError(type: String, e: Exception) {
+            println("[$TAG] ERROR $type: ${e::class.simpleName}: ${e.message}")
+            e.printStackTrace()
+        }
+    }
+}
 /**
- * Normalize model id:
- * - lowercase
- * - '_' -> '-'
- * - remove whitespace
+ * Normalize model id
  */
 private fun normalizeModelId(raw: String): String {
     return raw.trim()
@@ -163,28 +212,21 @@ private fun normalizeModelId(raw: String): String {
 
 /**
  * Resolve OpenAI model by ID
- *
- * Поддерживает алиасы вроде:
- * - "gpt-5.2", "gpt-5-2", "gpt5.2", "chatgpt-5.2" -> GPT5_2
- * - "gpt-5.2-pro", "gpt-5-2-pro", "gpt5.2-pro" -> GPT5_2Pro
  */
 private fun resolveOpenAIModel(modelId: String): LLModel {
     val id = normalizeModelId(modelId)
+    println("[KoogLLMService] Resolving OpenAI model: '$modelId' -> normalized: '$id'")
 
     return when (id) {
-        // GPT-5.2 (ChatGPT 5.2)
         "gpt-5.2", "gpt-5-2", "gpt5.2", "gpt5-2", "chatgpt-5.2", "chatgpt5.2" ->
             OpenAIModels.Chat.GPT5_2
 
-        // GPT-5.2 Pro
         "gpt-5.2-pro", "gpt-5-2-pro", "gpt5.2-pro", "gpt5-2-pro", "gpt-5.2pro", "gpt5.2pro" ->
             OpenAIModels.Chat.GPT5_2Pro
 
-        // GPT-5.1
         "gpt-5.1", "gpt-5-1", "gpt5.1", "gpt5-1" ->
             OpenAIModels.Chat.GPT5_1
 
-        // GPT-5 family
         "gpt-5", "gpt5" ->
             OpenAIModels.Chat.GPT5
         "gpt-5-mini", "gpt5-mini", "gpt-5mini", "gpt5mini" ->
@@ -192,15 +234,12 @@ private fun resolveOpenAIModel(modelId: String): LLModel {
         "gpt-5-nano", "gpt5-nano", "gpt-5nano", "gpt5nano" ->
             OpenAIModels.Chat.GPT5Nano
 
-        // Codex variants (Koog: Responses-only, но даём возможность явно выбрать)
         "gpt-5-codex", "gpt5-codex", "gpt-5codex", "gpt5codex" ->
             OpenAIModels.Chat.GPT5Codex
 
-        // 4o / 4.1 family
         "gpt-4o", "gpt4o" ->
             OpenAIModels.Chat.GPT4o
 
-        // ВАЖНО: GPT-4o mini находится в Chat, не в Reasoning
         "gpt-4o-mini", "gpt4o-mini", "gpt-4omini", "gpt4omini" ->
             OpenAIModels.Chat.GPT4oMini
 
@@ -211,15 +250,15 @@ private fun resolveOpenAIModel(modelId: String): LLModel {
         "gpt-4.1-nano", "gpt-4-1-nano", "gpt4.1-nano", "gpt4-1-nano" ->
             OpenAIModels.Chat.GPT4_1Nano
 
-        // o-series
         "o1" -> OpenAIModels.Chat.O1
         "o3" -> OpenAIModels.Chat.O3
         "o3-mini", "o3mini" -> OpenAIModels.Chat.O3Mini
         "o4-mini", "o4mini" -> OpenAIModels.Chat.O4Mini
 
-        else ->
-            // Default: GPT-5.2
+        else -> {
+            println("[KoogLLMService] Unknown model '$id', defaulting to GPT5_2")
             OpenAIModels.Chat.GPT5_2
+        }
     }
 }
 
@@ -227,6 +266,7 @@ private fun resolveOpenAIModel(modelId: String): LLModel {
  * Resolve Anthropic model by ID
  */
 private fun resolveAnthropicModel(modelId: String): LLModel {
+    println("[KoogLLMService] Resolving Anthropic model: '$modelId'")
     return when {
         modelId.contains("opus", ignoreCase = true) -> AnthropicModels.Opus_4_1
         modelId.contains("sonnet", ignoreCase = true) -> AnthropicModels.Sonnet_4_5
@@ -237,9 +277,9 @@ private fun resolveAnthropicModel(modelId: String): LLModel {
 
 /**
  * Resolve Ollama model by ID
- * Uses copy() for custom model IDs since Ollama can run any model
  */
 private fun resolveOllamaModel(modelId: String): LLModel {
+    println("[KoogLLMService] Resolving Ollama model: '$modelId'")
     val baseModel = OllamaModels.Meta.LLAMA_3_2
     return when {
         modelId.contains("llama3", ignoreCase = true) -> baseModel
@@ -251,17 +291,12 @@ private fun resolveOllamaModel(modelId: String): LLModel {
 }
 
 /**
- * Factory функция для создания KoogLLMService
+ * Factory функции
  */
 fun createKoogLLMService(config: LLMProviderConfig): KoogLLMService {
     return KoogLLMService(config)
 }
 
-/**
- * Factory функция для создания KoogLLMService с OpenAI
- *
- * По умолчанию — GPT-5.2
- */
 fun createOpenAILLMService(
     apiKey: String,
     modelId: String = "gpt-5.2"
@@ -269,9 +304,6 @@ fun createOpenAILLMService(
     return KoogLLMService(LLMProviderConfig.openAI(apiKey, modelId))
 }
 
-/**
- * Factory функция для создания KoogLLMService с Anthropic
- */
 fun createAnthropicLLMService(
     apiKey: String,
     modelId: String = "claude-sonnet-4-20250514"
@@ -279,9 +311,6 @@ fun createAnthropicLLMService(
     return KoogLLMService(LLMProviderConfig.anthropic(apiKey, modelId))
 }
 
-/**
- * Factory функция для создания KoogLLMService с Ollama
- */
 fun createOllamaLLMService(
     modelId: String = "llama3.2",
     baseUrl: String = "http://localhost:11434"

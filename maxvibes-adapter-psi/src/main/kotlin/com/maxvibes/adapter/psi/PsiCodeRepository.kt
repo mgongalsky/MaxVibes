@@ -1,5 +1,7 @@
 package com.maxvibes.adapter.psi
 
+import com.intellij.openapi.application.runReadAction
+import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.project.Project
 import com.maxvibes.adapter.psi.kotlin.KotlinElementFactory
 import com.maxvibes.adapter.psi.mapper.PsiToDomainMapper
@@ -25,26 +27,30 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
     private val modifier = PsiModifier(project, elementFactory)
 
     override suspend fun getFileContent(path: ElementPath): Result<String, CodeRepositoryError> {
-        val psiFile = navigator.findFile(path)
-            ?: return Result.Failure(CodeRepositoryError.NotFound(path.filePath))
+        return runReadAction {
+            val psiFile = navigator.findFile(path)
+                ?: return@runReadAction Result.Failure(CodeRepositoryError.NotFound(path.filePath))
 
-        return Result.Success(psiFile.text)
+            Result.Success(psiFile.text)
+        }
     }
 
     override suspend fun getElement(path: ElementPath): Result<CodeElement, CodeRepositoryError> {
-        val psiElement = navigator.findElement(path)
-            ?: return Result.Failure(CodeRepositoryError.NotFound(path.value))
+        return runReadAction {
+            val psiElement = navigator.findElement(path)
+                ?: return@runReadAction Result.Failure(CodeRepositoryError.NotFound(path.value))
 
-        return try {
-            val basePath = project.basePath ?: ""
-            val codeElement = when (psiElement) {
-                is KtFile -> mapper.mapFile(psiElement, basePath)
-                else -> mapper.mapDeclaration(psiElement, path.parentPath ?: path)
-                    ?: return Result.Failure(CodeRepositoryError.ReadError("Cannot map element"))
+            try {
+                val basePath = project.basePath ?: ""
+                val codeElement = when (psiElement) {
+                    is KtFile -> mapper.mapFile(psiElement, basePath)
+                    else -> mapper.mapDeclaration(psiElement, path.parentPath ?: path)
+                        ?: return@runReadAction Result.Failure(CodeRepositoryError.ReadError("Cannot map element"))
+                }
+                Result.Success(codeElement)
+            } catch (e: Exception) {
+                Result.Failure(CodeRepositoryError.ReadError(e.message ?: "Unknown error"))
             }
-            Result.Success(codeElement)
-        } catch (e: Exception) {
-            Result.Failure(CodeRepositoryError.ReadError(e.message ?: "Unknown error"))
         }
     }
 
@@ -53,20 +59,22 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
         kinds: Set<ElementKind>?,
         namePattern: Regex?
     ): Result<List<CodeElement>, CodeRepositoryError> {
-        val rootElement = navigator.findElement(basePath)
-            ?: return Result.Failure(CodeRepositoryError.NotFound(basePath.value))
+        return runReadAction {
+            val rootElement = navigator.findElement(basePath)
+                ?: return@runReadAction Result.Failure(CodeRepositoryError.NotFound(basePath.value))
 
-        val children = navigator.getChildren(rootElement)
-        val projectBasePath = project.basePath ?: ""
+            val children = navigator.getChildren(rootElement)
+            val projectBasePath = project.basePath ?: ""
 
-        val mapped = children.mapNotNull { child ->
-            mapper.mapDeclaration(child, basePath)
-        }.filter { element ->
-            (kinds == null || element.kind in kinds) &&
-                    (namePattern == null || namePattern.matches(element.name))
+            val mapped = children.mapNotNull { child ->
+                mapper.mapDeclaration(child, basePath)
+            }.filter { element ->
+                (kinds == null || element.kind in kinds) &&
+                        (namePattern == null || namePattern.matches(element.name))
+            }
+
+            Result.Success(mapped)
         }
-
-        return Result.Success(mapped)
     }
 
     override suspend fun applyModification(modification: Modification): ModificationResult {
@@ -85,54 +93,60 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
     }
 
     override suspend fun exists(path: ElementPath): Boolean {
-        return navigator.findElement(path) != null
+        return runReadAction {
+            navigator.findElement(path) != null
+        }
     }
 
     override suspend fun validateSyntax(content: String): Result<Unit, CodeRepositoryError> {
-        return try {
-            val file = elementFactory.createFile(content)
-            // Проверяем что нет синтаксических ошибок
-            if (file.children.isEmpty() && content.isNotBlank()) {
-                Result.Failure(CodeRepositoryError.ValidationError("Failed to parse content"))
-            } else {
-                Result.Success(Unit)
+        return runReadAction {
+            try {
+                val file = elementFactory.createFile(content)
+                // Проверяем что нет синтаксических ошибок
+                if (file.children.isEmpty() && content.isNotBlank()) {
+                    Result.Failure(CodeRepositoryError.ValidationError("Failed to parse content"))
+                } else {
+                    Result.Success(Unit)
+                }
+            } catch (e: Exception) {
+                Result.Failure(CodeRepositoryError.ValidationError(e.message ?: "Parse error"))
             }
-        } catch (e: Exception) {
-            Result.Failure(CodeRepositoryError.ValidationError(e.message ?: "Parse error"))
         }
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // Private implementation
+    // Private implementation - Write operations
     // ═══════════════════════════════════════════════════════════════
 
     private fun createFile(mod: Modification.CreateFile): ModificationResult {
-        // Для MVP просто создаём файл в памяти
-        // В реальности нужно создать через VirtualFile API
-        return try {
-            val psiFile = elementFactory.createFile(mod.targetPath.name, mod.content)
-            ModificationResult.Success(
-                modification = mod,
-                affectedPath = mod.targetPath,
-                resultContent = psiFile.text
-            )
-        } catch (e: Exception) {
-            ModificationResult.Failure(
-                modification = mod,
-                error = ModificationError.IOError(e.message ?: "Failed to create file")
-            )
+        return runReadAction {
+            try {
+                val psiFile = elementFactory.createFile(mod.targetPath.name, mod.content)
+                ModificationResult.Success(
+                    modification = mod,
+                    affectedPath = mod.targetPath,
+                    resultContent = psiFile.text
+                )
+            } catch (e: Exception) {
+                ModificationResult.Failure(
+                    modification = mod,
+                    error = ModificationError.IOError(e.message ?: "Failed to create file")
+                )
+            }
         }
     }
 
     private fun replaceFile(mod: Modification.ReplaceFile): ModificationResult {
-        val psiFile = navigator.findFile(mod.targetPath)
+        val psiFile = runReadAction { navigator.findFile(mod.targetPath) }
             ?: return ModificationResult.Failure(
                 modification = mod,
                 error = ModificationError.FileNotFound(mod.targetPath.filePath)
             )
 
         return try {
-            modifier.replaceFileContent(psiFile, mod.newContent)
+            WriteCommandAction.runWriteCommandAction(project) {
+                modifier.replaceFileContent(psiFile, mod.newContent)
+            }
             ModificationResult.Success(
                 modification = mod,
                 affectedPath = mod.targetPath,
@@ -147,14 +161,16 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
     }
 
     private fun deleteFile(mod: Modification.DeleteFile): ModificationResult {
-        val psiFile = navigator.findFile(mod.targetPath)
+        val psiFile = runReadAction { navigator.findFile(mod.targetPath) }
             ?: return ModificationResult.Failure(
                 modification = mod,
                 error = ModificationError.FileNotFound(mod.targetPath.filePath)
             )
 
         return try {
-            modifier.deleteElement(psiFile)
+            WriteCommandAction.runWriteCommandAction(project) {
+                modifier.deleteElement(psiFile)
+            }
             ModificationResult.Success(
                 modification = mod,
                 affectedPath = mod.targetPath,
@@ -169,24 +185,31 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
     }
 
     private fun createElement(mod: Modification.CreateElement): ModificationResult {
-        val parent = navigator.findElement(mod.targetPath)
+        val parent = runReadAction { navigator.findElement(mod.targetPath) }
             ?: return ModificationResult.Failure(
                 modification = mod,
                 error = ModificationError.ElementNotFound(mod.targetPath)
             )
 
         return try {
-            val added = modifier.addElement(parent, mod.content, mod.elementKind, mod.position)
-                ?: return ModificationResult.Failure(
+            var resultText: String? = null
+            WriteCommandAction.runWriteCommandAction(project) {
+                val added = modifier.addElement(parent, mod.content, mod.elementKind, mod.position)
+                resultText = added?.text
+            }
+
+            if (resultText != null) {
+                ModificationResult.Success(
+                    modification = mod,
+                    affectedPath = mod.targetPath,
+                    resultContent = resultText
+                )
+            } else {
+                ModificationResult.Failure(
                     modification = mod,
                     error = ModificationError.ParseError("Failed to parse: ${mod.content.take(50)}")
                 )
-
-            ModificationResult.Success(
-                modification = mod,
-                affectedPath = mod.targetPath,
-                resultContent = added.text
-            )
+            }
         } catch (e: Exception) {
             ModificationResult.Failure(
                 modification = mod,
@@ -196,25 +219,36 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
     }
 
     private fun replaceElement(mod: Modification.ReplaceElement): ModificationResult {
-        val element = navigator.findElement(mod.targetPath)
-            ?: return ModificationResult.Failure(
-                modification = mod,
-                error = ModificationError.ElementNotFound(mod.targetPath)
-            )
+        val elementAndKind = runReadAction {
+            val element = navigator.findElement(mod.targetPath) ?: return@runReadAction null
+            val kind = mapper.inferKind(element)
+            element to kind
+        } ?: return ModificationResult.Failure(
+            modification = mod,
+            error = ModificationError.ElementNotFound(mod.targetPath)
+        )
+
+        val (element, kind) = elementAndKind
 
         return try {
-            val kind = mapper.inferKind(element)
-            val replaced = modifier.replaceElement(element, mod.newContent, kind)
-                ?: return ModificationResult.Failure(
+            var resultText: String? = null
+            WriteCommandAction.runWriteCommandAction(project) {
+                val replaced = modifier.replaceElement(element, mod.newContent, kind)
+                resultText = replaced?.text
+            }
+
+            if (resultText != null) {
+                ModificationResult.Success(
+                    modification = mod,
+                    affectedPath = mod.targetPath,
+                    resultContent = resultText
+                )
+            } else {
+                ModificationResult.Failure(
                     modification = mod,
                     error = ModificationError.ParseError("Failed to parse replacement")
                 )
-
-            ModificationResult.Success(
-                modification = mod,
-                affectedPath = mod.targetPath,
-                resultContent = replaced.text
-            )
+            }
         } catch (e: Exception) {
             ModificationResult.Failure(
                 modification = mod,
@@ -224,14 +258,16 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
     }
 
     private fun deleteElement(mod: Modification.DeleteElement): ModificationResult {
-        val element = navigator.findElement(mod.targetPath)
+        val element = runReadAction { navigator.findElement(mod.targetPath) }
             ?: return ModificationResult.Failure(
                 modification = mod,
                 error = ModificationError.ElementNotFound(mod.targetPath)
             )
 
         return try {
-            modifier.deleteElement(element)
+            WriteCommandAction.runWriteCommandAction(project) {
+                modifier.deleteElement(element)
+            }
             ModificationResult.Success(
                 modification = mod,
                 affectedPath = mod.targetPath,

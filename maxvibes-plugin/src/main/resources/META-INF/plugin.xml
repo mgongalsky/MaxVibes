@@ -1,61 +1,109 @@
 <idea-plugin>
     <id>com.maxvibes.plugin</id>
     <name>MaxVibes</name>
-    <vendor>MaxVibes Team</vendor>
+    <vendor email="support@maxvibes.ai" url="https://maxvibes.ai">MaxVibes Team</vendor>
     <version>1.0-SNAPSHOT</version>
 
     <description><![CDATA[
         <h2>MaxVibes - AI-powered Kotlin Assistant</h2>
-        <p>Modify and analyze Kotlin code using AI.</p>
+        <p>Modify and analyze Kotlin code using AI (OpenAI, Anthropic Claude, or Ollama).</p>
+
+        <h3>Features</h3>
         <ul>
-            <li>Add functions, properties, and classes</li>
-            <li>Analyze code structure</li>
-            <li>Works at file and PSI element level</li>
+            <li><b>Code Modification</b> - Add, change, or remove functions, properties, and classes using natural language</li>
+            <li><b>Code Analysis</b> - Get explanations and insights about your code</li>
+            <li><b>Multiple LLM Providers</b> - Works with OpenAI GPT, Anthropic Claude, or local Ollama</li>
+            <li><b>PSI Integration</b> - Smart code modifications that preserve formatting</li>
         </ul>
+
+        <h3>Getting Started</h3>
+        <ol>
+            <li>Go to Settings - Tools - MaxVibes</li>
+            <li>Select your LLM provider and enter API key</li>
+            <li>Right-click on Kotlin code - MaxVibes menu</li>
+        </ol>
     ]]></description>
+
+    <change-notes><![CDATA[
+        <h3>Version 1.0</h3>
+        <ul>
+            <li>Initial release</li>
+            <li>Support for OpenAI, Anthropic, and Ollama</li>
+            <li>Code modification and analysis features</li>
+        </ul>
+    ]]></change-notes>
 
     <depends>com.intellij.modules.platform</depends>
     <depends>org.jetbrains.kotlin</depends>
 
     <extensions defaultExtensionNs="com.intellij">
-        <!-- Project Service -->
+        <applicationService
+                serviceImplementation="com.maxvibes.plugin.settings.MaxVibesSettings"/>
+
         <projectService
                 serviceImplementation="com.maxvibes.plugin.service.MaxVibesService"/>
 
-        <!-- Tool Window -->
+        <applicationConfigurable
+                parentId="tools"
+                instance="com.maxvibes.plugin.settings.MaxVibesSettingsConfigurable"
+                id="com.maxvibes.plugin.settings"
+                displayName="MaxVibes"/>
+
         <toolWindow
                 id="MaxVibes"
                 anchor="right"
                 factoryClass="com.maxvibes.plugin.ui.MaxVibesToolWindowFactory"
                 icon="AllIcons.Actions.Lightning"/>
 
-        <!-- Notifications -->
         <notificationGroup
                 id="MaxVibes Notifications"
                 displayType="BALLOON"/>
     </extensions>
 
     <actions>
-        <!-- Modify Code Action -->
-        <action
-                id="MaxVibes.ModifyCode"
-                class="com.maxvibes.plugin.action.ModifyCodeAction"
-                text="MaxVibes: Modify Code"
-                description="AI-powered code modification"
-                icon="AllIcons.Actions.Lightning">
-            <add-to-group group-id="EditorPopupMenu" anchor="first"/>
-            <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt M"/>
-        </action>
+        <group id="MaxVibes.ActionGroup"
+               text="MaxVibes"
+               description="MaxVibes AI actions"
+               popup="true"
+               icon="AllIcons.Actions.Lightning">
 
-        <!-- Analyze Code Action -->
-        <action
-                id="MaxVibes.AnalyzeCode"
-                class="com.maxvibes.plugin.action.AnalyzeCodeAction"
-                text="MaxVibes: Analyze Code"
-                description="AI-powered code analysis"
-                icon="AllIcons.Actions.Preview">
-            <add-to-group group-id="EditorPopupMenu" anchor="after" relative-to-action="MaxVibes.ModifyCode"/>
-            <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt A"/>
-        </action>
+            <add-to-group group-id="EditorPopupMenu" anchor="first"/>
+
+            <action id="MaxVibes.ModifyCode"
+                    class="com.maxvibes.plugin.action.ModifyCodeAction"
+                    text="Modify with AI..."
+                    description="Modify selected code using AI"
+                    icon="AllIcons.Actions.Edit">
+                <keyboard-shortcut keymap="\$default" first-keystroke="ctrl alt M"/>
+            </action>
+
+            <action id="MaxVibes.AnalyzeCode"
+                    class="com.maxvibes.plugin.action.AnalyzeCodeAction"
+                    text="Explain Code"
+                    description="Get AI explanation of selected code"
+                    icon="AllIcons.Actions.Preview">
+                <keyboard-shortcut keymap="\$default" first-keystroke="ctrl alt A"/>
+            </action>
+
+            <separator/>
+
+            <action id="MaxVibes.OpenSettings"
+                    class="com.maxvibes.plugin.action.OpenSettingsAction"
+                    text="Settings..."
+                    description="Open MaxVibes settings"
+                    icon="AllIcons.General.Settings"/>
+        </group>
+
+        <group id="MaxVibes.ToolsMenu"
+               text="MaxVibes"
+               popup="true"
+               icon="AllIcons.Actions.Lightning">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+
+            <reference ref="MaxVibes.ModifyCode"/>
+            <reference ref="MaxVibes.AnalyzeCode"/>
+            <separator/>
+            <reference ref="MaxVibes.OpenSettings"/>
+        </group>
     </actions>
 </idea-plugin>

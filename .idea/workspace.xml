@@ -4,23 +4,21 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="6b0e4fb8-911a-491d-b25d-1d8736dd714f" name="Changes" comment="Add documentation: architecture, status, LLM plan, MVP1 roadmap">
-      <change afterPath="$PROJECT_DIR$/maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/KoogLLMService.kt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/LLMServiceFactory.kt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/agent/AnalyzerAgent.kt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/agent/CoderAgent.kt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/agent/tools/CodeModificationTools.kt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/config/LLMProviderConfig.kt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/maxvibes-adapter-llm/src/test/kotlin/com/maxvibes/adapter/llm/KoogLLMServiceTest.kt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/maxvibes-adapter-llm/src/test/kotlin/com/maxvibes/adapter/llm/agent/CoderAgentTest.kt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/maxvibes-adapter-llm/src/test/kotlin/com/maxvibes/adapter/llm/agent/tools/CodeModificationToolsTest.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/gradle.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/gradle.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/vcs.xml" beforeDir="false" />
+    <list default="true" id="6b0e4fb8-911a-491d-b25d-1d8736dd714f" name="Changes" comment="Add first LLM integration.">
+      <change afterPath="$PROJECT_DIR$/.kotlin/sessions/kotlin-compiler-4077740087798347519.salive" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/action/OpenSettingsAction.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/settings/MaxVibesSettings.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/settings/MaxVibesSettingsConfigurable.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/settings/MaxVibesSettingsPanel.kt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/build.gradle.kts" beforeDir="false" afterPath="$PROJECT_DIR$/build.gradle.kts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/gradle.properties" beforeDir="false" afterPath="$PROJECT_DIR$/gradle.properties" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/maxvibes-adapter-llm/build.gradle.kts" beforeDir="false" afterPath="$PROJECT_DIR$/maxvibes-adapter-llm/build.gradle.kts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/KoogLLMService.kt" beforeDir="false" afterPath="$PROJECT_DIR$/maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/KoogLLMService.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/maxvibes-adapter-psi/src/main/kotlin/com/maxvibes/adapter/psi/PsiCodeRepository.kt" beforeDir="false" afterPath="$PROJECT_DIR$/maxvibes-adapter-psi/src/main/kotlin/com/maxvibes/adapter/psi/PsiCodeRepository.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/action/AnalyzeCodeAction.kt" beforeDir="false" afterPath="$PROJECT_DIR$/maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/action/AnalyzeCodeAction.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/action/ModifyCodeAction.kt" beforeDir="false" afterPath="$PROJECT_DIR$/maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/action/ModifyCodeAction.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/service/MaxVibesService.kt" beforeDir="false" afterPath="$PROJECT_DIR$/maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/service/MaxVibesService.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/maxvibes-plugin/src/main/resources/META-INF/plugin.xml" beforeDir="false" afterPath="$PROJECT_DIR$/maxvibes-plugin/src/main/resources/META-INF/plugin.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/settings.gradle.kts" beforeDir="false" afterPath="$PROJECT_DIR$/settings.gradle.kts" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -281,7 +279,15 @@
       <option name="project" value="LOCAL" />
       <updated>1767452848944</updated>
     </task>
-    <option name="localTasksCounter" value="11" />
+    <task id="LOCAL-00011" summary="Add first LLM integration.">
+      <option name="closed" value="true" />
+      <created>1767497778056</created>
+      <option name="number" value="00011" />
+      <option name="presentableId" value="LOCAL-00011" />
+      <option name="project" value="LOCAL" />
+      <updated>1767497778056</updated>
+    </task>
+    <option name="localTasksCounter" value="12" />
     <servers />
   </component>
   <component name="UnknownFeatures">
@@ -304,6 +310,7 @@
     <MESSAGE value="Add plugin UI: actions, tool window, mock LLM service" />
     <MESSAGE value="Add unit tests for domain, shared, application, and PSI adapter" />
     <MESSAGE value="Add documentation: architecture, status, LLM plan, MVP1 roadmap" />
-    <option name="LAST_COMMIT_MESSAGE" value="Add documentation: architecture, status, LLM plan, MVP1 roadmap" />
+    <MESSAGE value="Add first LLM integration." />
+    <option name="LAST_COMMIT_MESSAGE" value="Add first LLM integration." />
   </component>
 </project>

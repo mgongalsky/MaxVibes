@@ -1,8 +1,12 @@
 package com.maxvibes.plugin.action
 
+import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.runReadAction
+import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
@@ -14,6 +18,10 @@ import kotlinx.coroutines.runBlocking
 import org.jetbrains.kotlin.psi.KtFile
 
 class ModifyCodeAction : AnAction() {
+
+    override fun getActionUpdateThread(): ActionUpdateThread {
+        return ActionUpdateThread.BGT
+    }
 
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
@@ -38,11 +46,13 @@ class ModifyCodeAction : AnAction() {
 
         if (instruction.isNullOrBlank()) return
 
-        // Получаем путь к файлу
-        val basePath = project.basePath ?: ""
-        val filePath = psiFile.virtualFile?.path?.removePrefix(basePath)?.removePrefix("/")
-            ?: psiFile.name
-        val elementPath = ElementPath.file(filePath)
+        // Получаем путь к файлу (в read action)
+        val elementPath = runReadAction {
+            val basePath = project.basePath ?: ""
+            val filePath = psiFile.virtualFile?.path?.removePrefix(basePath)?.removePrefix("/")
+                ?: psiFile.name
+            ElementPath.file(filePath)
+        }
 
         // Запускаем в фоне
         val service = MaxVibesService.getInstance(project)
@@ -72,7 +82,9 @@ class ModifyCodeAction : AnAction() {
     }
 
     override fun update(e: AnActionEvent) {
-        val psiFile = e.getData(CommonDataKeys.PSI_FILE)
+        val psiFile = runReadAction {
+            e.getData(CommonDataKeys.PSI_FILE)
+        }
         e.presentation.isEnabledAndVisible = psiFile is KtFile
     }
 }
