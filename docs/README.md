@@ -1,6 +1,6 @@
 # MaxVibes
 
-**AI-powered coding assistant для JetBrains IDE с мультиагентной архитектурой**
+**AI-powered coding assistant для JetBrains IDE**
 
 ## 🎯 Что это?
 
@@ -11,7 +11,7 @@ MaxVibes — это IntelliJ IDEA плагин, который позволяе�
 - **Модификация кода на уровне PSI** — добавление/изменение/удаление классов, функций, свойств
 - **Модификация на уровне файлов** — создание, замена, удаление файлов
 - **Анализ кода** — ответы на вопросы о структуре и логике кода
-- **Мультиагентная архитектура** — расширяемая система агентов через Koog
+- **Мультипровайдерность** — поддержка OpenAI, Anthropic, Ollama
 - **Clean Architecture** — чёткое разделение слоёв, легко тестировать и расширять
 
 ### Технологический стек
@@ -20,7 +20,8 @@ MaxVibes — это IntelliJ IDEA плагин, который позволяе�
 |-----------|------------|
 | Язык | Kotlin |
 | IDE Platform | IntelliJ Platform 2023.1.5 |
-| Агентный фреймворк | Koog (JetBrains) |
+| LLM Framework | LangChain4j |
+| LLM Providers | OpenAI, Anthropic, Ollama |
 | Поддерживаемые языки | Kotlin (пока) |
 | Build System | Gradle 8.5 |
 | Тестирование | JUnit 5, MockK |
@@ -32,7 +33,7 @@ MaxVibes/
 ├── maxvibes-domain/          # Доменные модели (0 зависимостей)
 ├── maxvibes-application/     # Use Cases и порты
 ├── maxvibes-adapter-psi/     # PSI ↔ Domain адаптер
-├── maxvibes-adapter-llm/     # LLM/Koog адаптер (в разработке)
+├── maxvibes-adapter-llm/     # LLM адаптер (LangChain4j)
 ├── maxvibes-shared/          # Общие утилиты
 ├── maxvibes-plugin/          # IntelliJ плагин
 └── docs/                     # Документация
@@ -45,6 +46,7 @@ MaxVibes/
 - IntelliJ IDEA 2023.1+ (Community или Ultimate)
 - JDK 17+
 - Git
+- API ключ (OpenAI или Anthropic) или локальный Ollama
 
 ### Сборка и запуск
 
@@ -60,6 +62,14 @@ cd MaxVibes
 ./gradlew :maxvibes-plugin:runIde
 ```
 
+### Настройка API
+
+1. Запустить плагин (`./gradlew :maxvibes-plugin:runIde`)
+2. Открыть **Settings → Tools → MaxVibes**
+3. Выбрать провайдера (OpenAI / Anthropic / Ollama)
+4. Ввести API ключ
+5. Нажать **Test Connection** → **Apply**
+
 ### Запуск тестов
 
 ```bash
@@ -68,38 +78,64 @@ cd MaxVibes
 
 ## 🎮 Использование
 
-1. Запустить плагин (`./gradlew :maxvibes-plugin:runIde`)
-2. Открыть/создать Kotlin проект
-3. Открыть любой `.kt` файл
-4. Правый клик в редакторе → **MaxVibes: Modify Code** или **MaxVibes: Analyze Code**
-5. Ввести инструкцию на естественном языке
+1. Открыть/создать Kotlin проект
+2. Открыть любой `.kt` файл
+3. Правый клик в редакторе → **MaxVibes: Modify Code** или **MaxVibes: Analyze Code**
+4. Ввести инструкцию на естественном языке
 
 ### Примеры команд
 
-- "add function toString"
+- "write a Snake game with graphics"
+- "add toString method to this class"
 - "добавь функцию для валидации email"
-- "add property logger"
+- "create a REST client for GitHub API"
+
+## 🔧 Конфигурация провайдеров
+
+### OpenAI
+```
+Provider: OpenAI GPT
+API Key: sk-...
+Model: gpt-4o (recommended)
+```
+
+### Anthropic
+```
+Provider: Anthropic Claude
+API Key: sk-ant-...
+Model: claude-sonnet-4 (recommended)
+```
+
+### Ollama (локальный)
+```bash
+# Установить Ollama: https://ollama.ai
+ollama serve
+ollama pull llama3.2
+```
+```
+Provider: Ollama (Local)
+URL: http://localhost:11434
+Model: llama3.2
+```
 
 ## 📊 Текущий статус
 
-**Версия:** 0.1.0-SNAPSHOT (MVP 1 в разработке)
+**Версия:** 0.1.0-SNAPSHOT (MVP 1)
 
 | Компонент | Статус |
 |-----------|--------|
 | Domain модели | ✅ Готово |
 | Application layer | ✅ Готово |
 | PSI Adapter | ✅ Готово |
-| Plugin UI | ✅ Базовый |
-| Mock LLM | ✅ Работает |
-| Real LLM (Koog) | 🚧 Следующий этап |
+| LLM Adapter | ✅ Готово |
+| Plugin UI | ✅ Готово |
+| Settings | ✅ Готово |
 | Тесты | ✅ Базовые |
 
 ## 📚 Документация
 
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md) — Архитектура и дизайн
-- [LLM_INTEGRATION_PLAN.md](LLM_INTEGRATION_PLAN.md) — План интеграции LLM
-- [MVP1_ROADMAP.md](MVP1_ROADMAP.md) — Roadmap до MVP 1
-- [CURRENT_STATUS.md](CURRENT_STATUS.md) — Детальный текущий статус
+- [CURRENT_STATUS.md](docs/CURRENT_STATUS.md) — Детальный текущий статус
 
 ## 🤝 Contributing
 

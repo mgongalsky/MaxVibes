@@ -9,13 +9,13 @@ MaxVibes построен по принципам **Clean Architecture** с чё
 │                     INFRASTRUCTURE                              │
 │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐               │
 │  │   Plugin    │ │  PSI API    │ │  LLM APIs   │               │
-│  │  (IntelliJ) │ │  (IntelliJ) │ │ (Koog/HTTP) │               │
+│  │  (IntelliJ) │ │  (IntelliJ) │ │(LangChain4j)│               │
 │  └─────────────┘ └─────────────┘ └─────────────┘               │
 ├─────────────────────────────────────────────────────────────────┤
 │                    INTERFACE ADAPTERS                           │
 │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐               │
-│  │ PsiCode     │ │ KoogLLM     │ │ IdeNotif    │               │
-│  │ Repository  │ │ Service     │ │ Service     │               │
+│  │ PsiCode     │ │ LangChain   │ │ IdeNotif    │               │
+│  │ Repository  │ │ LLMService  │ │ Service     │               │
 │  └─────────────┘ └─────────────┘ └─────────────┘               │
 ├─────────────────────────────────────────────────────────────────┤
 │                      APPLICATION                                │
@@ -172,25 +172,45 @@ findChildByKindAndName(class, "function", "greet")  → KtNamedFunction
 
 ### maxvibes-adapter-llm
 
-**Зависимости:** domain, application, shared, Koog, Ktor
+**Зависимости:** domain, application, shared, LangChain4j
 
-Адаптер для работы с LLM через Koog фреймворк.
+Адаптер для работы с LLM через LangChain4j фреймворк.
 
 ```
 maxvibes-adapter-llm/
 └── src/main/kotlin/com/maxvibes/adapter/llm/
-    ├── KoogLLMService.kt           # Реализует LLMService (TODO)
-    ├── agent/
-    │   └── CoderAgent.kt           # Агент для генерации кода (TODO)
-    ├── prompt/
-    │   └── PromptTemplates.kt      # Шаблоны промптов (TODO)
-    └── provider/
-        ├── LLMProvider.kt          # Интерфейс провайдера (TODO)
-        ├── OpenAIProvider.kt       # (TODO)
-        └── AnthropicProvider.kt    # (TODO)
+    ├── LangChainLLMService.kt      # Реализует LLMService
+    ├── LLMServiceFactory.kt        # Фабрика для создания сервисов
+    └── config/
+        └── LLMProviderConfig.kt    # Конфигурация провайдера
 ```
 
-**Текущий статус:** Модуль создан, но пока используется MockLLMService из plugin модуля.
+**Поддерживаемые провайдеры:**
+
+| Провайдер | Модели | Описание |
+|-----------|--------|----------|
+| OpenAI | gpt-4o, gpt-4o-mini, gpt-4-turbo | Облачный API |
+| Anthropic | claude-sonnet-4, claude-opus-4 | Облачный API |
+| Ollama | llama3.2, codellama, mistral | Локальный сервер |
+
+**Как работает LangChain4j:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         Твой код                                │
+│                             │                                   │
+│                             ▼                                   │
+│                   ChatLanguageModel                             │
+│                   (единый интерфейс)                            │
+│                             │                                   │
+│              ┌──────────────┼──────────────┐                    │
+│              ▼              ▼              ▼                    │
+│      OpenAiChatModel  AnthropicModel  OllamaChatModel           │
+│              │              │              │                    │
+│              ▼              ▼              ▼                    │
+│      api.openai.com  api.anthropic.com  localhost:11434         │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -209,10 +229,14 @@ maxvibes-plugin/
 │   ├── ui/
 │   │   ├── MaxVibesToolWindowFactory.kt  # Tool Window справа
 │   │   └── AnalysisResultDialog.kt       # Диалог с результатом анализа
-│   └── service/
-│       ├── MaxVibesService.kt       # Service Locator / DI
-│       ├── MockLLMService.kt        # Мок LLM для тестирования
-│       └── IdeNotificationService.kt # Реализует NotificationPort
+│   ├── service/
+│   │   ├── MaxVibesService.kt       # Service Locator / DI
+│   │   ├── MockLLMService.kt        # Мок LLM для тестирования
+│   │   └── IdeNotificationService.kt # Реализует NotificationPort
+│   └── settings/
+│       ├── MaxVibesSettings.kt           # Persistent settings
+│       ├── MaxVibesSettingsPanel.kt      # Settings UI
+│       └── MaxVibesSettingsConfigurable.kt # Settings integration
 └── src/main/resources/META-INF/
     └── plugin.xml                   # Конфигурация плагина
 ```
@@ -243,10 +267,10 @@ User: "add function toString"
 └────────┘ └────────┘
     │         │
     ▼         ▼
-┌────────┐ ┌────────┐
-│PsiCode │ │MockLLM │  ← Adapters
-│Repo    │ │Service │
-└────────┘ └────────┘
+┌────────┐ ┌──────────┐
+│PsiCode │ │LangChain │  ← Adapters
+│Repo    │ │LLMService│
+└────────┘ └──────────┘
     │         │
     ▼         │
 ┌────────┐    │
@@ -272,7 +296,7 @@ suspend fun execute(request: ModifyCodeRequest): ModifyCodeResponse {
     // 2. Создаём контекст для LLM
     val context = LLMContext(relevantCode = listOf(codeElement))
     
-    // 3. Генерируем модификации через LLMService (→ MockLLMService)
+    // 3. Генерируем модификации через LLMService (→ LangChainLLMService)
     val modifications = llmService.generateModifications(request.instruction, context)
     
     // 4. Применяем модификации через CodeRepository
@@ -356,21 +380,12 @@ when (psiFile) {
 ### Добавление нового LLM провайдера
 
 ```kotlin
-// 1. Реализовать LLMProvider
-class AnthropicProvider : LLMProvider {
-    override val name = "Anthropic"
-    override suspend fun complete(prompt: String): String { ... }
-}
-
-// 2. Зарегистрировать в KoogLLMService
-```
-
-### Добавление нового агента
-
-```kotlin
-// В maxvibes-adapter-llm
-class ReviewerAgent(llmProvider: LLMProvider) {
-    suspend fun review(code: CodeElement): ReviewResult { ... }
+// В LangChainLLMService.createChatModel()
+when (config.providerType) {
+    LLMProviderType.OPENAI -> OpenAiChatModel.builder()...
+    LLMProviderType.ANTHROPIC -> AnthropicChatModel.builder()...
+    LLMProviderType.OLLAMA -> OllamaChatModel.builder()...
+    LLMProviderType.NEW_PROVIDER -> NewProviderChatModel.builder()...
 }
 ```
 
@@ -403,12 +418,13 @@ subprojects {
     <id>com.maxvibes.plugin</id>
     <depends>com.intellij.modules.platform</depends>
     <depends>org.jetbrains.kotlin</depends>
-    
+
     <extensions>
         <projectService serviceImplementation="...MaxVibesService"/>
         <toolWindow id="MaxVibes" factoryClass="...MaxVibesToolWindowFactory"/>
+        <applicationConfigurable instance="...MaxVibesSettingsConfigurable"/>
     </extensions>
-    
+
     <actions>
         <action id="MaxVibes.ModifyCode" class="...ModifyCodeAction"/>
         <action id="MaxVibes.AnalyzeCode" class="...AnalyzeCodeAction"/>

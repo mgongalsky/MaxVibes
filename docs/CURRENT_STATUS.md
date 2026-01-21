@@ -1,12 +1,12 @@
 # MaxVibes: Текущий статус
 
-**Дата:** 4 января 2026  
+**Дата:** 21 января 2026  
 **Версия:** 0.1.0-SNAPSHOT
 
 ## 📊 Общий статус
 
 ```
-MVP 1 Progress: ████████░░ 80%
+MVP 1 Progress: ██████████ 95%
 ```
 
 | Компонент | Статус | Комментарий |
@@ -15,10 +15,10 @@ MVP 1 Progress: ████████░░ 80%
 | Shared Utils | ✅ 100% | Result type готов |
 | Application Layer | ✅ 100% | Use Cases и порты готовы |
 | PSI Adapter | ✅ 100% | Базовые операции работают |
-| LLM Adapter | 🚧 10% | Модуль создан, нужна интеграция с Koog |
-| Plugin UI | ✅ 80% | Базовый UI работает |
+| LLM Adapter | ✅ 100% | LangChain4j интеграция готова |
+| Plugin UI | ✅ 100% | Settings, Tool Window работают |
 | Тесты | ✅ 70% | Unit тесты есть |
-| Документация | ✅ 50% | Основная документация создана |
+| Документация | ✅ 80% | Основная документация создана |
 
 ---
 
@@ -35,8 +35,8 @@ MVP 1 Progress: ████████░░ 80%
 
 **Модели модификаций:**
 - [x] `Modification` — sealed interface для операций
-    - [x] `CreateFile`, `ReplaceFile`, `DeleteFile`
-    - [x] `CreateElement`, `ReplaceElement`, `DeleteElement`
+  - [x] `CreateFile`, `ReplaceFile`, `DeleteFile`
+  - [x] `CreateElement`, `ReplaceElement`, `DeleteElement`
 - [x] `InsertPosition` — BEFORE, AFTER, FIRST_CHILD, LAST_CHILD
 - [x] `ModificationResult` — Success/Failure
 - [x] `ModificationError` — типизированные ошибки
@@ -90,6 +90,25 @@ MVP 1 Progress: ████████░░ 80%
 - [x] `PsiCodeRepository` — реализует CodeRepository
 - [x] Все CRUD операции для файлов и элементов
 
+### LLM Adapter (`maxvibes-adapter-llm`) ✅ NEW
+
+**LangChain4j Integration:**
+- [x] `LangChainLLMService` — реализует LLMService
+- [x] `LLMServiceFactory` — фабрика с поддержкой env переменных
+- [x] `LLMProviderConfig` — конфигурация провайдера
+
+**Провайдеры:**
+- [x] OpenAI (gpt-4o, gpt-4o-mini, gpt-4-turbo)
+- [x] Anthropic (claude-sonnet-4, claude-opus-4)
+- [x] Ollama (llama3.2, codellama, mistral)
+
+**Функциональность:**
+- [x] `generateModifications()` — генерация кода через LLM
+- [x] `analyzeCode()` — анализ кода
+- [x] JSON парсинг ответов
+- [x] Markdown fallback для code blocks
+- [x] Error handling
+
 ### Plugin (`maxvibes-plugin`)
 
 **Actions:**
@@ -104,7 +123,15 @@ MVP 1 Progress: ████████░░ 80%
 **Services:**
 - [x] `MaxVibesService` — Service Locator / DI контейнер
 - [x] `IdeNotificationService` — реализует NotificationPort
-- [x] `MockLLMService` — мок для тестирования
+- [x] `MockLLMService` — мок для тестирования (fallback)
+
+**Settings:** ✅ NEW
+- [x] `MaxVibesSettings` — persistent state (API keys в PasswordSafe)
+- [x] `MaxVibesSettingsPanel` — UI для настроек
+- [x] `MaxVibesSettingsConfigurable` — интеграция с IntelliJ Settings
+- [x] Выбор провайдера (OpenAI/Anthropic/Ollama)
+- [x] Test Connection кнопка
+- [x] Hot reload при изменении настроек
 
 **Конфигурация:**
 - [x] `plugin.xml` — actions, extensions, dependencies
@@ -128,28 +155,20 @@ MVP 1 Progress: ████████░░ 80%
 
 ---
 
-## 🚧 Что в процессе / TODO
+## 🚧 TODO (Post-MVP)
 
-### LLM Adapter (`maxvibes-adapter-llm`)
-
-- [ ] `KoogLLMService` — реализация LLMService через Koog
-- [ ] `CoderAgent` — агент для генерации кода
-- [ ] `PromptTemplates` — шаблоны промптов
-- [ ] `LLMProvider` — абстракция провайдера
-- [ ] `OpenAIProvider` — интеграция с OpenAI
-- [ ] `AnthropicProvider` — интеграция с Anthropic
-
-### Plugin UI
-
-- [ ] Settings page (API keys)
+### Plugin UI Improvements
+- [ ] Preview Dialog — показать diff перед применением
 - [ ] История операций в Tool Window
-- [ ] Превью изменений перед применением
-- [ ] Выбор модели LLM
+- [ ] Undo/Redo для AI операций
+
+### LLM Improvements
+- [ ] Streaming responses
+- [ ] Context window management
+- [ ] Multi-file context
 
 ### Тесты
-
-- [ ] Integration тесты для PSI операций
-- [ ] Тесты для KoogLLMService
+- [ ] Integration тесты для LLM Adapter
 - [ ] E2E тесты плагина
 
 ---
@@ -172,13 +191,7 @@ MaxVibes/
 │       │       │   └── CodeElement.kt       ✅
 │       │       └── modification/
 │       │           └── Modification.kt      ✅
-│       └── test/kotlin/com/maxvibes/domain/
-│           └── model/
-│               ├── code/
-│               │   ├── ElementPathTest.kt   ✅
-│               │   └── CodeElementTest.kt   ✅
-│               └── modification/
-│                   └── ModificationTest.kt  ✅
+│       └── test/kotlin/...                  ✅
 │
 ├── maxvibes-shared/
 │   ├── build.gradle.kts
@@ -186,9 +199,7 @@ MaxVibes/
 │       ├── main/kotlin/com/maxvibes/shared/
 │       │   └── result/
 │       │       └── Result.kt                ✅
-│       └── test/kotlin/com/maxvibes/shared/
-│           └── result/
-│               └── ResultTest.kt            ✅
+│       └── test/kotlin/...                  ✅
 │
 ├── maxvibes-application/
 │   ├── build.gradle.kts
@@ -205,10 +216,7 @@ MaxVibes/
 │       │   └── service/
 │       │       ├── ModifyCodeService.kt        ✅
 │       │       └── AnalyzeCodeService.kt       ✅
-│       └── test/kotlin/com/maxvibes/application/
-│           └── service/
-│               ├── ModifyCodeServiceTest.kt    ✅
-│               └── AnalyzeCodeServiceTest.kt   ✅
+│       └── test/kotlin/...                     ✅
 │
 ├── maxvibes-adapter-psi/
 │   ├── build.gradle.kts
@@ -222,14 +230,15 @@ MaxVibes/
 │       │   │   └── PsiModifier.kt              ✅
 │       │   └── kotlin/
 │       │       └── KotlinElementFactory.kt     ✅
-│       └── test/kotlin/com/maxvibes/adapter/psi/
-│           └── mapper/
-│               └── PsiToDomainMapperTest.kt    ✅
+│       └── test/kotlin/...                     ✅
 │
 ├── maxvibes-adapter-llm/
 │   ├── build.gradle.kts                        ✅
 │   └── src/main/kotlin/com/maxvibes/adapter/llm/
-│       └── (пусто — TODO)                      🚧
+│       ├── LangChainLLMService.kt              ✅ NEW
+│       ├── LLMServiceFactory.kt                ✅ NEW
+│       └── config/
+│           └── LLMProviderConfig.kt            ✅
 │
 ├── maxvibes-plugin/
 │   ├── build.gradle.kts
@@ -246,16 +255,16 @@ MaxVibes/
 │       │   │   ├── MockLLMService.kt            ✅
 │       │   │   └── IdeNotificationService.kt    ✅
 │       │   └── settings/
-│       │       └── (TODO)                       🚧
+│       │       ├── MaxVibesSettings.kt          ✅ NEW
+│       │       ├── MaxVibesSettingsPanel.kt     ✅ NEW
+│       │       └── MaxVibesSettingsConfigurable.kt ✅ NEW
 │       └── main/resources/META-INF/
 │           └── plugin.xml                       ✅
 │
 └── docs/
     ├── README.md                               ✅
     ├── ARCHITECTURE.md                         ✅
-    ├── CURRENT_STATUS.md                       ✅ (этот файл)
-    ├── LLM_INTEGRATION_PLAN.md                 ✅
-    └── MVP1_ROADMAP.md                         ✅
+    └── CURRENT_STATUS.md                       ✅ (этот файл)
 ```
 
 ---
@@ -269,10 +278,9 @@ MaxVibes/
 | Kotlin | 1.9.21 |
 | IntelliJ Platform | 2023.1.5 |
 | Gradle IntelliJ Plugin | 1.16.1 |
+| LangChain4j | 1.0.0-beta3 |
 | kotlinx-serialization | 1.6.2 |
 | kotlinx-coroutines | 1.7.3 |
-| Koog | 0.6.0 |
-| Ktor | 2.3.7 |
 | JUnit | 5.10.1 |
 | MockK | 1.13.8 |
 
@@ -283,7 +291,7 @@ MaxVibes/
 :maxvibes-shared          → kotlin, coroutines
 :maxvibes-application     → domain, shared, coroutines, mockk (test)
 :maxvibes-adapter-psi     → domain, application, shared, intellij-platform, kotlin-plugin
-:maxvibes-adapter-llm     → domain, application, shared, koog, ktor
+:maxvibes-adapter-llm     → domain, application, shared, langchain4j
 :maxvibes-plugin          → all modules, intellij-platform
 ```
 
@@ -291,11 +299,11 @@ MaxVibes/
 
 ## 🐛 Известные проблемы
 
-1. **Warnings при сборке** — "Kotlin runtime libraries have unsupported format" — не критично, связано с Koog dependencies
+1. **Deprecation warnings в LangChain4j** — `ChatLanguageModel.generate()` deprecated, но работает
 
 2. **PSI тесты** — требуют IntelliJ Test Framework, работают медленнее обычных unit тестов
 
-3. **MockLLMService** — простая логика, не понимает сложные инструкции
+3. **SLF4J warnings** — "No SLF4J providers found" — не критично, логгирование работает через IntelliJ
 
 ---
 
@@ -307,10 +315,11 @@ Lines of Code (approx):
 - Shared:      ~50 LOC
 - Application: ~250 LOC
 - PSI Adapter: ~400 LOC
-- Plugin:      ~350 LOC
+- LLM Adapter: ~350 LOC
+- Plugin:      ~600 LOC
 - Tests:       ~500 LOC
 ─────────────────────────
-Total:         ~1850 LOC
+Total:         ~2450 LOC
 ```
 
 ---
@@ -319,4 +328,4 @@ Total:         ~1850 LOC
 
 **GitHub:** https://github.com/mgongalsky/MaxVibes
 
-**Последний коммит:** "Add unit tests for domain, shared, application, and PSI adapter"
+**Последний коммит:** "Migrate from Koog to LangChain4j for LLM integration"

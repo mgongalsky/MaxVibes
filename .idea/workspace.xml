@@ -4,23 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="6b0e4fb8-911a-491d-b25d-1d8736dd714f" name="Changes" comment="First real openAI client worsk">
-      <change afterPath="$PROJECT_DIR$/.kotlin/sessions/kotlin-compiler-2352275415127031187.salive" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.kotlin/sessions/kotlin-compiler-7020238886021604812.salive" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/LangChainLLMService.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.kotlin/sessions/kotlin-compiler-14480896013988864168.salive" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/build.gradle.kts" beforeDir="false" afterPath="$PROJECT_DIR$/build.gradle.kts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/maxvibes-adapter-llm/build.gradle.kts" beforeDir="false" afterPath="$PROJECT_DIR$/maxvibes-adapter-llm/build.gradle.kts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/KoogLLMService.kt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/LLMServiceFactory.kt" beforeDir="false" afterPath="$PROJECT_DIR$/maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/LLMServiceFactory.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/agent/AnalyzerAgent.kt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/agent/CoderAgent.kt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/agent/tools/CodeModificationTools.kt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/maxvibes-plugin/build.gradle.kts" beforeDir="false" afterPath="$PROJECT_DIR$/maxvibes-plugin/build.gradle.kts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/service/MaxVibesService.kt" beforeDir="false" afterPath="$PROJECT_DIR$/maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/service/MaxVibesService.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/settings/MaxVibesSettingsConfigurable.kt" beforeDir="false" afterPath="$PROJECT_DIR$/maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/settings/MaxVibesSettingsConfigurable.kt" afterDir="false" />
-    </list>
+    <list default="true" id="6b0e4fb8-911a-491d-b25d-1d8736dd714f" name="Changes" comment="Migrate LLM adapter from Koog to LangChain4j&#10;&#10;- Replace Koog framework with LangChain4j for LLM integration&#10;- Add LLMServiceFactory with OpenAI, Anthropic, Ollama support&#10;- Fix settings to refresh LLM service on configuration change&#10;- Remove Koog dependencies and shadow plugin workarounds" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -317,7 +301,15 @@
       <option name="project" value="LOCAL" />
       <updated>1767784524878</updated>
     </task>
-    <option name="localTasksCounter" value="14" />
+    <task id="LOCAL-00014" summary="Migrate LLM adapter from Koog to LangChain4j&#10;&#10;- Replace Koog framework with LangChain4j for LLM integration&#10;- Add LLMServiceFactory with OpenAI, Anthropic, Ollama support&#10;- Fix settings to refresh LLM service on configuration change&#10;- Remove Koog dependencies and shadow plugin workarounds">
+      <option name="closed" value="true" />
+      <created>1768999994094</created>
+      <option name="number" value="00014" />
+      <option name="presentableId" value="LOCAL-00014" />
+      <option name="project" value="LOCAL" />
+      <updated>1768999994094</updated>
+    </task>
+    <option name="localTasksCounter" value="15" />
     <servers />
   </component>
   <component name="UnknownFeatures">
@@ -353,6 +345,7 @@
     <MESSAGE value="Add documentation: architecture, status, LLM plan, MVP1 roadmap" />
     <MESSAGE value="Add first LLM integration." />
     <MESSAGE value="First real openAI client worsk" />
-    <option name="LAST_COMMIT_MESSAGE" value="First real openAI client worsk" />
+    <MESSAGE value="Migrate LLM adapter from Koog to LangChain4j&#10;&#10;- Replace Koog framework with LangChain4j for LLM integration&#10;- Add LLMServiceFactory with OpenAI, Anthropic, Ollama support&#10;- Fix settings to refresh LLM service on configuration change&#10;- Remove Koog dependencies and shadow plugin workarounds" />
+    <option name="LAST_COMMIT_MESSAGE" value="Migrate LLM adapter from Koog to LangChain4j&#10;&#10;- Replace Koog framework with LangChain4j for LLM integration&#10;- Add LLMServiceFactory with OpenAI, Anthropic, Ollama support&#10;- Fix settings to refresh LLM service on configuration change&#10;- Remove Koog dependencies and shadow plugin workarounds" />
   </component>
 </project>
