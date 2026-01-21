@@ -1,8 +1,12 @@
 package com.maxvibes.adapter.psi
 
 import com.intellij.openapi.application.runReadAction
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.vfs.VfsUtil
+import com.intellij.psi.PsiDirectory
+import com.intellij.psi.PsiManager
 import com.maxvibes.adapter.psi.kotlin.KotlinElementFactory
 import com.maxvibes.adapter.psi.mapper.PsiToDomainMapper
 import com.maxvibes.adapter.psi.operation.PsiModifier
@@ -15,6 +19,7 @@ import com.maxvibes.domain.model.code.ElementPath
 import com.maxvibes.domain.model.modification.*
 import com.maxvibes.shared.result.Result
 import org.jetbrains.kotlin.psi.KtFile
+import java.io.File
 
 /**
  * Реализация CodeRepository через IntelliJ PSI
@@ -119,21 +124,125 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
     // ═══════════════════════════════════════════════════════════════
 
     private fun createFile(mod: Modification.CreateFile): ModificationResult {
-        return runReadAction {
-            try {
-                val psiFile = elementFactory.createFile(mod.targetPath.name, mod.content)
+        println("[PsiCodeRepository] Creating file: ${mod.targetPath.value}")
+
+        return try {
+            var resultContent: String? = null
+
+            ApplicationManager.getApplication().invokeAndWait {
+                WriteCommandAction.runWriteCommandAction(project) {
+                    // 1. Определяем путь к файлу
+                    val filePath = mod.targetPath.filePath
+                    println("[PsiCodeRepository] File path: $filePath")
+
+                    // 2. Находим или создаём директорию
+                    val directory = findOrCreateDirectory(filePath)
+                    if (directory == null) {
+                        println("[PsiCodeRepository] ERROR: Could not find/create directory for $filePath")
+                        return@runWriteCommandAction
+                    }
+                    println("[PsiCodeRepository] Directory: ${directory.virtualFile.path}")
+
+                    // 3. Создаём файл
+                    val fileName = File(filePath).name
+                    println("[PsiCodeRepository] Creating file: $fileName")
+
+                    val psiFile = modifier.createFile(directory, fileName, mod.content)
+                    if (psiFile != null) {
+                        resultContent = psiFile.text
+                        println("[PsiCodeRepository] File created successfully: ${psiFile.virtualFile?.path}")
+                    } else {
+                        println("[PsiCodeRepository] ERROR: modifier.createFile returned null")
+                    }
+                }
+            }
+
+            if (resultContent != null) {
                 ModificationResult.Success(
                     modification = mod,
                     affectedPath = mod.targetPath,
-                    resultContent = psiFile.text
+                    resultContent = resultContent
                 )
-            } catch (e: Exception) {
+            } else {
                 ModificationResult.Failure(
                     modification = mod,
-                    error = ModificationError.IOError(e.message ?: "Failed to create file")
+                    error = ModificationError.IOError("Failed to create file - directory not found or file creation failed")
                 )
             }
+        } catch (e: Exception) {
+            println("[PsiCodeRepository] ERROR creating file: ${e.message}")
+            e.printStackTrace()
+            ModificationResult.Failure(
+                modification = mod,
+                error = ModificationError.IOError(e.message ?: "Failed to create file")
+            )
         }
+    }
+
+    /**
+     * Находит или создаёт директорию для указанного пути файла
+     */
+    private fun findOrCreateDirectory(filePath: String): PsiDirectory? {
+        val projectBasePath = project.basePath ?: return null
+        val psiManager = PsiManager.getInstance(project)
+
+        // Извлекаем путь директории из пути файла
+        val file = File(filePath)
+        val dirPath = file.parent ?: ""
+
+        println("[PsiCodeRepository] Looking for directory: $dirPath")
+
+        // Пробуем разные варианты пути
+        val possiblePaths = listOf(
+            "$projectBasePath/$dirPath",
+            "$projectBasePath/src/main/kotlin",
+            "$projectBasePath/src",
+            projectBasePath
+        )
+
+        for (path in possiblePaths) {
+            val normalizedPath = path.replace("\\", "/").trimEnd('/')
+            println("[PsiCodeRepository] Trying path: $normalizedPath")
+
+            val virtualFile = VfsUtil.findFileByIoFile(File(normalizedPath), true)
+            if (virtualFile != null && virtualFile.isDirectory) {
+                val psiDir = psiManager.findDirectory(virtualFile)
+                if (psiDir != null) {
+                    println("[PsiCodeRepository] Found directory: $normalizedPath")
+                    return psiDir
+                }
+            }
+        }
+
+        // Если ничего не нашли, пробуем создать
+        println("[PsiCodeRepository] Directory not found, trying to create: $dirPath")
+
+        val baseDir = VfsUtil.findFileByIoFile(File(projectBasePath), true)
+        if (baseDir != null) {
+            val basePsiDir = psiManager.findDirectory(baseDir)
+            if (basePsiDir != null) {
+                return createDirectoryPath(basePsiDir, dirPath)
+            }
+        }
+
+        return null
+    }
+
+    /**
+     * Создаёт вложенные директории по указанному пути
+     */
+    private fun createDirectoryPath(baseDir: PsiDirectory, relativePath: String): PsiDirectory {
+        if (relativePath.isBlank()) return baseDir
+
+        var currentDir = baseDir
+        val parts = relativePath.split("/", "\\").filter { it.isNotBlank() }
+
+        for (part in parts) {
+            val existing = currentDir.findSubdirectory(part)
+            currentDir = existing ?: currentDir.createSubdirectory(part)
+        }
+
+        return currentDir
     }
 
     private fun replaceFile(mod: Modification.ReplaceFile): ModificationResult {
@@ -144,8 +253,10 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
             )
 
         return try {
-            WriteCommandAction.runWriteCommandAction(project) {
-                modifier.replaceFileContent(psiFile, mod.newContent)
+            ApplicationManager.getApplication().invokeAndWait {
+                WriteCommandAction.runWriteCommandAction(project) {
+                    modifier.replaceFileContent(psiFile, mod.newContent)
+                }
             }
             ModificationResult.Success(
                 modification = mod,
@@ -168,8 +279,10 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
             )
 
         return try {
-            WriteCommandAction.runWriteCommandAction(project) {
-                modifier.deleteElement(psiFile)
+            ApplicationManager.getApplication().invokeAndWait {
+                WriteCommandAction.runWriteCommandAction(project) {
+                    modifier.deleteElement(psiFile)
+                }
             }
             ModificationResult.Success(
                 modification = mod,
@@ -193,9 +306,11 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
 
         return try {
             var resultText: String? = null
-            WriteCommandAction.runWriteCommandAction(project) {
-                val added = modifier.addElement(parent, mod.content, mod.elementKind, mod.position)
-                resultText = added?.text
+            ApplicationManager.getApplication().invokeAndWait {
+                WriteCommandAction.runWriteCommandAction(project) {
+                    val added = modifier.addElement(parent, mod.content, mod.elementKind, mod.position)
+                    resultText = added?.text
+                }
             }
 
             if (resultText != null) {
@@ -232,9 +347,11 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
 
         return try {
             var resultText: String? = null
-            WriteCommandAction.runWriteCommandAction(project) {
-                val replaced = modifier.replaceElement(element, mod.newContent, kind)
-                resultText = replaced?.text
+            ApplicationManager.getApplication().invokeAndWait {
+                WriteCommandAction.runWriteCommandAction(project) {
+                    val replaced = modifier.replaceElement(element, mod.newContent, kind)
+                    resultText = replaced?.text
+                }
             }
 
             if (resultText != null) {
@@ -265,8 +382,10 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
             )
 
         return try {
-            WriteCommandAction.runWriteCommandAction(project) {
-                modifier.deleteElement(element)
+            ApplicationManager.getApplication().invokeAndWait {
+                WriteCommandAction.runWriteCommandAction(project) {
+                    modifier.deleteElement(element)
+                }
             }
             ModificationResult.Success(
                 modification = mod,

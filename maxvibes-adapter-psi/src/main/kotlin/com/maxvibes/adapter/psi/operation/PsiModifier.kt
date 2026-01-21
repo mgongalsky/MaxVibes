@@ -3,6 +3,7 @@ package com.maxvibes.adapter.psi.operation
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.project.Project
+import com.intellij.psi.PsiDirectory
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiFileFactory
@@ -22,32 +23,49 @@ class PsiModifier(
     private val elementFactory: KotlinElementFactory
 ) {
 
-    fun createFile(directory: PsiElement, fileName: String, content: String): PsiFile? {
-        return executeWriteCommand("Create file $fileName") {
-            val psiFile = PsiFileFactory.getInstance(project)
-                .createFileFromText(fileName, KotlinFileType.INSTANCE, content)
+    /**
+     * Создаёт файл и добавляет его в указанную директорию
+     */
+    fun createFile(directory: PsiDirectory, fileName: String, content: String): PsiFile? {
+        println("[PsiModifier] Creating file '$fileName' in ${directory.virtualFile.path}")
 
-            // Форматируем код
-            CodeStyleManager.getInstance(project).reformat(psiFile)
-
-            psiFile
+        // Проверяем, существует ли уже файл
+        val existingFile = directory.findFile(fileName)
+        if (existingFile != null) {
+            println("[PsiModifier] File already exists, replacing content")
+            replaceFileContent(existingFile, content)
+            return existingFile
         }
+
+        // Создаём PSI файл из текста
+        val psiFile = PsiFileFactory.getInstance(project)
+            .createFileFromText(fileName, KotlinFileType.INSTANCE, content)
+
+        // Форматируем код
+        CodeStyleManager.getInstance(project).reformat(psiFile)
+
+        // Добавляем файл в директорию
+        val addedFile = directory.add(psiFile) as? PsiFile
+
+        println("[PsiModifier] File added: ${addedFile?.virtualFile?.path}")
+
+        return addedFile
     }
 
     fun replaceFileContent(file: PsiFile, newContent: String): PsiFile? {
-        return executeWriteCommand("Replace file content") {
-            val newFile = PsiFileFactory.getInstance(project)
-                .createFileFromText(file.name, KotlinFileType.INSTANCE, newContent)
+        println("[PsiModifier] Replacing content of ${file.name}")
 
-            file.deleteChildRange(file.firstChild, file.lastChild)
+        val newFile = PsiFileFactory.getInstance(project)
+            .createFileFromText(file.name, KotlinFileType.INSTANCE, newContent)
 
-            newFile.children.forEach { child ->
-                file.add(child.copy())
-            }
+        file.deleteChildRange(file.firstChild, file.lastChild)
 
-            CodeStyleManager.getInstance(project).reformat(file)
-            file
+        newFile.children.forEach { child ->
+            file.add(child.copy())
         }
+
+        CodeStyleManager.getInstance(project).reformat(file)
+        return file
     }
 
     fun addElement(
@@ -56,22 +74,28 @@ class PsiModifier(
         kind: ElementKind,
         position: InsertPosition
     ): PsiElement? {
-        val newElement = elementFactory.createElementFromText(content, kind) ?: return null
+        println("[PsiModifier] Adding element of kind $kind to ${parent.javaClass.simpleName}")
 
-        return executeWriteCommand("Add element") {
-            val added = when (position) {
-                InsertPosition.FIRST_CHILD -> addAsFirstChild(parent, newElement)
-                InsertPosition.LAST_CHILD -> addAsLastChild(parent, newElement)
-                InsertPosition.BEFORE -> parent.parent.addBefore(newElement, parent)
-                InsertPosition.AFTER -> parent.parent.addAfter(newElement, parent)
-            }
-
-            // Добавляем перенос строки если нужно
-            ensureNewLineBefore(added)
-
-            CodeStyleManager.getInstance(project).reformat(added)
-            added
+        val newElement = elementFactory.createElementFromText(content, kind)
+        if (newElement == null) {
+            println("[PsiModifier] ERROR: Failed to create element from content")
+            return null
         }
+
+        val added = when (position) {
+            InsertPosition.FIRST_CHILD -> addAsFirstChild(parent, newElement)
+            InsertPosition.LAST_CHILD -> addAsLastChild(parent, newElement)
+            InsertPosition.BEFORE -> parent.parent.addBefore(newElement, parent)
+            InsertPosition.AFTER -> parent.parent.addAfter(newElement, parent)
+        }
+
+        // Добавляем перенос строки если нужно
+        ensureNewLineBefore(added)
+
+        CodeStyleManager.getInstance(project).reformat(added)
+
+        println("[PsiModifier] Element added successfully")
+        return added
     }
 
     private fun addAsFirstChild(parent: PsiElement, element: PsiElement): PsiElement {
@@ -122,19 +146,18 @@ class PsiModifier(
     }
 
     fun replaceElement(target: PsiElement, content: String, kind: ElementKind): PsiElement? {
+        println("[PsiModifier] Replacing element of kind $kind")
+
         val newElement = elementFactory.createElementFromText(content, kind) ?: return null
 
-        return executeWriteCommand("Replace element") {
-            val replaced = target.replace(newElement)
-            CodeStyleManager.getInstance(project).reformat(replaced)
-            replaced
-        }
+        val replaced = target.replace(newElement)
+        CodeStyleManager.getInstance(project).reformat(replaced)
+        return replaced
     }
 
     fun deleteElement(element: PsiElement) {
-        executeWriteCommand("Delete element") {
-            element.delete()
-        }
+        println("[PsiModifier] Deleting element: ${element.javaClass.simpleName}")
+        element.delete()
     }
 
     private fun ensureNewLineBefore(element: PsiElement) {
@@ -142,15 +165,5 @@ class PsiModifier(
         if (prev != null && !prev.text.contains("\n")) {
             element.parent.addBefore(elementFactory.createNewLine(), element)
         }
-    }
-
-    private fun <T> executeWriteCommand(name: String, action: () -> T): T? {
-        var result: T? = null
-        ApplicationManager.getApplication().invokeAndWait {
-            WriteCommandAction.runWriteCommandAction(project) {
-                result = action()
-            }
-        }
-        return result
     }
 }
