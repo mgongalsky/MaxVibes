@@ -6,170 +6,61 @@ import com.maxvibes.adapter.llm.config.LLMProviderType
 import com.maxvibes.application.port.output.LLMService
 
 /**
- * Factory для создания LLMService.
- * Позволяет легко переключаться между провайдерами.
+ * Factory for creating LLMService instances based on configuration.
+ * Supports OpenAI, Anthropic, and Ollama providers via LangChain4j.
  */
 object LLMServiceFactory {
 
     /**
-     * Создаёт LLMService на основе доступных API ключей из environment variables.
-     * Приоритет: ANTHROPIC -> OPENAI -> OLLAMA (если запущен)
+     * Creates an LLMService instance based on the provided configuration.
      *
-     * @return KoogLLMService или null если ни один провайдер не настроен
+     * @param config The LLM provider configuration
+     * @return An LLMService implementation
      */
-    fun createFromEnvironment(): KoogLLMService? {
-        // Проверяем Anthropic
+    fun create(config: LLMProviderConfig): LangChainLLMService {
+        return LangChainLLMService(config)
+    }
+
+    /**
+     * Creates an LLMService from environment variables.
+     * Checks for API keys in order: ANTHROPIC_API_KEY, OPENAI_API_KEY
+     * Falls back to Ollama if no API keys found.
+     *
+     * @return An LLMService implementation
+     */
+    fun createFromEnvironment(): LangChainLLMService {
+        // Check for Anthropic API key
         val anthropicKey = System.getenv("ANTHROPIC_API_KEY")
         if (!anthropicKey.isNullOrBlank()) {
-            return createAnthropicLLMService(anthropicKey)
+            return create(
+                LLMProviderConfig(
+                    providerType = LLMProviderType.ANTHROPIC,
+                    apiKey = anthropicKey,
+                    modelId = "claude-sonnet-4-20250514"
+                )
+            )
         }
 
-        // Проверяем OpenAI
+        // Check for OpenAI API key
         val openaiKey = System.getenv("OPENAI_API_KEY")
         if (!openaiKey.isNullOrBlank()) {
-            return createOpenAILLMService(openaiKey)
+            return create(
+                LLMProviderConfig(
+                    providerType = LLMProviderType.OPENAI,
+                    apiKey = openaiKey,
+                    modelId = "gpt-4o"
+                )
+            )
         }
 
-        // Проверяем Ollama (по умолчанию на localhost)
-        val ollamaUrl = System.getenv("OLLAMA_BASE_URL") ?: "http://localhost:11434"
-        if (isOllamaAvailable(ollamaUrl)) {
-            val modelId = System.getenv("OLLAMA_MODEL") ?: "llama3.2"
-            return createOllamaLLMService(modelId, ollamaUrl)
-        }
-
-        return null
-    }
-
-    /**
-     * Создаёт LLMService на основе конфигурации.
-     */
-    fun create(config: LLMProviderConfig): KoogLLMService {
-        return KoogLLMService(config)
-    }
-
-    /**
-     * Создаёт LLMService с OpenAI.
-     */
-    fun createOpenAI(
-        apiKey: String,
-        modelId: String = "gpt-4o"
-    ): KoogLLMService {
-        return createOpenAILLMService(apiKey, modelId)
-    }
-
-    /**
-     * Создаёт LLMService с Anthropic Claude.
-     */
-    fun createAnthropic(
-        apiKey: String,
-        modelId: String = "claude-sonnet-4-20250514"
-    ): KoogLLMService {
-        return createAnthropicLLMService(apiKey, modelId)
-    }
-
-    /**
-     * Создаёт LLMService с локальным Ollama.
-     */
-    fun createOllama(
-        modelId: String = "llama3.2",
-        baseUrl: String = "http://localhost:11434"
-    ): KoogLLMService {
-        return createOllamaLLMService(modelId, baseUrl)
-    }
-
-    /**
-     * Проверяет доступность Ollama сервера.
-     */
-    private fun isOllamaAvailable(baseUrl: String): Boolean {
-        return try {
-            val url = java.net.URL("$baseUrl/api/tags")
-            val connection = url.openConnection() as java.net.HttpURLConnection
-            connection.connectTimeout = 1000
-            connection.readTimeout = 1000
-            connection.requestMethod = "GET"
-            connection.responseCode == 200
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    /**
-     * Возвращает список доступных провайдеров на основе environment.
-     */
-    fun getAvailableProviders(): List<AvailableProvider> {
-        val providers = mutableListOf<AvailableProvider>()
-
-        val anthropicKey = System.getenv("ANTHROPIC_API_KEY")
-        if (!anthropicKey.isNullOrBlank()) {
-            providers.add(AvailableProvider(
-                type = LLMProviderType.ANTHROPIC,
-                name = "Anthropic Claude",
-                configured = true
-            ))
-        }
-
-        val openaiKey = System.getenv("OPENAI_API_KEY")
-        if (!openaiKey.isNullOrBlank()) {
-            providers.add(AvailableProvider(
-                type = LLMProviderType.OPENAI,
-                name = "OpenAI GPT",
-                configured = true
-            ))
-        }
-
-        val ollamaUrl = System.getenv("OLLAMA_BASE_URL") ?: "http://localhost:11434"
-        providers.add(AvailableProvider(
-            type = LLMProviderType.OLLAMA,
-            name = "Ollama (Local)",
-            configured = isOllamaAvailable(ollamaUrl)
-        ))
-
-        return providers
-    }
-}
-
-/**
- * Информация о доступном провайдере
- */
-data class AvailableProvider(
-    val type: LLMProviderType,
-    val name: String,
-    val configured: Boolean
-)
-
-/**
- * Результат проверки настроек LLM
- */
-sealed class LLMConfigurationStatus {
-    data class Configured(
-        val provider: LLMProviderType,
-        val modelId: String
-    ) : LLMConfigurationStatus()
-
-    data class NotConfigured(
-        val message: String = "No LLM provider configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY environment variable."
-    ) : LLMConfigurationStatus()
-}
-
-/**
- * Extension function для проверки статуса конфигурации
- */
-fun LLMServiceFactory.checkConfiguration(): LLMConfigurationStatus {
-    val anthropicKey = System.getenv("ANTHROPIC_API_KEY")
-    if (!anthropicKey.isNullOrBlank()) {
-        return LLMConfigurationStatus.Configured(
-            provider = LLMProviderType.ANTHROPIC,
-            modelId = "claude-sonnet-4-20250514"
+        // Fallback to Ollama (local)
+        return create(
+            LLMProviderConfig(
+                providerType = LLMProviderType.OLLAMA,
+                apiKey = "",
+                modelId = "llama3.2",
+                baseUrl = "http://localhost:11434"
+            )
         )
     }
-
-    val openaiKey = System.getenv("OPENAI_API_KEY")
-    if (!openaiKey.isNullOrBlank()) {
-        return LLMConfigurationStatus.Configured(
-            provider = LLMProviderType.OPENAI,
-            modelId = "gpt-4o"
-        )
-    }
-
-    return LLMConfigurationStatus.NotConfigured()
 }

@@ -4,21 +4,22 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="6b0e4fb8-911a-491d-b25d-1d8736dd714f" name="Changes" comment="Add first LLM integration.">
-      <change afterPath="$PROJECT_DIR$/.kotlin/sessions/kotlin-compiler-4077740087798347519.salive" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/action/OpenSettingsAction.kt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/settings/MaxVibesSettings.kt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/settings/MaxVibesSettingsConfigurable.kt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/settings/MaxVibesSettingsPanel.kt" afterDir="false" />
+    <list default="true" id="6b0e4fb8-911a-491d-b25d-1d8736dd714f" name="Changes" comment="First real openAI client worsk">
+      <change afterPath="$PROJECT_DIR$/.kotlin/sessions/kotlin-compiler-2352275415127031187.salive" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.kotlin/sessions/kotlin-compiler-7020238886021604812.salive" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/LangChainLLMService.kt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.kotlin/sessions/kotlin-compiler-14480896013988864168.salive" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/build.gradle.kts" beforeDir="false" afterPath="$PROJECT_DIR$/build.gradle.kts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/maxvibes-adapter-llm/build.gradle.kts" beforeDir="false" afterPath="$PROJECT_DIR$/maxvibes-adapter-llm/build.gradle.kts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/KoogLLMService.kt" beforeDir="false" afterPath="$PROJECT_DIR$/maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/KoogLLMService.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/maxvibes-adapter-psi/src/main/kotlin/com/maxvibes/adapter/psi/PsiCodeRepository.kt" beforeDir="false" afterPath="$PROJECT_DIR$/maxvibes-adapter-psi/src/main/kotlin/com/maxvibes/adapter/psi/PsiCodeRepository.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/action/AnalyzeCodeAction.kt" beforeDir="false" afterPath="$PROJECT_DIR$/maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/action/AnalyzeCodeAction.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/action/ModifyCodeAction.kt" beforeDir="false" afterPath="$PROJECT_DIR$/maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/action/ModifyCodeAction.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/KoogLLMService.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/LLMServiceFactory.kt" beforeDir="false" afterPath="$PROJECT_DIR$/maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/LLMServiceFactory.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/agent/AnalyzerAgent.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/agent/CoderAgent.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/agent/tools/CodeModificationTools.kt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/maxvibes-plugin/build.gradle.kts" beforeDir="false" afterPath="$PROJECT_DIR$/maxvibes-plugin/build.gradle.kts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/service/MaxVibesService.kt" beforeDir="false" afterPath="$PROJECT_DIR$/maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/service/MaxVibesService.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/maxvibes-plugin/src/main/resources/META-INF/plugin.xml" beforeDir="false" afterPath="$PROJECT_DIR$/maxvibes-plugin/src/main/resources/META-INF/plugin.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/settings.gradle.kts" beforeDir="false" afterPath="$PROJECT_DIR$/settings.gradle.kts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/settings/MaxVibesSettingsConfigurable.kt" beforeDir="false" afterPath="$PROJECT_DIR$/maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/settings/MaxVibesSettingsConfigurable.kt" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -64,18 +65,18 @@
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
-  <component name="GitHubPullRequestSearchHistory"><![CDATA[{
-  "lastFilter": {
-    "state": "OPEN",
-    "assignee": "mgongalsky"
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;mgongalsky&quot;
   }
-}]]></component>
-  <component name="GithubPullRequestsUISettings"><![CDATA[{
-  "selectedUrlAndAccountId": {
-    "url": "https://github.com/mgongalsky/MaxVibes.git",
-    "accountId": "94d6b627-4dd3-445c-82e8-6109f51d6d49"
+}</component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;https://github.com/mgongalsky/MaxVibes.git&quot;,
+    &quot;accountId&quot;: &quot;94d6b627-4dd3-445c-82e8-6109f51d6d49&quot;
   }
-}]]></component>
+}</component>
   <component name="GradleScriptDefinitionsStorage" workingDir="$PROJECT_DIR$" gradleHome="C:\Users\mgong\.gradle\wrapper\dists\gradle-8.5-bin\5t9huq95ubn472n8rpzujfbqh\gradle-8.5" javaHome="C:\Users\mgong\.jdks\openjdk-21.0.2" gradleVersion="8.5" />
   <component name="LogFilters">
     <option name="FILTER_ERRORS" value="false" />
@@ -87,10 +88,10 @@
   <component name="MarkdownSettingsMigration">
     <option name="stateVersion" value="1" />
   </component>
-  <component name="ProjectColorInfo"><![CDATA[{
-  "customColor": "",
-  "associatedIndex": 6
-}]]></component>
+  <component name="ProjectColorInfo">{
+  &quot;customColor&quot;: &quot;&quot;,
+  &quot;associatedIndex&quot;: 6
+}</component>
   <component name="ProjectId" id="37k2nhXM9gZA9XDmXxyXOJUmcoi" />
   <component name="ProjectLevelVcsManager">
     <ConfirmationsSetting value="2" id="Add" />
@@ -99,23 +100,24 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "ASKED_ADD_EXTERNAL_FILES": "true",
-    "Gradle.MaxVibes [:test].executor": "Run",
-    "Gradle.MaxVibes [setupDependencies].executor": "Run",
-    "Gradle.MaxVibes [test].executor": "Run",
-    "Gradle.Run Plugin.executor": "Run",
-    "RunOnceActivity.OpenProjectViewOnStart": "true",
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
-    "RunOnceActivity.git.unshallow": "true",
-    "git-widget-placeholder": "master",
-    "ignore.virus.scanning.warn.message": "true",
-    "kotlin-language-version-configured": "true",
-    "settings.editor.selected.configurable": "project.propVCSSupport.DirectoryMappings"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ASKED_ADD_EXTERNAL_FILES&quot;: &quot;true&quot;,
+    &quot;Gradle.MaxVibes [:test].executor&quot;: &quot;Run&quot;,
+    &quot;Gradle.MaxVibes [setupDependencies].executor&quot;: &quot;Run&quot;,
+    &quot;Gradle.MaxVibes [test].executor&quot;: &quot;Run&quot;,
+    &quot;Gradle.MaxVibes with Shadow.executor&quot;: &quot;Run&quot;,
+    &quot;Gradle.Run Plugin.executor&quot;: &quot;Run&quot;,
+    &quot;RunOnceActivity.OpenProjectViewOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;master&quot;,
+    &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
+    &quot;kotlin-language-version-configured&quot;: &quot;true&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;project.propVCSSupport.DirectoryMappings&quot;
   }
-}]]></component>
+}</component>
   <component name="RecentsManager">
     <key name="MoveFile.RECENT_KEYS">
       <recent name="E:\Programs\Kotlin\MaxPilot\MaxVibes\docs" />
@@ -140,11 +142,8 @@
       </ExternalSystemSettings>
       <ExternalSystemDebugServerProcess>true</ExternalSystemDebugServerProcess>
       <ExternalSystemReattachDebugProcess>true</ExternalSystemReattachDebugProcess>
-      <ExternalSystemDebugDisabled>false</ExternalSystemDebugDisabled>
       <DebugAllEnabled>false</DebugAllEnabled>
       <RunAsTest>false</RunAsTest>
-      <GradleProfilingDisabled>false</GradleProfilingDisabled>
-      <GradleCoverageDisabled>false</GradleCoverageDisabled>
       <method v="2" />
     </configuration>
     <configuration name="MaxVibes [test]" type="GradleRunConfiguration" factoryName="Gradle" temporary="true">
@@ -165,15 +164,37 @@
       </ExternalSystemSettings>
       <ExternalSystemDebugServerProcess>true</ExternalSystemDebugServerProcess>
       <ExternalSystemReattachDebugProcess>true</ExternalSystemReattachDebugProcess>
-      <ExternalSystemDebugDisabled>false</ExternalSystemDebugDisabled>
       <DebugAllEnabled>false</DebugAllEnabled>
       <RunAsTest>false</RunAsTest>
-      <GradleProfilingDisabled>false</GradleProfilingDisabled>
-      <GradleCoverageDisabled>false</GradleCoverageDisabled>
+      <method v="2" />
+    </configuration>
+    <configuration name="MaxVibes with Shadow" type="GradleRunConfiguration" factoryName="Gradle">
+      <ExternalSystemSettings>
+        <option name="executionName" />
+        <option name="externalProjectPath" value="$PROJECT_DIR$" />
+        <option name="externalSystemIdString" value="GRADLE" />
+        <option name="scriptParameters" value="" />
+        <option name="taskDescriptions">
+          <list />
+        </option>
+        <option name="taskNames">
+          <list>
+            <option value="clean" />
+            <option value=":maxvibes-adapter-llm:shadowJar" />
+            <option value=":maxvibes-plugin:runIde" />
+          </list>
+        </option>
+        <option name="vmOptions" />
+      </ExternalSystemSettings>
+      <ExternalSystemDebugServerProcess>true</ExternalSystemDebugServerProcess>
+      <ExternalSystemReattachDebugProcess>true</ExternalSystemReattachDebugProcess>
+      <DebugAllEnabled>false</DebugAllEnabled>
+      <RunAsTest>false</RunAsTest>
       <method v="2" />
     </configuration>
     <list>
       <item itemvalue="Gradle.Run Plugin" />
+      <item itemvalue="Gradle.MaxVibes with Shadow" />
       <item itemvalue="Gradle.MaxVibes [:test]" />
       <item itemvalue="Gradle.MaxVibes [test]" />
     </list>
@@ -182,13 +203,6 @@
         <item itemvalue="Gradle.MaxVibes [test]" />
       </list>
     </recent_temporary>
-  </component>
-  <component name="SharedIndexes">
-    <attachedChunks>
-      <set>
-        <option value="bundled-jdk-30f59d01ecdd-26cb7f24e5b0-intellij.indexing.shared.core-IU-253.29346.138" />
-      </set>
-    </attachedChunks>
   </component>
   <component name="SpellCheckerSettings" RuntimeDictionaries="0" Folders="0" CustomDictionaries="0" DefaultDictionary="application-level" UseSingleDictionary="true" transferred="true" />
   <component name="TaskManager">
@@ -287,7 +301,23 @@
       <option name="project" value="LOCAL" />
       <updated>1767497778056</updated>
     </task>
-    <option name="localTasksCounter" value="12" />
+    <task id="LOCAL-00012" summary="First real openAI client worsk">
+      <option name="closed" value="true" />
+      <created>1767784511822</created>
+      <option name="number" value="00012" />
+      <option name="presentableId" value="LOCAL-00012" />
+      <option name="project" value="LOCAL" />
+      <updated>1767784511822</updated>
+    </task>
+    <task id="LOCAL-00013" summary="First real openAI client worsk">
+      <option name="closed" value="true" />
+      <created>1767784524878</created>
+      <option name="number" value="00013" />
+      <option name="presentableId" value="LOCAL-00013" />
+      <option name="project" value="LOCAL" />
+      <updated>1767784524878</updated>
+    </task>
+    <option name="localTasksCounter" value="14" />
     <servers />
   </component>
   <component name="UnknownFeatures">
@@ -297,6 +327,17 @@
     <option featureType="dependencySupport" implementationName="java:io.projectreactor:reactor-core" />
     <option featureType="dependencySupport" implementationName="executable:kubectl" />
     <option featureType="dependencySupport" implementationName="executable:az" />
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
   </component>
   <component name="VcsManagerConfiguration">
     <option name="ADD_EXTERNAL_FILES_SILENTLY" value="true" />
@@ -311,6 +352,7 @@
     <MESSAGE value="Add unit tests for domain, shared, application, and PSI adapter" />
     <MESSAGE value="Add documentation: architecture, status, LLM plan, MVP1 roadmap" />
     <MESSAGE value="Add first LLM integration." />
-    <option name="LAST_COMMIT_MESSAGE" value="Add first LLM integration." />
+    <MESSAGE value="First real openAI client worsk" />
+    <option name="LAST_COMMIT_MESSAGE" value="First real openAI client worsk" />
   </component>
 </project>

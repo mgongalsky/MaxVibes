@@ -2,6 +2,8 @@
 package com.maxvibes.plugin.settings
 
 import com.intellij.openapi.options.Configurable
+import com.intellij.openapi.project.ProjectManager
+import com.maxvibes.plugin.service.MaxVibesService
 import javax.swing.JComponent
 
 /**
@@ -29,6 +31,17 @@ class MaxVibesSettingsConfigurable : Configurable {
     override fun apply() {
         val settings = MaxVibesSettings.getInstance()
         settingsPanel?.saveSettings(settings)
+
+        // Refresh LLM service in all open projects
+        ProjectManager.getInstance().openProjects.forEach { project ->
+            if (!project.isDisposed) {
+                try {
+                    MaxVibesService.getInstance(project).refreshLLMService()
+                } catch (e: Exception) {
+                    // Project might not have the service yet
+                }
+            }
+        }
     }
 
     override fun reset() {

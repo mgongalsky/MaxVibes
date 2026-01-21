@@ -4,7 +4,7 @@ package com.maxvibes.plugin.service
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
-import com.maxvibes.adapter.llm.KoogLLMService
+import com.maxvibes.adapter.llm.LangChainLLMService
 import com.maxvibes.adapter.llm.LLMServiceFactory
 import com.maxvibes.adapter.llm.config.LLMProviderConfig
 import com.maxvibes.adapter.llm.config.LLMProviderType
@@ -36,11 +36,19 @@ class MaxVibesService(private val project: Project) {
     }
 
     /**
-     * LLM Service - automatically selects real or mock based on settings
+     * LLM Service - automatically selects real or mock based on settings.
+     * Use refreshLLMService() after changing settings to recreate.
      */
-    val llmService: LLMService by lazy {
-        createLLMService()
-    }
+    @Volatile
+    private var _llmService: LLMService? = null
+
+    val llmService: LLMService
+        get() {
+            if (_llmService == null) {
+                _llmService = createLLMService()
+            }
+            return _llmService!!
+        }
 
     val notificationService: IdeNotificationService by lazy {
         IdeNotificationService(project)
@@ -97,21 +105,23 @@ class MaxVibesService(private val project: Project) {
         LOG.info("LLM not configured, checking environment variables...")
 
         // Try to create from environment variables
-        val envService = LLMServiceFactory.createFromEnvironment()
-        if (envService != null) {
-            LOG.info("Using LLM from environment variables")
-            return envService
-        }
+        return try {
+            val envService = LLMServiceFactory.createFromEnvironment()
+            LOG.info("Using LLM from environment variables: ${envService.getProviderInfo()}")
+            envService
+        } catch (e: Exception) {
+            LOG.info("No environment variables found: ${e.message}")
 
-        // Fall back to mock if enabled
-        if (settings.enableMockFallback) {
-            LOG.info("Using MockLLMService (mock fallback enabled)")
-            return MockLLMService()
+            // Fall back to mock if enabled
+            if (settings.enableMockFallback) {
+                LOG.info("Using MockLLMService (mock fallback enabled)")
+                MockLLMService()
+            } else {
+                // Return a service that always returns errors
+                LOG.warn("No LLM configured and mock fallback disabled")
+                NotConfiguredLLMService()
+            }
         }
-
-        // Return a service that always returns errors
-        LOG.warn("No LLM configured and mock fallback disabled")
-        return NotConfiguredLLMService()
     }
 
     private fun handleCreationError(settings: MaxVibesSettings, e: Exception): LLMService {
@@ -129,9 +139,8 @@ class MaxVibesService(private val project: Project) {
      * Call this after settings are changed.
      */
     fun refreshLLMService(): LLMService {
-        // Note: This creates a new service but doesn't update the lazy val
-        // For full refresh, the service should be restarted
-        return createLLMService()
+        _llmService = createLLMService()
+        return _llmService!!
     }
 
     /**
@@ -139,7 +148,7 @@ class MaxVibesService(private val project: Project) {
      */
     fun getLLMInfo(): String {
         return when (val service = llmService) {
-            is KoogLLMService -> service.getProviderInfo()
+            is LangChainLLMService -> service.getProviderInfo()
             is MockLLMService -> "Mock (testing mode)"
             is NotConfiguredLLMService -> "Not configured"
             else -> "Unknown"
@@ -150,7 +159,7 @@ class MaxVibesService(private val project: Project) {
      * Checks if real LLM is available
      */
     fun isRealLLMAvailable(): Boolean {
-        return llmService is KoogLLMService
+        return llmService is LangChainLLMService
     }
 
     companion object {

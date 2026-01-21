@@ -10,7 +10,7 @@ dependencies {
     implementation(project(":maxvibes-shared"))
 
     // Use shadow JAR from adapter-llm
-    implementation(project(path = ":maxvibes-adapter-llm", configuration = "shadow"))
+    implementation(project(path = ":maxvibes-adapter-llm"))
 
     testImplementation(kotlin("test"))
 }
