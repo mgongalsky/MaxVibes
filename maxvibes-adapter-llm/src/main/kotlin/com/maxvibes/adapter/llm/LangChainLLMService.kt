@@ -6,6 +6,9 @@ import com.maxvibes.application.port.output.*
 import com.maxvibes.domain.model.code.CodeElement
 import com.maxvibes.domain.model.code.ElementKind
 import com.maxvibes.domain.model.code.ElementPath
+import com.maxvibes.domain.model.context.ContextRequest
+import com.maxvibes.domain.model.context.GatheredContext
+import com.maxvibes.domain.model.context.ProjectContext
 import com.maxvibes.domain.model.modification.InsertPosition
 import com.maxvibes.domain.model.modification.Modification
 import com.maxvibes.shared.result.Result
@@ -58,7 +61,7 @@ class LangChainLLMService(
     }
 
     private fun resolveOpenAIModel(modelId: String): String = when (modelId) {
-        "gpt-5.2", "gpt5", "gpt-5" -> "gpt-4o"  // fallback
+        "gpt-5.2", "gpt5", "gpt-5" -> "gpt-4o"
         "gpt-4o" -> "gpt-4o"
         "gpt-4o-mini" -> "gpt-4o-mini"
         "gpt-4-turbo" -> "gpt-4-turbo"
@@ -76,7 +79,217 @@ class LangChainLLMService(
         else -> modelId
     }
 
-    // ==================== LLMService Implementation ====================
+    // ==================== Phase 1: Planning ====================
+
+    override suspend fun planContext(
+        task: String,
+        projectContext: ProjectContext
+    ): Result<ContextRequest, LLMError> = withContext(Dispatchers.IO) {
+        try {
+            val systemPrompt = buildPlanningSystemPrompt()
+            val userPrompt = buildPlanningUserPrompt(task, projectContext)
+
+            println("[LangChainLLMService] Planning phase started")
+            println("[LangChainLLMService] Task: $task")
+
+            val response = chatModel.generate(
+                SystemMessage.from(systemPrompt),
+                UserMessage.from(userPrompt)
+            )
+
+            val content = response.content().text()
+            println("[LangChainLLMService] Planning response length: ${content.length}")
+
+            val contextRequest = parsePlanningResponse(content)
+            println("[LangChainLLMService] Requested ${contextRequest.requestedFiles.size} files")
+
+            Result.Success(contextRequest)
+
+        } catch (e: Exception) {
+            println("[LangChainLLMService] Planning error: ${e.message}")
+            e.printStackTrace()
+            Result.Failure(LLMError.NetworkError(e.message ?: "Planning failed"))
+        }
+    }
+
+    private fun buildPlanningSystemPrompt(): String = """
+        You are an expert software architect analyzing a codebase to understand what files are needed for a task.
+        
+        Your job is to look at the project structure and determine which files the developer needs to see 
+        to complete the given task.
+        
+        CRITICAL: Respond ONLY with a valid JSON object. No markdown, no explanations, just JSON.
+        
+        Response format:
+        {
+            "requestedFiles": [
+                "path/to/file1.kt",
+                "path/to/file2.kt"
+            ],
+            "reasoning": "Brief explanation of why these files are needed"
+        }
+        
+        Guidelines:
+        1. Request only files that are DIRECTLY relevant to the task
+        2. Include files that might need to be modified
+        3. Include interfaces/contracts that the new code must implement
+        4. Include related classes for context (e.g., similar implementations)
+        5. Don't request more than 10-15 files unless absolutely necessary
+        6. Prefer .kt files for Kotlin projects
+        7. Don't request build files, configs, or test files unless specifically needed
+    """.trimIndent()
+
+    private fun buildPlanningUserPrompt(task: String, projectContext: ProjectContext): String = buildString {
+        appendLine("=== TASK ===")
+        appendLine(task)
+        appendLine()
+
+        appendLine("=== PROJECT INFO ===")
+        appendLine("Name: ${projectContext.name}")
+        appendLine("Root: ${projectContext.rootPath}")
+        appendLine("Tech stack: ${projectContext.techStack.language}, ${projectContext.techStack.buildTool ?: "unknown build"}")
+        if (projectContext.techStack.frameworks.isNotEmpty()) {
+            appendLine("Frameworks: ${projectContext.techStack.frameworks.joinToString()}")
+        }
+        appendLine()
+
+        projectContext.description?.let {
+            appendLine("=== PROJECT DESCRIPTION ===")
+            appendLine(it.take(2000))  // Limit to save tokens
+            appendLine()
+        }
+
+        projectContext.architecture?.let {
+            appendLine("=== ARCHITECTURE ===")
+            appendLine(it.take(3000))  // Limit to save tokens
+            appendLine()
+        }
+
+        appendLine("=== FILE TREE ===")
+        appendLine(projectContext.fileTree.toCompactString(maxDepth = 4))
+        appendLine()
+
+        appendLine("Based on the task and project structure, which files do I need to see?")
+    }
+
+    private fun parsePlanningResponse(response: String): ContextRequest {
+        return try {
+            val jsonContent = extractJson(response)
+            val jsonObject = Json.parseToJsonElement(jsonContent).jsonObject
+
+            val files = jsonObject["requestedFiles"]?.jsonArray
+                ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+                ?: emptyList()
+
+            val reasoning = jsonObject["reasoning"]?.jsonPrimitive?.contentOrNull
+
+            ContextRequest(
+                requestedFiles = files,
+                reasoning = reasoning
+            )
+        } catch (e: Exception) {
+            println("[LangChainLLMService] Failed to parse planning response: ${e.message}")
+            // Fallback: try to extract file paths from text
+            val filePattern = Regex("""[\w/]+\.kt""")
+            val files = filePattern.findAll(response).map { it.value }.distinct().toList()
+            ContextRequest(requestedFiles = files, reasoning = null)
+        }
+    }
+
+    // ==================== Phase 2: Coding ====================
+
+    override suspend fun generateModifications(
+        task: String,
+        gatheredContext: GatheredContext,
+        projectContext: ProjectContext
+    ): Result<List<Modification>, LLMError> = withContext(Dispatchers.IO) {
+        try {
+            val systemPrompt = buildCodingSystemPrompt()
+            val userPrompt = buildCodingUserPrompt(task, gatheredContext, projectContext)
+
+            println("[LangChainLLMService] Coding phase started")
+            println("[LangChainLLMService] Context: ${gatheredContext.files.size} files, ~${gatheredContext.totalTokensEstimate} tokens")
+
+            val response = chatModel.generate(
+                SystemMessage.from(systemPrompt),
+                UserMessage.from(userPrompt)
+            )
+
+            val content = response.content().text()
+            println("[LangChainLLMService] Coding response length: ${content.length}")
+
+            val modifications = parseModifications(content)
+            println("[LangChainLLMService] Parsed ${modifications.size} modification(s)")
+
+            Result.Success(modifications)
+
+        } catch (e: Exception) {
+            println("[LangChainLLMService] Coding error: ${e.message}")
+            e.printStackTrace()
+            Result.Failure(LLMError.NetworkError(e.message ?: "Code generation failed"))
+        }
+    }
+
+    private fun buildCodingSystemPrompt(): String = """
+        You are an expert Kotlin developer. Your task is to generate code modifications based on user instructions.
+        
+        CRITICAL: Respond ONLY with a valid JSON object. No markdown, no explanations, just JSON.
+        
+        Response format:
+        {
+            "modifications": [
+                {
+                    "type": "CREATE_FILE" | "REPLACE_FILE" | "CREATE_ELEMENT" | "REPLACE_ELEMENT" | "DELETE_ELEMENT",
+                    "path": "src/main/kotlin/com/example/FileName.kt",
+                    "elementKind": "FILE" | "CLASS" | "FUNCTION" | "PROPERTY",
+                    "content": "full code content here",
+                    "position": "LAST_CHILD"
+                }
+            ]
+        }
+        
+        Rules:
+        1. For new files: use "CREATE_FILE" with complete file content including package and imports
+        2. For modifying existing code: use "REPLACE_FILE" or "REPLACE_ELEMENT"  
+        3. Path must be a valid file path (e.g., "src/main/kotlin/com/example/MyClass.kt")
+        4. Content must be complete, compilable Kotlin code
+        5. Always include package declaration and necessary imports
+        6. Write clean, idiomatic Kotlin code following best practices
+        7. Follow the existing code style from the provided context
+        8. Maintain consistency with existing architecture patterns
+    """.trimIndent()
+
+    private fun buildCodingUserPrompt(
+        task: String,
+        gatheredContext: GatheredContext,
+        projectContext: ProjectContext
+    ): String = buildString {
+        appendLine("=== TASK ===")
+        appendLine(task)
+        appendLine()
+
+        appendLine("=== PROJECT INFO ===")
+        appendLine("Name: ${projectContext.name}")
+        appendLine("Language: ${projectContext.techStack.language}")
+        appendLine()
+
+        projectContext.architecture?.let {
+            appendLine("=== ARCHITECTURE NOTES ===")
+            appendLine(it.take(1500))
+            appendLine()
+        }
+
+        appendLine("=== RELEVANT CODE FILES ===")
+        gatheredContext.files.forEach { (path, content) ->
+            appendLine("--- FILE: $path ---")
+            appendLine(content)
+            appendLine()
+        }
+
+        appendLine("Now generate the JSON with modifications to complete the task.")
+    }
+
+    // ==================== Legacy Method ====================
 
     override suspend fun generateModifications(
         instruction: String,
@@ -155,7 +368,7 @@ class LangChainLLMService(
         }
     }
 
-    // ==================== Prompt Building ====================
+    // ==================== Prompt Building (Legacy) ====================
 
     private fun buildModificationSystemPrompt(): String = """
         You are an expert Kotlin developer. Your task is to generate code modifications based on user instructions.
@@ -237,7 +450,6 @@ class LangChainLLMService(
     }
 
     private fun extractJson(response: String): String {
-        // Remove markdown code blocks if present
         var cleaned = response.trim()
         if (cleaned.startsWith("```json")) {
             cleaned = cleaned.removePrefix("```json").removeSuffix("```").trim()
@@ -245,7 +457,6 @@ class LangChainLLMService(
             cleaned = cleaned.removePrefix("```").removeSuffix("```").trim()
         }
 
-        // Find JSON object boundaries
         val start = cleaned.indexOf('{')
         val end = cleaned.lastIndexOf('}')
 
@@ -323,13 +534,11 @@ class LangChainLLMService(
     }
 
     private fun extractFileNameFromCode(code: String): String {
-        // Try to extract class/object name
         val classMatch = Regex("(?:class|object|interface|enum class)\\s+(\\w+)").find(code)
         if (classMatch != null) {
             return "${classMatch.groupValues[1]}.kt"
         }
 
-        // Try to extract from package + main function
         val packageMatch = Regex("package\\s+([\\w.]+)").find(code)
         if (packageMatch != null) {
             val parts = packageMatch.groupValues[1].split(".")

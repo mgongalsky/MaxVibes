@@ -3,6 +3,9 @@ package com.maxvibes.plugin.service
 import com.maxvibes.application.port.output.*
 import com.maxvibes.domain.model.code.CodeElement
 import com.maxvibes.domain.model.code.ElementKind
+import com.maxvibes.domain.model.context.ContextRequest
+import com.maxvibes.domain.model.context.GatheredContext
+import com.maxvibes.domain.model.context.ProjectContext
 import com.maxvibes.domain.model.modification.Modification
 import com.maxvibes.shared.result.Result
 
@@ -10,6 +13,28 @@ import com.maxvibes.shared.result.Result
  * Мок LLM сервис для тестирования без реального API
  */
 class MockLLMService : LLMService {
+
+    override suspend fun planContext(
+        task: String,
+        projectContext: ProjectContext
+    ): Result<ContextRequest, LLMError> {
+        // Mock: просто возвращаем пустой список файлов
+        return Result.Success(
+            ContextRequest(
+                requestedFiles = emptyList(),
+                reasoning = "Mock planning - no files requested"
+            )
+        )
+    }
+
+    override suspend fun generateModifications(
+        task: String,
+        gatheredContext: GatheredContext,
+        projectContext: ProjectContext
+    ): Result<List<Modification>, LLMError> {
+        // Mock: создаём простую функцию
+        return Result.Success(emptyList())
+    }
 
     override suspend fun generateModifications(
         instruction: String,
@@ -132,7 +157,6 @@ class MockLLMService : LLMService {
     }
 
     private fun extractName(instruction: String, vararg keywords: String): String? {
-        // Очень простая логика извлечения имени
         val words = instruction.split(" ")
         for (keyword in keywords) {
             val idx = words.indexOfFirst { it.equals(keyword, ignoreCase = true) }

@@ -1,4 +1,3 @@
-// maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/service/MaxVibesService.kt
 package com.maxvibes.plugin.service
 
 import com.intellij.openapi.components.Service
@@ -9,14 +8,21 @@ import com.maxvibes.adapter.llm.LLMServiceFactory
 import com.maxvibes.adapter.llm.config.LLMProviderConfig
 import com.maxvibes.adapter.llm.config.LLMProviderType
 import com.maxvibes.adapter.psi.PsiCodeRepository
+import com.maxvibes.adapter.psi.context.PsiProjectContextProvider
 import com.maxvibes.application.port.input.AnalyzeCodeUseCase
+import com.maxvibes.application.port.input.ContextAwareModifyUseCase
 import com.maxvibes.application.port.input.ModifyCodeUseCase
-import com.maxvibes.application.port.output.CodeRepository
-import com.maxvibes.application.port.output.LLMService
-import com.maxvibes.application.port.output.NotificationPort
+import com.maxvibes.application.port.output.*
 import com.maxvibes.application.service.AnalyzeCodeService
+import com.maxvibes.application.service.ContextAwareModifyService
 import com.maxvibes.application.service.ModifyCodeService
+import com.maxvibes.domain.model.code.CodeElement
+import com.maxvibes.domain.model.context.ContextRequest
+import com.maxvibes.domain.model.context.GatheredContext
+import com.maxvibes.domain.model.context.ProjectContext
+import com.maxvibes.domain.model.modification.Modification
 import com.maxvibes.plugin.settings.MaxVibesSettings
+import com.maxvibes.shared.result.Result
 
 /**
  * Main service for MaxVibes plugin.
@@ -33,6 +39,10 @@ class MaxVibesService(private val project: Project) {
 
     val codeRepository: CodeRepository by lazy {
         PsiCodeRepository(project)
+    }
+
+    val projectContextProvider: ProjectContextPort by lazy {
+        PsiProjectContextProvider(project)
     }
 
     /**
@@ -65,6 +75,15 @@ class MaxVibesService(private val project: Project) {
 
     val analyzeCodeUseCase: AnalyzeCodeUseCase by lazy {
         AnalyzeCodeService(codeRepository, llmService, notificationPort)
+    }
+
+    val contextAwareModifyUseCase: ContextAwareModifyUseCase by lazy {
+        ContextAwareModifyService(
+            contextProvider = projectContextProvider,
+            llmService = llmService,
+            codeRepository = codeRepository,
+            notificationPort = notificationPort
+        )
     }
 
     // ========== LLM Service Creation ==========
@@ -175,25 +194,36 @@ class MaxVibesService(private val project: Project) {
  */
 private class NotConfiguredLLMService : LLMService {
 
+    private val configError = LLMError.ConfigurationError(
+        "LLM is not configured. Please go to Settings → Tools → MaxVibes to configure an API key."
+    )
+
+    override suspend fun planContext(
+        task: String,
+        projectContext: ProjectContext
+    ): Result<ContextRequest, LLMError> {
+        return Result.Failure(configError)
+    }
+
+    override suspend fun generateModifications(
+        task: String,
+        gatheredContext: GatheredContext,
+        projectContext: ProjectContext
+    ): Result<List<Modification>, LLMError> {
+        return Result.Failure(configError)
+    }
+
     override suspend fun generateModifications(
         instruction: String,
-        context: com.maxvibes.application.port.output.LLMContext
-    ): com.maxvibes.shared.result.Result<List<com.maxvibes.domain.model.modification.Modification>, com.maxvibes.application.port.output.LLMError> {
-        return com.maxvibes.shared.result.Result.Failure(
-            com.maxvibes.application.port.output.LLMError.ConfigurationError(
-                "LLM is not configured. Please go to Settings → Tools → MaxVibes to configure an API key."
-            )
-        )
+        context: LLMContext
+    ): Result<List<Modification>, LLMError> {
+        return Result.Failure(configError)
     }
 
     override suspend fun analyzeCode(
         question: String,
-        codeElements: List<com.maxvibes.domain.model.code.CodeElement>
-    ): com.maxvibes.shared.result.Result<com.maxvibes.application.port.output.AnalysisResponse, com.maxvibes.application.port.output.LLMError> {
-        return com.maxvibes.shared.result.Result.Failure(
-            com.maxvibes.application.port.output.LLMError.ConfigurationError(
-                "LLM is not configured. Please go to Settings → Tools → MaxVibes to configure an API key."
-            )
-        )
+        codeElements: List<CodeElement>
+    ): Result<AnalysisResponse, LLMError> {
+        return Result.Failure(configError)
     }
 }
