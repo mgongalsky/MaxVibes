@@ -1,7 +1,5 @@
 package com.maxvibes.adapter.psi.operation
 
-import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiDirectory
 import com.intellij.psi.PsiElement
@@ -52,14 +50,24 @@ class PsiModifier(
         return addedFile
     }
 
+    /**
+     * Заменяет содержимое файла через PSI (не файловую систему)
+     */
     fun replaceFileContent(file: PsiFile, newContent: String): PsiFile? {
         println("[PsiModifier] Replacing content of ${file.name}")
 
         val newFile = PsiFileFactory.getInstance(project)
             .createFileFromText(file.name, KotlinFileType.INSTANCE, newContent)
 
-        file.deleteChildRange(file.firstChild, file.lastChild)
+        // Удаляем старое содержимое и добавляем новое через PSI
+        val firstChild = file.firstChild
+        val lastChild = file.lastChild
 
+        if (firstChild != null && lastChild != null) {
+            file.deleteChildRange(firstChild, lastChild)
+        }
+
+        // Копируем детей из нового файла
         newFile.children.forEach { child ->
             file.add(child.copy())
         }
@@ -145,10 +153,30 @@ class PsiModifier(
         }
     }
 
+    /**
+     * Заменяет элемент. Для FILE использует replaceFileContent.
+     */
     fun replaceElement(target: PsiElement, content: String, kind: ElementKind): PsiElement? {
         println("[PsiModifier] Replacing element of kind $kind")
 
-        val newElement = elementFactory.createElementFromText(content, kind) ?: return null
+        // Для файлов используем специальную логику
+        if (target is PsiFile || kind == ElementKind.FILE) {
+            val file = when (target) {
+                is PsiFile -> target
+                else -> target.containingFile
+            }
+            if (file != null) {
+                println("[PsiModifier] Target is FILE, using replaceFileContent")
+                return replaceFileContent(file, content)
+            }
+        }
+
+        // Для остальных элементов — стандартная замена через PSI
+        val newElement = elementFactory.createElementFromText(content, kind)
+        if (newElement == null) {
+            println("[PsiModifier] ERROR: Failed to create element from content")
+            return null
+        }
 
         val replaced = target.replace(newElement)
         CodeStyleManager.getInstance(project).reformat(replaced)
