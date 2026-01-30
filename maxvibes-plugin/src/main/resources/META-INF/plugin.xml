@@ -85,6 +85,14 @@
                 <keyboard-shortcut keymap="\$default" first-keystroke="ctrl alt A"/>
             </action>
 
+            <action id="MaxVibes.SmartModify"
+                    class="com.maxvibes.plugin.action.SmartModifyAction"
+                    text="Smart Modify (Context-Aware)..."
+                    description="AI modification with automatic context gathering"
+                    icon="AllIcons.Actions.Lightning">
+                <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt S"/>
+            </action>
+
             <separator/>
 
             <action id="MaxVibes.OpenSettings"
