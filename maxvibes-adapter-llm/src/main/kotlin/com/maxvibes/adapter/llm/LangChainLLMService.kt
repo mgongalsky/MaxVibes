@@ -35,13 +35,20 @@ class LangChainLLMService(
 
     private fun createChatModel(): ChatLanguageModel {
         return when (config.providerType) {
-            LLMProviderType.OPENAI -> OpenAiChatModel.builder()
-                .apiKey(config.apiKey)
-                .modelName(resolveOpenAIModel(config.modelId))
-                .temperature(config.temperature)
-                .maxTokens(config.maxTokens)
-                .timeout(Duration.ofSeconds(120))
-                .build()
+            LLMProviderType.OPENAI -> {
+                val isReasoningModel = config.modelId.contains("gpt-5") ||
+                        config.modelId.contains("o1") ||
+                        config.modelId.contains("o3")
+                val maxTokens = if (isReasoningModel) 16384 else config.maxTokens
+
+                OpenAiChatModel.builder()
+                    .apiKey(config.apiKey)
+                    .modelName(resolveOpenAIModel(config.modelId))
+                    .temperature(config.temperature)
+                    .maxCompletionTokens(maxTokens)
+                    .timeout(Duration.ofSeconds(if (isReasoningModel) 300 else 120))
+                    .build()
+            }
 
             LLMProviderType.ANTHROPIC -> AnthropicChatModel.builder()
                 .apiKey(config.apiKey)
@@ -61,7 +68,7 @@ class LangChainLLMService(
     }
 
     private fun resolveOpenAIModel(modelId: String): String = when (modelId) {
-        "gpt-5.2", "gpt5", "gpt-5" -> "gpt-4o"
+        "gpt-5.2", "gpt5", "gpt-5" -> "gpt-5.2"
         "gpt-4o" -> "gpt-4o"
         "gpt-4o-mini" -> "gpt-4o-mini"
         "gpt-4-turbo" -> "gpt-4-turbo"
@@ -214,6 +221,12 @@ class LangChainLLMService(
                 SystemMessage.from(systemPrompt),
                 UserMessage.from(userPrompt)
             )
+
+            // Debug logging
+            println("[LangChainLLMService] Response object: $response")
+            println("[LangChainLLMService] Response content: ${response.content()}")
+            println("[LangChainLLMService] Finish reason: ${response.finishReason()}")
+            println("[LangChainLLMService] Token usage: ${response.tokenUsage()}")
 
             val content = response.content().text()
             println("[LangChainLLMService] Coding response length: ${content.length}")
