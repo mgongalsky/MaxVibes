@@ -3,8 +3,6 @@ package com.maxvibes.plugin.action
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
-import com.intellij.openapi.actionSystem.CommonDataKeys
-import com.intellij.openapi.application.runReadAction
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
@@ -19,12 +17,11 @@ import com.maxvibes.application.port.input.ContextAwareRequest
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.plugin.service.MaxVibesService
 import kotlinx.coroutines.runBlocking
-import org.jetbrains.kotlin.psi.KtFile
 import java.awt.BorderLayout
 import java.awt.Dimension
+import javax.swing.BoxLayout
 import javax.swing.JComponent
 import javax.swing.JPanel
-import javax.swing.BoxLayout
 
 /**
  * Smart Modify Action - uses context-aware workflow with automatic file gathering
@@ -36,7 +33,6 @@ class SmartModifyAction : AnAction() {
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
 
-        // Show task dialog
         val dialog = SmartModifyDialog(project)
         if (!dialog.showAndGet()) return
 
@@ -66,7 +62,6 @@ class SmartModifyAction : AnAction() {
 
                     val result = service.contextAwareModifyUseCase.execute(request)
 
-                    // Show results
                     com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
                         showResultDialog(project, result, dryRun)
                     }
@@ -90,20 +85,16 @@ class SmartModifyAction : AnAction() {
             }
             appendLine()
 
-            if (result.planningReasoning != null) {
-                appendLine("📋 LLM Reasoning:")
-                appendLine(result.planningReasoning)
-                appendLine()
-            }
+            // Show AI response
+            appendLine("💬 AI Response:")
+            appendLine(result.message)
+            appendLine()
 
-            appendLine("📁 Files requested: ${result.requestedFiles.size}")
+            appendLine("📁 Files analyzed: ${result.requestedFiles.size}")
             result.requestedFiles.take(10).forEach { appendLine("  • $it") }
             if (result.requestedFiles.size > 10) {
                 appendLine("  ... and ${result.requestedFiles.size - 10} more")
             }
-            appendLine()
-
-            appendLine("📄 Files gathered: ${result.gatheredFiles.size}")
             appendLine()
 
             if (!wasDryRun && result.modifications.isNotEmpty()) {
@@ -156,19 +147,16 @@ class SmartModifyDialog(
             border = JBUI.Borders.empty(10)
             preferredSize = Dimension(500, 300)
 
-            // Header
             add(JPanel().apply {
                 layout = BoxLayout(this, BoxLayout.Y_AXIS)
                 add(JBLabel("<html><b>Describe your task</b></html>"))
                 add(JBLabel("<html><small>MaxVibes will analyze your project and gather the needed context automatically.</small></html>"))
             }, BorderLayout.NORTH)
 
-            // Task input
             add(JBScrollPane(taskArea).apply {
                 border = JBUI.Borders.customLine(JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground(), 1)
             }, BorderLayout.CENTER)
 
-            // Options
             add(JPanel().apply {
                 layout = BoxLayout(this, BoxLayout.Y_AXIS)
                 add(dryRunCheckbox)

@@ -1,18 +1,19 @@
 package com.maxvibes.application.port.input
 
+import com.maxvibes.application.port.output.ChatMessageDTO
 import com.maxvibes.domain.model.modification.ModificationResult
 
 /**
- * Use case для модификации кода с автоматическим сбором контекста
+ * Use case для чата с автоматическим сбором контекста и применением модификаций
  */
 interface ContextAwareModifyUseCase {
 
     /**
      * Выполняет задачу с автоматическим сбором контекста:
      * 1. Собирает метаданные проекта
-     * 2. LLM определяет нужные файлы
+     * 2. LLM определяет нужные файлы (planning)
      * 3. Собирает содержимое файлов
-     * 4. LLM генерирует модификации
+     * 4. LLM отвечает текстом + генерирует модификации
      * 5. Применяет изменения
      */
     suspend fun execute(request: ContextAwareRequest): ContextAwareResult
@@ -20,16 +21,17 @@ interface ContextAwareModifyUseCase {
 
 data class ContextAwareRequest(
     val task: String,
-    val additionalFiles: List<String> = emptyList(),  // Файлы, которые точно включить
-    val excludeFiles: List<String> = emptyList(),      // Файлы, которые исключить
-    val dryRun: Boolean = false                         // Только показать план, не применять
+    val history: List<ChatMessageDTO> = emptyList(),
+    val additionalFiles: List<String> = emptyList(),
+    val excludeFiles: List<String> = emptyList(),
+    val dryRun: Boolean = false
 )
 
 data class ContextAwareResult(
     val success: Boolean,
-    val requestedFiles: List<String>,           // Какие файлы запросил LLM
-    val gatheredFiles: List<String>,            // Какие файлы реально собрали
+    val message: String,
+    val requestedFiles: List<String>,
+    val gatheredFiles: List<String>,
     val modifications: List<ModificationResult>,
-    val planningReasoning: String? = null,      // Почему LLM выбрал эти файлы
     val error: String? = null
 )

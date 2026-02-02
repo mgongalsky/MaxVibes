@@ -14,8 +14,11 @@ import com.intellij.ui.content.ContentFactory
 import com.intellij.util.ui.JBUI
 import com.maxvibes.application.port.input.ContextAwareRequest
 import com.maxvibes.application.port.input.ContextAwareResult
+import com.maxvibes.application.port.output.ChatMessageDTO
+import com.maxvibes.application.port.output.ChatRole
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.plugin.chat.ChatHistoryService
+import com.maxvibes.plugin.chat.ChatMessage
 import com.maxvibes.plugin.chat.ChatSession
 import com.maxvibes.plugin.chat.MessageRole
 import com.maxvibes.plugin.service.MaxVibesService
@@ -93,12 +96,10 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
     private fun setupUI() {
         border = JBUI.Borders.empty()
 
-        // Header with session selector
         val headerPanel = JPanel(BorderLayout(5, 0)).apply {
             border = JBUI.Borders.empty(8)
             background = JBColor.background()
 
-            // Left: Title + LLM info
             val titlePanel = JPanel(FlowLayout(FlowLayout.LEFT, 5, 0)).apply {
                 background = JBColor.background()
                 add(JBLabel("<html><b>MaxVibes</b></html>"))
@@ -109,7 +110,6 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
             }
             add(titlePanel, BorderLayout.WEST)
 
-            // Right: Session controls
             val controlsPanel = JPanel(FlowLayout(FlowLayout.RIGHT, 3, 0)).apply {
                 background = JBColor.background()
                 add(sessionComboBox)
@@ -125,13 +125,11 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
             add(controlsPanel, BorderLayout.EAST)
         }
 
-        // Chat area
         val chatScroll = JBScrollPane(chatArea).apply {
             border = JBUI.Borders.empty()
             verticalScrollBarPolicy = ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED
         }
 
-        // Input panel
         val inputPanel = JPanel(BorderLayout(5, 5)).apply {
             border = JBUI.Borders.empty(8)
             background = JBColor.background()
@@ -150,7 +148,6 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
             add(buttonsPanel, BorderLayout.SOUTH)
         }
 
-        // Status bar
         val statusBar = JPanel(BorderLayout()).apply {
             border = JBUI.Borders.empty(3, 10)
             background = JBColor.background()
@@ -160,7 +157,6 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
             }, BorderLayout.EAST)
         }
 
-        // Layout
         add(headerPanel, BorderLayout.NORTH)
         add(chatScroll, BorderLayout.CENTER)
 
@@ -209,7 +205,6 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
             sessionComboBox.addItem(SessionItem(session.id, session.title, session.updatedAt))
         }
 
-        // Select active
         val activeId = chatHistory.getActiveSession().id
         for (i in 0 until sessionComboBox.itemCount) {
             if (sessionComboBox.getItemAt(i).id == activeId) {
@@ -228,12 +223,11 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
         if (session.messages.isEmpty()) {
             showWelcome()
         } else {
-            // Restore messages
             session.messages.forEach { msg ->
                 when (msg.role) {
                     MessageRole.USER -> appendToChat("\n👤 You:\n${msg.content}\n")
                     MessageRole.ASSISTANT -> appendToChat("\n🤖 MaxVibes:\n${msg.content}\n")
-                    MessageRole.SYSTEM -> appendToChat("\n${msg.content}\n")
+                    MessageRole.SYSTEM -> appendToChat("\n⚙️ ${msg.content}\n")
                 }
             }
         }
@@ -244,12 +238,14 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
             ┌─────────────────────────────────────────────────────────┐
             │  Welcome to MaxVibes! 🚀                                │
             ├─────────────────────────────────────────────────────────┤
-            │  Describe what you want to do:                          │
+            │  I'm your AI coding assistant. Just chat with me:       │
+            │                                                         │
             │  • "Add a Logger class with debug and error methods"    │
             │  • "Create unit tests for UserService"                  │
-            │  • "Refactor to use dependency injection"               │
+            │  • "What does this class do?" (select code first)       │
+            │  • "Refactor this to use coroutines"                    │
             │                                                         │
-            │  💡 Use "Dry run" to preview changes first              │
+            │  I'll explain what I'm doing and show you the changes.  │
             └─────────────────────────────────────────────────────────┘
             
         """.trimIndent()
@@ -257,19 +253,18 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
     }
 
     private fun sendMessage() {
-        val task = inputArea.text.trim()
-        if (task.isBlank()) return
+        val userMessage = inputArea.text.trim()
+        if (userMessage.isBlank()) return
 
         val isDryRun = dryRunCheckbox.isSelected
         val session = chatHistory.getActiveSession()
 
-        // Save user message
-        session.addMessage(MessageRole.USER, task)
-        appendToChat("\n👤 You:\n$task\n")
+        session.addMessage(MessageRole.USER, userMessage)
+        appendToChat("\n👤 You:\n$userMessage\n")
         inputArea.text = ""
 
         setInputEnabled(false)
-        statusLabel.text = "Processing..."
+        statusLabel.text = "Thinking..."
 
         ProgressManager.getInstance().run(object : Task.Backgroundable(
             project,
@@ -279,33 +274,28 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
             override fun run(indicator: ProgressIndicator) {
                 service.notificationService.setProgressIndicator(indicator)
 
-                indicator.text = "Planning..."
-                indicator.fraction = 0.1
-
                 runBlocking {
+                    val historyDTOs = session.messages
+                        .dropLast(1)
+                        .map { it.toChatMessageDTO() }
+
                     val request = ContextAwareRequest(
-                        task = task,
+                        task = userMessage,
+                        history = historyDTOs,
                         dryRun = isDryRun
                     )
 
                     val result = service.contextAwareModifyUseCase.execute(request)
 
                     ApplicationManager.getApplication().invokeLater {
-                        val responseText = formatResult(result, isDryRun)
-                        session.addMessage(MessageRole.ASSISTANT, responseText)
-                        appendToChat("\n🤖 MaxVibes:\n$responseText\n")
-                        appendToChat("─".repeat(50) + "\n")
-
-                        setInputEnabled(true)
-                        statusLabel.text = "Ready"
-                        refreshSessionList() // Update title if changed
+                        handleResult(result, session, isDryRun)
                     }
                 }
             }
 
             override fun onCancel() {
                 ApplicationManager.getApplication().invokeLater {
-                    session.addMessage(MessageRole.SYSTEM, "⚠️ Operation cancelled")
+                    session.addMessage(MessageRole.SYSTEM, "Operation cancelled")
                     appendToChat("\n⚠️ Operation cancelled\n")
                     setInputEnabled(true)
                     statusLabel.text = "Cancelled"
@@ -314,42 +304,41 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
         })
     }
 
-    private fun formatResult(result: ContextAwareResult, wasDryRun: Boolean): String {
-        return buildString {
-            if (result.success) {
-                appendLine(if (wasDryRun) "✅ Plan created successfully!" else "✅ Modifications applied!")
-            } else {
-                appendLine("❌ Error: ${result.error}")
-            }
+    private fun handleResult(result: ContextAwareResult, session: ChatSession, wasDryRun: Boolean) {
+        val responseText = buildString {
+            append(result.message)
 
-            result.planningReasoning?.let {
-                appendLine("\n📋 Analysis:\n$it")
-            }
+            if (result.modifications.isNotEmpty()) {
+                appendLine()
+                appendLine()
+                appendLine("───────────────────────")
+                val successMods = result.modifications.filterIsInstance<ModificationResult.Success>()
+                val failedMods = result.modifications.filterIsInstance<ModificationResult.Failure>()
 
-            if (result.requestedFiles.isNotEmpty()) {
-                appendLine("\n📁 Files: ${result.requestedFiles.size}")
-                result.requestedFiles.take(5).forEach { appendLine("   • $it") }
-                if (result.requestedFiles.size > 5) {
-                    appendLine("   ... +${result.requestedFiles.size - 5} more")
+                if (successMods.isNotEmpty()) {
+                    appendLine("✅ Applied ${successMods.size} change(s):")
+                    successMods.forEach { mod ->
+                        val fileName = mod.affectedPath.value.substringAfterLast('/')
+                        appendLine("   • $fileName")
+                    }
                 }
-            }
 
-            if (!wasDryRun && result.modifications.isNotEmpty()) {
-                val ok = result.modifications.count { it is ModificationResult.Success }
-                val fail = result.modifications.size - ok
-                appendLine("\n🔧 Modifications: $ok applied" + if (fail > 0) ", $fail failed" else "")
-                result.modifications.forEach { mod ->
-                    when (mod) {
-                        is ModificationResult.Success -> {
-                            appendLine("   ✅ ${mod.affectedPath.value.substringAfterLast('/')}")
-                        }
-                        is ModificationResult.Failure -> {
-                            appendLine("   ❌ ${mod.error.message}")
-                        }
+                if (failedMods.isNotEmpty()) {
+                    appendLine("❌ Failed ${failedMods.size} change(s):")
+                    failedMods.forEach { mod ->
+                        appendLine("   • ${mod.error.message}")
                     }
                 }
             }
         }
+
+        session.addMessage(MessageRole.ASSISTANT, responseText)
+        appendToChat("\n🤖 MaxVibes:\n$responseText\n")
+        appendToChat("─".repeat(50) + "\n")
+
+        setInputEnabled(true)
+        statusLabel.text = if (result.success) "Ready" else "Completed with errors"
+        refreshSessionList()
     }
 
     private fun appendToChat(text: String) {
@@ -368,8 +357,19 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
 }
 
 /**
- * Item for session combo box
+ * Extension to convert plugin ChatMessage to application DTO
  */
+private fun ChatMessage.toChatMessageDTO(): ChatMessageDTO {
+    return ChatMessageDTO(
+        role = when (this.role) {
+            MessageRole.USER -> ChatRole.USER
+            MessageRole.ASSISTANT -> ChatRole.ASSISTANT
+            MessageRole.SYSTEM -> ChatRole.SYSTEM
+        },
+        content = this.content
+    )
+}
+
 data class SessionItem(
     val id: String,
     val title: String,
@@ -378,9 +378,6 @@ data class SessionItem(
     override fun toString(): String = title
 }
 
-/**
- * Custom renderer for session list
- */
 class SessionListRenderer : DefaultListCellRenderer() {
     private val dateFormat = SimpleDateFormat("MMM d, HH:mm", Locale.getDefault())
 

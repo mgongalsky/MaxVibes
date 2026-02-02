@@ -12,6 +12,8 @@ import com.maxvibes.domain.model.context.ProjectContext
 import com.maxvibes.domain.model.modification.InsertPosition
 import com.maxvibes.domain.model.modification.Modification
 import com.maxvibes.shared.result.Result
+import dev.langchain4j.data.message.AiMessage
+import dev.langchain4j.data.message.ChatMessage
 import dev.langchain4j.data.message.SystemMessage
 import dev.langchain4j.data.message.UserMessage
 import dev.langchain4j.model.chat.ChatLanguageModel
@@ -84,6 +86,177 @@ class LangChainLLMService(
         "claude-3-sonnet" -> "claude-3-sonnet-20240229"
         "claude-3-haiku" -> "claude-3-haiku-20240307"
         else -> modelId
+    }
+
+    // ==================== Chat with History ====================
+
+    override suspend fun chat(
+        message: String,
+        history: List<ChatMessageDTO>,
+        context: ChatContext
+    ): Result<ChatResponse, LLMError> = withContext(Dispatchers.IO) {
+        try {
+            val messages = buildChatMessages(message, history, context)
+
+            println("[LangChainLLMService] Chat request")
+            println("[LangChainLLMService] History: ${history.size} messages")
+            println("[LangChainLLMService] Context files: ${context.gatheredFiles.size}")
+
+            val response = chatModel.generate(messages)
+
+            val content = response.content().text()
+            println("[LangChainLLMService] Response length: ${content.length}")
+
+            val chatResponse = parseChatResponse(content)
+            println("[LangChainLLMService] Parsed: ${chatResponse.modifications.size} modifications")
+
+            Result.Success(chatResponse)
+
+        } catch (e: Exception) {
+            println("[LangChainLLMService] Chat error: ${e.message}")
+            e.printStackTrace()
+            Result.Failure(LLMError.NetworkError(e.message ?: "Chat failed"))
+        }
+    }
+
+    private fun buildChatMessages(
+        message: String,
+        history: List<ChatMessageDTO>,
+        context: ChatContext
+    ): List<ChatMessage> {
+        val messages = mutableListOf<ChatMessage>()
+
+        // System prompt
+        messages.add(SystemMessage.from(buildChatSystemPrompt(context)))
+
+        // History (skip system messages and empty content)
+        history
+            .filter { it.role != ChatRole.SYSTEM && it.content.isNotBlank() }
+            .forEach { msg ->
+                when (msg.role) {
+                    ChatRole.USER -> messages.add(UserMessage.from(msg.content))
+                    ChatRole.ASSISTANT -> messages.add(AiMessage.from(msg.content))
+                    else -> {}
+                }
+            }
+
+        // Current message with context
+        val userPrompt = buildString {
+            append(message)
+
+            if (context.gatheredFiles.isNotEmpty()) {
+                appendLine()
+                appendLine()
+                appendLine("=== CURRENT CODE CONTEXT (${context.gatheredFiles.size} files) ===")
+                context.gatheredFiles.forEach { (path, content) ->
+                    appendLine("--- $path ---")
+                    appendLine(content.take(5000))
+                    appendLine()
+                }
+            }
+        }.trim()
+
+        // Safety check - must have user message
+        if (userPrompt.isNotBlank()) {
+            messages.add(UserMessage.from(userPrompt))
+        } else {
+            messages.add(UserMessage.from(message.ifBlank { "Help me with my code" }))
+        }
+
+        return messages
+    }
+
+    private fun buildChatSystemPrompt(context: ChatContext): String = """
+        You are MaxVibes, an AI coding assistant integrated into IntelliJ IDEA. You help developers write and modify Kotlin code.
+        
+        PROJECT: ${context.projectContext.name}
+        LANGUAGE: ${context.projectContext.techStack.language}
+        
+        HOW TO RESPOND:
+        1. First, explain what you're going to do in plain language
+        2. Describe what changes you made (files created, functions added, etc.)
+        3. If you need to create or modify code, include a JSON block at the END of your response
+        
+        RESPONSE FORMAT:
+        - Write naturally, like a helpful colleague
+        - Be concise but informative
+        - After your explanation, if there are code changes, add:
+```json
+        {
+            "modifications": [
+                {
+                    "type": "CREATE_FILE" | "REPLACE_FILE",
+                    "path": "src/main/kotlin/com/example/File.kt",
+                    "content": "full file content"
+                }
+            ]
+        }
+```
+        
+        RULES FOR CODE:
+        - Always include package declaration and imports
+        - Write clean, idiomatic Kotlin
+        - Follow existing project patterns
+        - For new files: use CREATE_FILE
+        - For changing existing files: use REPLACE_FILE with complete new content
+        
+        If the user just asks a question or wants to chat, respond normally without JSON.
+        If the user asks to modify code, explain what you'll do, then include the JSON.
+    """.trimIndent()
+
+    private fun parseChatResponse(response: String): ChatResponse {
+        // Try to find JSON block in response
+        val jsonPattern = Regex("```json\\s*\\n([\\s\\S]*?)\\n```")
+        val jsonMatch = jsonPattern.find(response)
+
+        val message: String
+        val modifications: List<Modification>
+
+        if (jsonMatch != null) {
+            // Extract text before JSON as the message
+            message = response.substring(0, jsonMatch.range.first).trim()
+
+            // Parse modifications from JSON
+            modifications = try {
+                val jsonContent = jsonMatch.groupValues[1]
+                val jsonObject = Json.parseToJsonElement(jsonContent).jsonObject
+                val modificationsArray = jsonObject["modifications"]?.jsonArray ?: emptyList()
+                modificationsArray.mapNotNull { parseModificationElement(it.jsonObject) }
+            } catch (e: Exception) {
+                println("[LangChainLLMService] Failed to parse JSON in chat: ${e.message}")
+                emptyList()
+            }
+        } else {
+            // No JSON block - just a text response
+            message = response.trim()
+            modifications = emptyList()
+        }
+
+        // Check if LLM is asking for more files
+        val requestedFiles = extractFileRequests(message)
+
+        return ChatResponse(
+            message = message,
+            modifications = modifications,
+            requestedFiles = requestedFiles
+        )
+    }
+
+    private fun extractFileRequests(text: String): List<String> {
+        // Pattern to detect if LLM is asking for specific files
+        val patterns = listOf(
+            Regex("(?:need|want|see|show|provide).*?[\"'`]([\\w/]+\\.kt)[\"'`]", RegexOption.IGNORE_CASE),
+            Regex("(?:can you|could you|please).*?(?:share|show|provide).*?([\\w/]+\\.kt)", RegexOption.IGNORE_CASE)
+        )
+
+        val files = mutableListOf<String>()
+        patterns.forEach { pattern ->
+            pattern.findAll(text).forEach { match ->
+                files.add(match.groupValues[1])
+            }
+        }
+
+        return files.distinct()
     }
 
     // ==================== Phase 1: Planning ====================
@@ -162,13 +335,13 @@ class LangChainLLMService(
 
         projectContext.description?.let {
             appendLine("=== PROJECT DESCRIPTION ===")
-            appendLine(it.take(2000))  // Limit to save tokens
+            appendLine(it.take(2000))
             appendLine()
         }
 
         projectContext.architecture?.let {
             appendLine("=== ARCHITECTURE ===")
-            appendLine(it.take(3000))  // Limit to save tokens
+            appendLine(it.take(3000))
             appendLine()
         }
 
@@ -196,14 +369,13 @@ class LangChainLLMService(
             )
         } catch (e: Exception) {
             println("[LangChainLLMService] Failed to parse planning response: ${e.message}")
-            // Fallback: try to extract file paths from text
             val filePattern = Regex("""[\w/]+\.kt""")
             val files = filePattern.findAll(response).map { it.value }.distinct().toList()
             ContextRequest(requestedFiles = files, reasoning = null)
         }
     }
 
-    // ==================== Phase 2: Coding ====================
+    // ==================== Legacy Methods ====================
 
     override suspend fun generateModifications(
         task: String,
@@ -221,12 +393,6 @@ class LangChainLLMService(
                 SystemMessage.from(systemPrompt),
                 UserMessage.from(userPrompt)
             )
-
-            // Debug logging
-            println("[LangChainLLMService] Response object: $response")
-            println("[LangChainLLMService] Response content: ${response.content()}")
-            println("[LangChainLLMService] Finish reason: ${response.finishReason()}")
-            println("[LangChainLLMService] Token usage: ${response.tokenUsage()}")
 
             val content = response.content().text()
             println("[LangChainLLMService] Coding response length: ${content.length}")
@@ -301,8 +467,6 @@ class LangChainLLMService(
 
         appendLine("Now generate the JSON with modifications to complete the task.")
     }
-
-    // ==================== Legacy Method ====================
 
     override suspend fun generateModifications(
         instruction: String,

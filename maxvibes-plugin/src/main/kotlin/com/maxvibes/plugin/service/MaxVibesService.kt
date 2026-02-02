@@ -27,8 +27,6 @@ import com.maxvibes.shared.result.Result
 /**
  * Main service for MaxVibes plugin.
  * Manages dependencies and provides access to use cases.
- *
- * Automatically switches between real LLM and mock based on configuration.
  */
 @Service(Service.Level.PROJECT)
 class MaxVibesService(private val project: Project) {
@@ -45,10 +43,6 @@ class MaxVibesService(private val project: Project) {
         PsiProjectContextProvider(project)
     }
 
-    /**
-     * LLM Service - automatically selects real or mock based on settings.
-     * Use refreshLLMService() after changing settings to recreate.
-     */
     @Volatile
     private var _llmService: LLMService? = null
 
@@ -88,10 +82,6 @@ class MaxVibesService(private val project: Project) {
 
     // ========== LLM Service Creation ==========
 
-    /**
-     * Creates LLM service based on current settings.
-     * Falls back to mock if not configured and fallback is enabled.
-     */
     private fun createLLMService(): LLMService {
         val settings = MaxVibesSettings.getInstance()
 
@@ -123,7 +113,6 @@ class MaxVibesService(private val project: Project) {
     private fun handleNotConfigured(settings: MaxVibesSettings): LLMService {
         LOG.info("LLM not configured, checking environment variables...")
 
-        // Try to create from environment variables
         return try {
             val envService = LLMServiceFactory.createFromEnvironment()
             LOG.info("Using LLM from environment variables: ${envService.getProviderInfo()}")
@@ -131,12 +120,10 @@ class MaxVibesService(private val project: Project) {
         } catch (e: Exception) {
             LOG.info("No environment variables found: ${e.message}")
 
-            // Fall back to mock if enabled
             if (settings.enableMockFallback) {
                 LOG.info("Using MockLLMService (mock fallback enabled)")
                 MockLLMService()
             } else {
-                // Return a service that always returns errors
                 LOG.warn("No LLM configured and mock fallback disabled")
                 NotConfiguredLLMService()
             }
@@ -153,18 +140,11 @@ class MaxVibesService(private val project: Project) {
 
     // ========== Service Management ==========
 
-    /**
-     * Recreates the LLM service with current settings.
-     * Call this after settings are changed.
-     */
     fun refreshLLMService(): LLMService {
         _llmService = createLLMService()
         return _llmService!!
     }
 
-    /**
-     * Returns info about current LLM configuration
-     */
     fun getLLMInfo(): String {
         return when (val service = llmService) {
             is LangChainLLMService -> service.getProviderInfo()
@@ -174,9 +154,6 @@ class MaxVibesService(private val project: Project) {
         }
     }
 
-    /**
-     * Checks if real LLM is available
-     */
     fun isRealLLMAvailable(): Boolean {
         return llmService is LangChainLLMService
     }
@@ -190,13 +167,20 @@ class MaxVibesService(private val project: Project) {
 
 /**
  * LLM Service that always returns configuration error.
- * Used when no provider is configured and mock fallback is disabled.
  */
 private class NotConfiguredLLMService : LLMService {
 
     private val configError = LLMError.ConfigurationError(
         "LLM is not configured. Please go to Settings → Tools → MaxVibes to configure an API key."
     )
+
+    override suspend fun chat(
+        message: String,
+        history: List<ChatMessageDTO>,
+        context: ChatContext
+    ): Result<ChatResponse, LLMError> {
+        return Result.Failure(configError)
+    }
 
     override suspend fun planContext(
         task: String,
