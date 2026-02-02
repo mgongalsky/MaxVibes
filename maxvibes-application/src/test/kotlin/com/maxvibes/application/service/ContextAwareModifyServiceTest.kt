@@ -81,8 +81,13 @@ class ContextAwareModifyServiceTest {
             content = "class Logger {}"
         )
 
-        coEvery { llmService.generateModifications(any<String>(), any<GatheredContext>(), any()) } returns
-                Result.Success(listOf(modification))
+        coEvery { llmService.chat(any(), any(), any()) } returns Result.Success(
+            ChatResponse(
+                message = "I created a Logger class for you.",
+                modifications = listOf(modification),
+                requestedFiles = emptyList()
+            )
+        )
 
         coEvery { codeRepository.applyModifications(any()) } returns listOf(
             ModificationResult.Success(modification, ElementPath("src/Logger.kt"), "class Logger {}")
@@ -96,6 +101,7 @@ class ContextAwareModifyServiceTest {
         assertEquals(1, result.requestedFiles.size)
         assertEquals(1, result.gatheredFiles.size)
         assertEquals(1, result.modifications.size)
+        assertEquals("I created a Logger class for you.", result.message)
         assertNull(result.error)
 
         coVerify { contextProvider.getProjectContext() }
@@ -155,8 +161,9 @@ class ContextAwareModifyServiceTest {
             GatheredContext(files = mapOf("src/Main.kt" to "code"), totalTokensEstimate = 10)
         )
 
-        coEvery { llmService.generateModifications(any<String>(), any<GatheredContext>(), any()) } returns
-                Result.Success(emptyList())
+        coEvery { llmService.chat(any(), any(), any()) } returns Result.Success(
+            ChatResponse(message = "Done", modifications = emptyList())
+        )
 
         coEvery { codeRepository.applyModifications(any()) } returns emptyList()
 
@@ -193,8 +200,9 @@ class ContextAwareModifyServiceTest {
             GatheredContext(files = mapOf("src/Utils.kt" to "code"), totalTokensEstimate = 10)
         )
 
-        coEvery { llmService.generateModifications(any<String>(), any<GatheredContext>(), any()) } returns
-                Result.Success(emptyList())
+        coEvery { llmService.chat(any(), any(), any()) } returns Result.Success(
+            ChatResponse(message = "Done", modifications = emptyList())
+        )
 
         coEvery { codeRepository.applyModifications(any()) } returns emptyList()
 
@@ -207,7 +215,7 @@ class ContextAwareModifyServiceTest {
     }
 
     @Test
-    fun `execute with dryRun should not generate or apply modifications`() = runBlocking {
+    fun `execute with dryRun should not call chat or apply modifications`() = runBlocking {
         // Given
         val request = ContextAwareRequest(task = "Add logging", dryRun = true)
 
@@ -226,10 +234,10 @@ class ContextAwareModifyServiceTest {
 
         // Then
         assertTrue(result.success)
-        assertEquals("Test reasoning", result.planningReasoning)
+        assertTrue(result.message.contains("Dry run"))
         assertTrue(result.modifications.isEmpty())
 
-        coVerify(exactly = 0) { llmService.generateModifications(any<String>(), any<GatheredContext>(), any()) }
+        coVerify(exactly = 0) { llmService.chat(any(), any(), any()) }
         coVerify(exactly = 0) { codeRepository.applyModifications(any()) }
     }
 
@@ -249,8 +257,12 @@ class ContextAwareModifyServiceTest {
         val mod1 = Modification.CreateFile(ElementPath("src/A.kt"), "class A")
         val mod2 = Modification.CreateFile(ElementPath("src/B.kt"), "class B")
 
-        coEvery { llmService.generateModifications(any<String>(), any<GatheredContext>(), any()) } returns
-                Result.Success(listOf(mod1, mod2))
+        coEvery { llmService.chat(any(), any(), any()) } returns Result.Success(
+            ChatResponse(
+                message = "Created two files",
+                modifications = listOf(mod1, mod2)
+            )
+        )
 
         coEvery { codeRepository.applyModifications(any()) } returns listOf(
             ModificationResult.Success(mod1, ElementPath("src/A.kt"), "class A"),
