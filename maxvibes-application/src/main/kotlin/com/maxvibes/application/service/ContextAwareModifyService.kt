@@ -3,11 +3,7 @@ package com.maxvibes.application.service
 import com.maxvibes.application.port.input.ContextAwareModifyUseCase
 import com.maxvibes.application.port.input.ContextAwareRequest
 import com.maxvibes.application.port.input.ContextAwareResult
-import com.maxvibes.application.port.output.ChatContext
-import com.maxvibes.application.port.output.CodeRepository
-import com.maxvibes.application.port.output.LLMService
-import com.maxvibes.application.port.output.NotificationPort
-import com.maxvibes.application.port.output.ProjectContextPort
+import com.maxvibes.application.port.output.*
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.shared.result.Result
 
@@ -18,11 +14,15 @@ class ContextAwareModifyService(
     private val contextProvider: ProjectContextPort,
     private val llmService: LLMService,
     private val codeRepository: CodeRepository,
-    private val notificationPort: NotificationPort
+    private val notificationPort: NotificationPort,
+    private val promptPort: PromptPort? = null  // Optional для обратной совместимости
 ) : ContextAwareModifyUseCase {
 
     override suspend fun execute(request: ContextAwareRequest): ContextAwareResult {
         notificationPort.showProgress("Starting...", 0.0)
+
+        // Загружаем промпты (или дефолтные если порт не предоставлен)
+        val prompts = promptPort?.getPrompts() ?: PromptTemplates.EMPTY
 
         // 1. Собираем контекст проекта
         notificationPort.showProgress("Gathering project context...", 0.1)
@@ -34,7 +34,7 @@ class ContextAwareModifyService(
 
         // 2. Planning — LLM определяет нужные файлы
         notificationPort.showProgress("Analyzing task...", 0.2)
-        val planResult = llmService.planContext(request.task, projectContext)
+        val planResult = llmService.planContext(request.task, projectContext, prompts)
         if (planResult is Result.Failure) {
             return errorResult("Planning failed: ${planResult.error.message}")
         }
@@ -74,7 +74,8 @@ class ContextAwareModifyService(
         val chatContext = ChatContext(
             projectContext = projectContext,
             gatheredFiles = gatheredContext.files,
-            totalTokensEstimate = gatheredContext.totalTokensEstimate
+            totalTokensEstimate = gatheredContext.totalTokensEstimate,
+            prompts = prompts
         )
 
         val chatResult = llmService.chat(

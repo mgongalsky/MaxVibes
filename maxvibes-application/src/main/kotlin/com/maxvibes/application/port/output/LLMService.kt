@@ -14,7 +14,6 @@ interface LLMService {
 
     /**
      * Основной метод: чат с историей + генерация модификаций
-     * LLM отвечает текстом и опционально JSON с модификациями
      */
     suspend fun chat(
         message: String,
@@ -27,7 +26,8 @@ interface LLMService {
      */
     suspend fun planContext(
         task: String,
-        projectContext: ProjectContext
+        projectContext: ProjectContext,
+        prompts: PromptTemplates = PromptTemplates.EMPTY
     ): Result<ContextRequest, LLMError>
 
     /**
@@ -58,9 +58,6 @@ interface LLMService {
 
 // ==================== Chat DTOs ====================
 
-/**
- * Сообщение для передачи в LLM (DTO без привязки к plugin layer)
- */
 data class ChatMessageDTO(
     val role: ChatRole,
     val content: String
@@ -71,12 +68,13 @@ enum class ChatRole {
 }
 
 /**
- * Контекст для чата — собранные файлы и инфо о проекте
+ * Контекст для чата — собранные файлы, инфо о проекте и промпты
  */
 data class ChatContext(
     val projectContext: ProjectContext,
     val gatheredFiles: Map<String, String> = emptyMap(),
-    val totalTokensEstimate: Int = 0
+    val totalTokensEstimate: Int = 0,
+    val prompts: PromptTemplates = PromptTemplates.EMPTY
 )
 
 /**

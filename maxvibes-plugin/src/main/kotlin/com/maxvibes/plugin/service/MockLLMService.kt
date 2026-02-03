@@ -43,7 +43,8 @@ class MockLLMService : LLMService {
 
     override suspend fun planContext(
         task: String,
-        projectContext: ProjectContext
+        projectContext: ProjectContext,
+        prompts: PromptTemplates
     ): Result<ContextRequest, LLMError> {
         return Result.Success(
             ContextRequest(

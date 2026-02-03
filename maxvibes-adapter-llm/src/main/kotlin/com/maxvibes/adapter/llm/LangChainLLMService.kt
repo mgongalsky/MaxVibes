@@ -126,8 +126,9 @@ class LangChainLLMService(
     ): List<ChatMessage> {
         val messages = mutableListOf<ChatMessage>()
 
-        // System prompt
-        messages.add(SystemMessage.from(buildChatSystemPrompt(context)))
+        // System prompt from context (or fallback)
+        val systemPrompt = buildChatSystemPrompt(context)
+        messages.add(SystemMessage.from(systemPrompt))
 
         // History (skip system messages and empty content)
         history
@@ -166,43 +167,18 @@ class LangChainLLMService(
         return messages
     }
 
-    private fun buildChatSystemPrompt(context: ChatContext): String = """
-        You are MaxVibes, an AI coding assistant integrated into IntelliJ IDEA. You help developers write and modify Kotlin code.
-        
-        PROJECT: ${context.projectContext.name}
-        LANGUAGE: ${context.projectContext.techStack.language}
-        
-        HOW TO RESPOND:
-        1. First, explain what you're going to do in plain language
-        2. Describe what changes you made (files created, functions added, etc.)
-        3. If you need to create or modify code, include a JSON block at the END of your response
-        
-        RESPONSE FORMAT:
-        - Write naturally, like a helpful colleague
-        - Be concise but informative
-        - After your explanation, if there are code changes, add:
-```json
-        {
-            "modifications": [
-                {
-                    "type": "CREATE_FILE" | "REPLACE_FILE",
-                    "path": "src/main/kotlin/com/example/File.kt",
-                    "content": "full file content"
-                }
-            ]
-        }
-```
-        
-        RULES FOR CODE:
-        - Always include package declaration and imports
-        - Write clean, idiomatic Kotlin
-        - Follow existing project patterns
-        - For new files: use CREATE_FILE
-        - For changing existing files: use REPLACE_FILE with complete new content
-        
-        If the user just asks a question or wants to chat, respond normally without JSON.
-        If the user asks to modify code, explain what you'll do, then include the JSON.
-    """.trimIndent()
+    private fun buildChatSystemPrompt(context: ChatContext): String {
+        val template = context.prompts.chatSystem.ifBlank { DEFAULT_CHAT_SYSTEM_PROMPT }
+        return applyPromptVariables(template, context.projectContext)
+    }
+
+    private fun applyPromptVariables(template: String, projectContext: ProjectContext): String {
+        return template
+            .replace("{{projectName}}", projectContext.name)
+            .replace("{{language}}", projectContext.techStack.language)
+            .replace("{{buildTool}}", projectContext.techStack.buildTool ?: "unknown")
+            .replace("{{frameworks}}", projectContext.techStack.frameworks.joinToString(", ").ifEmpty { "none" })
+    }
 
     private fun parseChatResponse(response: String): ChatResponse {
         // Try to find JSON block in response
@@ -243,7 +219,6 @@ class LangChainLLMService(
     }
 
     private fun extractFileRequests(text: String): List<String> {
-        // Pattern to detect if LLM is asking for specific files
         val patterns = listOf(
             Regex("(?:need|want|see|show|provide).*?[\"'`]([\\w/]+\\.kt)[\"'`]", RegexOption.IGNORE_CASE),
             Regex("(?:can you|could you|please).*?(?:share|show|provide).*?([\\w/]+\\.kt)", RegexOption.IGNORE_CASE)
@@ -263,10 +238,11 @@ class LangChainLLMService(
 
     override suspend fun planContext(
         task: String,
-        projectContext: ProjectContext
+        projectContext: ProjectContext,
+        prompts: PromptTemplates
     ): Result<ContextRequest, LLMError> = withContext(Dispatchers.IO) {
         try {
-            val systemPrompt = buildPlanningSystemPrompt()
+            val systemPrompt = buildPlanningSystemPrompt(prompts)
             val userPrompt = buildPlanningUserPrompt(task, projectContext)
 
             println("[LangChainLLMService] Planning phase started")
@@ -292,32 +268,9 @@ class LangChainLLMService(
         }
     }
 
-    private fun buildPlanningSystemPrompt(): String = """
-        You are an expert software architect analyzing a codebase to understand what files are needed for a task.
-        
-        Your job is to look at the project structure and determine which files the developer needs to see 
-        to complete the given task.
-        
-        CRITICAL: Respond ONLY with a valid JSON object. No markdown, no explanations, just JSON.
-        
-        Response format:
-        {
-            "requestedFiles": [
-                "path/to/file1.kt",
-                "path/to/file2.kt"
-            ],
-            "reasoning": "Brief explanation of why these files are needed"
-        }
-        
-        Guidelines:
-        1. Request only files that are DIRECTLY relevant to the task
-        2. Include files that might need to be modified
-        3. Include interfaces/contracts that the new code must implement
-        4. Include related classes for context (e.g., similar implementations)
-        5. Don't request more than 10-15 files unless absolutely necessary
-        6. Prefer .kt files for Kotlin projects
-        7. Don't request build files, configs, or test files unless specifically needed
-    """.trimIndent()
+    private fun buildPlanningSystemPrompt(prompts: PromptTemplates): String {
+        return prompts.planningSystem.ifBlank { DEFAULT_PLANNING_SYSTEM_PROMPT }
+    }
 
     private fun buildPlanningUserPrompt(task: String, projectContext: ProjectContext): String = buildString {
         appendLine("=== TASK ===")
@@ -409,34 +362,7 @@ class LangChainLLMService(
         }
     }
 
-    private fun buildCodingSystemPrompt(): String = """
-        You are an expert Kotlin developer. Your task is to generate code modifications based on user instructions.
-        
-        CRITICAL: Respond ONLY with a valid JSON object. No markdown, no explanations, just JSON.
-        
-        Response format:
-        {
-            "modifications": [
-                {
-                    "type": "CREATE_FILE" | "REPLACE_FILE" | "CREATE_ELEMENT" | "REPLACE_ELEMENT" | "DELETE_ELEMENT",
-                    "path": "src/main/kotlin/com/example/FileName.kt",
-                    "elementKind": "FILE" | "CLASS" | "FUNCTION" | "PROPERTY",
-                    "content": "full code content here",
-                    "position": "LAST_CHILD"
-                }
-            ]
-        }
-        
-        Rules:
-        1. For new files: use "CREATE_FILE" with complete file content including package and imports
-        2. For modifying existing code: use "REPLACE_FILE" or "REPLACE_ELEMENT"  
-        3. Path must be a valid file path (e.g., "src/main/kotlin/com/example/MyClass.kt")
-        4. Content must be complete, compilable Kotlin code
-        5. Always include package declaration and necessary imports
-        6. Write clean, idiomatic Kotlin code following best practices
-        7. Follow the existing code style from the provided context
-        8. Maintain consistency with existing architecture patterns
-    """.trimIndent()
+    private fun buildCodingSystemPrompt(): String = DEFAULT_CODING_SYSTEM_PROMPT
 
     private fun buildCodingUserPrompt(
         task: String,
@@ -547,32 +473,7 @@ class LangChainLLMService(
 
     // ==================== Prompt Building (Legacy) ====================
 
-    private fun buildModificationSystemPrompt(): String = """
-        You are an expert Kotlin developer. Your task is to generate code modifications based on user instructions.
-        
-        CRITICAL: Respond ONLY with a valid JSON object. No markdown, no explanations, just JSON.
-        
-        Response format:
-        {
-            "modifications": [
-                {
-                    "type": "CREATE_FILE" | "REPLACE_FILE" | "CREATE_ELEMENT" | "REPLACE_ELEMENT" | "DELETE_ELEMENT",
-                    "path": "src/main/kotlin/com/example/FileName.kt",
-                    "elementKind": "FILE" | "CLASS" | "FUNCTION" | "PROPERTY",
-                    "content": "full code content here",
-                    "position": "LAST_CHILD"
-                }
-            ]
-        }
-        
-        Rules:
-        1. For new files: use "CREATE_FILE" with complete file content including package and imports
-        2. For modifying existing code: use "REPLACE_FILE" or "REPLACE_ELEMENT"
-        3. Path must be a valid file path (e.g., "src/main/kotlin/com/example/MyClass.kt")
-        4. Content must be complete, compilable Kotlin code
-        5. Always include package declaration and necessary imports
-        6. Write clean, idiomatic Kotlin code following best practices
-    """.trimIndent()
+    private fun buildModificationSystemPrompt(): String = DEFAULT_CODING_SYSTEM_PROMPT
 
     private fun buildModificationUserPrompt(instruction: String, context: LLMContext): String = buildString {
         appendLine("=== USER INSTRUCTION ===")
@@ -746,5 +647,101 @@ class LangChainLLMService(
 
     fun getProviderInfo(): String {
         return "${config.providerType} / ${config.modelId}"
+    }
+
+    // ==================== Default Prompts (Fallback) ====================
+
+    companion object {
+        private val DEFAULT_CHAT_SYSTEM_PROMPT = """
+            You are MaxVibes, an AI coding assistant integrated into IntelliJ IDEA. You help developers write and modify Kotlin code.
+            
+            PROJECT: {{projectName}}
+            LANGUAGE: {{language}}
+            
+            HOW TO RESPOND:
+            1. First, explain what you're going to do in plain language
+            2. Describe what changes you made (files created, functions added, etc.)
+            3. If you need to create or modify code, include a JSON block at the END of your response
+            
+            RESPONSE FORMAT:
+            - Write naturally, like a helpful colleague
+            - Be concise but informative
+            - After your explanation, if there are code changes, add:
+```json
+            {
+                "modifications": [
+                    {
+                        "type": "CREATE_FILE" | "REPLACE_FILE",
+                        "path": "src/main/kotlin/com/example/File.kt",
+                        "content": "full file content"
+                    }
+                ]
+            }
+```
+            
+            RULES FOR CODE:
+            - Always include package declaration and imports
+            - Write clean, idiomatic Kotlin
+            - Follow existing project patterns
+            - For new files: use CREATE_FILE
+            - For changing existing files: use REPLACE_FILE with complete new content
+            
+            If the user just asks a question or wants to chat, respond normally without JSON.
+            If the user asks to modify code, explain what you'll do, then include the JSON.
+        """.trimIndent()
+
+        private val DEFAULT_PLANNING_SYSTEM_PROMPT = """
+            You are an expert software architect analyzing a codebase to understand what files are needed for a task.
+            
+            Your job is to look at the project structure and determine which files the developer needs to see 
+            to complete the given task.
+            
+            CRITICAL: Respond ONLY with a valid JSON object. No markdown, no explanations, just JSON.
+            
+            Response format:
+            {
+                "requestedFiles": [
+                    "path/to/file1.kt",
+                    "path/to/file2.kt"
+                ],
+                "reasoning": "Brief explanation of why these files are needed"
+            }
+            
+            Guidelines:
+            1. Request only files that are DIRECTLY relevant to the task
+            2. Include files that might need to be modified
+            3. Include interfaces/contracts that the new code must implement
+            4. Include related classes for context (e.g., similar implementations)
+            5. Don't request more than 10-15 files unless absolutely necessary
+            6. Prefer .kt files for Kotlin projects
+            7. Don't request build files, configs, or test files unless specifically needed
+        """.trimIndent()
+
+        private val DEFAULT_CODING_SYSTEM_PROMPT = """
+            You are an expert Kotlin developer. Your task is to generate code modifications based on user instructions.
+            
+            CRITICAL: Respond ONLY with a valid JSON object. No markdown, no explanations, just JSON.
+            
+            Response format:
+            {
+                "modifications": [
+                    {
+                        "type": "CREATE_FILE" | "REPLACE_FILE" | "CREATE_ELEMENT" | "REPLACE_ELEMENT" | "DELETE_ELEMENT",
+                        "path": "src/main/kotlin/com/example/FileName.kt",
+                        "elementKind": "FILE" | "CLASS" | "FUNCTION" | "PROPERTY",
+                        "content": "full code content here",
+                        "position": "LAST_CHILD"
+                    }
+                ]
+            }
+            
+            Rules:
+            1. For new files: use "CREATE_FILE" with complete file content including package and imports
+            2. For modifying existing code: use "REPLACE_FILE" or "REPLACE_ELEMENT"
+            3. Path must be a valid file path (e.g., "src/main/kotlin/com/example/MyClass.kt")
+            4. Content must be complete, compilable Kotlin code
+            5. Always include package declaration and necessary imports
+            6. Write clean, idiomatic Kotlin code following best practices
+        """.trimIndent()
     }
 }

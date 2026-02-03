@@ -43,6 +43,13 @@ class MaxVibesService(private val project: Project) {
         PsiProjectContextProvider(project)
     }
 
+    val promptService: PromptService by lazy {
+        PromptService.getInstance(project)
+    }
+
+    val promptPort: PromptPort
+        get() = promptService
+
     @Volatile
     private var _llmService: LLMService? = null
 
@@ -76,7 +83,8 @@ class MaxVibesService(private val project: Project) {
             contextProvider = projectContextProvider,
             llmService = llmService,
             codeRepository = codeRepository,
-            notificationPort = notificationPort
+            notificationPort = notificationPort,
+            promptPort = promptPort
         )
     }
 
@@ -184,7 +192,8 @@ private class NotConfiguredLLMService : LLMService {
 
     override suspend fun planContext(
         task: String,
-        projectContext: ProjectContext
+        projectContext: ProjectContext,
+        prompts: PromptTemplates
     ): Result<ContextRequest, LLMError> {
         return Result.Failure(configError)
     }

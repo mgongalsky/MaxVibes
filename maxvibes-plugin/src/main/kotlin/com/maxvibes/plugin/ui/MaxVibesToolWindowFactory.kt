@@ -22,6 +22,7 @@ import com.maxvibes.plugin.chat.ChatMessage
 import com.maxvibes.plugin.chat.ChatSession
 import com.maxvibes.plugin.chat.MessageRole
 import com.maxvibes.plugin.service.MaxVibesService
+import com.maxvibes.plugin.service.PromptService
 import kotlinx.coroutines.runBlocking
 import java.awt.*
 import java.awt.event.KeyAdapter
@@ -67,6 +68,10 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
         toolTipText = "Clear current chat"
     }
 
+    private val promptsButton = JButton("⚙").apply {
+        toolTipText = "Edit prompts (.maxvibes/prompts/)"
+    }
+
     private val sessionComboBox = ComboBox<SessionItem>().apply {
         renderer = SessionListRenderer()
     }
@@ -85,6 +90,10 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     private val chatHistory: ChatHistoryService by lazy {
         ChatHistoryService.getInstance(project)
+    }
+
+    private val promptService: PromptService by lazy {
+        PromptService.getInstance(project)
     }
 
     init {
@@ -107,6 +116,13 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
                     foreground = JBColor.GRAY
                     font = font.deriveFont(10f)
                 })
+                // Show indicator if custom prompts exist
+                if (promptService.hasCustomPrompts()) {
+                    add(JBLabel("✎").apply {
+                        toolTipText = "Using custom prompts"
+                        foreground = JBColor.BLUE
+                    })
+                }
             }
             add(titlePanel, BorderLayout.WEST)
 
@@ -119,6 +135,10 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
                 })
                 add(clearButton.apply {
                     preferredSize = Dimension(60, 24)
+                    font = font.deriveFont(11f)
+                })
+                add(promptsButton.apply {
+                    preferredSize = Dimension(32, 24)
                     font = font.deriveFont(11f)
                 })
             }
@@ -179,6 +199,11 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
         clearButton.addActionListener {
             chatHistory.clearActiveSession()
             loadCurrentSession()
+        }
+
+        promptsButton.addActionListener {
+            promptService.openOrCreatePrompts()
+            statusLabel.text = "Prompts opened in editor"
         }
 
         sessionComboBox.addActionListener {
@@ -246,6 +271,8 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
             │  • "Refactor this to use coroutines"                    │
             │                                                         │
             │  I'll explain what I'm doing and show you the changes.  │
+            │                                                         │
+            │  💡 Click ⚙ to customize AI prompts                     │
             └─────────────────────────────────────────────────────────┘
             
         """.trimIndent()
@@ -352,6 +379,7 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
         dryRunCheckbox.isEnabled = enabled
         newChatButton.isEnabled = enabled
         clearButton.isEnabled = enabled
+        promptsButton.isEnabled = enabled
         sessionComboBox.isEnabled = enabled
     }
 }
