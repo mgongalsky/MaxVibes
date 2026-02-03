@@ -3,18 +3,38 @@ package com.maxvibes.plugin.chat
 import com.intellij.openapi.components.*
 import com.intellij.openapi.project.Project
 import com.intellij.util.xmlb.XmlSerializerUtil
+import com.intellij.util.xmlb.annotations.Attribute
+import com.intellij.util.xmlb.annotations.Tag
+import com.intellij.util.xmlb.annotations.XCollection
 import java.time.Instant
 import java.util.UUID
 
 /**
  * Сообщение в чате
  */
-data class ChatMessage(
-    val id: String = UUID.randomUUID().toString(),
-    val role: MessageRole = MessageRole.USER,
-    val content: String = "",
-    val timestamp: Long = Instant.now().toEpochMilli()
-)
+@Tag("message")
+class ChatMessage {
+    @Attribute("id")
+    var id: String = UUID.randomUUID().toString()
+
+    @Attribute("role")
+    var role: MessageRole = MessageRole.USER
+
+    @Tag("content")
+    var content: String = ""
+
+    @Attribute("timestamp")
+    var timestamp: Long = Instant.now().toEpochMilli()
+
+    constructor()
+
+    constructor(id: String, role: MessageRole, content: String, timestamp: Long) {
+        this.id = id
+        this.role = role
+        this.content = content
+        this.timestamp = timestamp
+    }
+}
 
 enum class MessageRole {
     USER, ASSISTANT, SYSTEM
@@ -23,15 +43,40 @@ enum class MessageRole {
 /**
  * Сессия чата
  */
-data class ChatSession(
-    var id: String = UUID.randomUUID().toString(),
-    var title: String = "New Chat",
-    var messages: MutableList<ChatMessage> = mutableListOf(),
-    var createdAt: Long = Instant.now().toEpochMilli(),
+@Tag("session")
+class ChatSession {
+    @Attribute("id")
+    var id: String = UUID.randomUUID().toString()
+
+    @Attribute("title")
+    var title: String = "New Chat"
+
+    @XCollection(style = XCollection.Style.v2)
+    var messages: MutableList<ChatMessage> = mutableListOf()
+
+    @Attribute("createdAt")
+    var createdAt: Long = Instant.now().toEpochMilli()
+
+    @Attribute("updatedAt")
     var updatedAt: Long = Instant.now().toEpochMilli()
-) {
+
+    constructor()
+
+    constructor(id: String, title: String, messages: MutableList<ChatMessage>, createdAt: Long, updatedAt: Long) {
+        this.id = id
+        this.title = title
+        this.messages = messages
+        this.createdAt = createdAt
+        this.updatedAt = updatedAt
+    }
+
     fun addMessage(role: MessageRole, content: String): ChatMessage {
-        val message = ChatMessage(role = role, content = content)
+        val message = ChatMessage(
+            UUID.randomUUID().toString(),
+            role,
+            content,
+            Instant.now().toEpochMilli()
+        )
         messages.add(message)
         updatedAt = Instant.now().toEpochMilli()
 
@@ -53,7 +98,9 @@ data class ChatSession(
  * Состояние для сериализации
  */
 class ChatHistoryState {
+    @XCollection(style = XCollection.Style.v2)
     var sessions: MutableList<ChatSession> = mutableListOf()
+
     var activeSessionId: String? = null
 }
 
@@ -75,39 +122,25 @@ class ChatHistoryService : PersistentStateComponent<ChatHistoryState> {
         XmlSerializerUtil.copyBean(state, this.state)
     }
 
-    /**
-     * Получить все сессии (отсортированы по дате обновления)
-     */
     fun getSessions(): List<ChatSession> {
         return state.sessions.sortedByDescending { it.updatedAt }
     }
 
-    /**
-     * Получить активную сессию (или создать новую)
-     */
     fun getActiveSession(): ChatSession {
         val activeId = state.activeSessionId
         val session = state.sessions.find { it.id == activeId }
-
         return session ?: createNewSession()
     }
 
-    /**
-     * Установить активную сессию
-     */
     fun setActiveSession(sessionId: String) {
         state.activeSessionId = sessionId
     }
 
-    /**
-     * Создать новую сессию
-     */
     fun createNewSession(): ChatSession {
         val session = ChatSession()
         state.sessions.add(0, session)
         state.activeSessionId = session.id
 
-        // Лимит на количество сессий (хранить последние 50)
         if (state.sessions.size > 50) {
             state.sessions = state.sessions.take(50).toMutableList()
         }
@@ -115,21 +148,13 @@ class ChatHistoryService : PersistentStateComponent<ChatHistoryState> {
         return session
     }
 
-    /**
-     * Удалить сессию
-     */
     fun deleteSession(sessionId: String) {
         state.sessions.removeIf { it.id == sessionId }
-
-        // Если удалили активную — переключаемся на первую
         if (state.activeSessionId == sessionId) {
             state.activeSessionId = state.sessions.firstOrNull()?.id
         }
     }
 
-    /**
-     * Очистить текущую сессию
-     */
     fun clearActiveSession() {
         getActiveSession().clear()
     }
