@@ -10,10 +10,10 @@ dependencies {
     implementation(project(":maxvibes-shared"))
 
     // LangChain4j - основные модули (без Ktor, используют OkHttp!)
-    implementation("dev.langchain4j:langchain4j:1.0.0-beta1")
-    implementation("dev.langchain4j:langchain4j-open-ai:1.0.0-beta1")
-    implementation("dev.langchain4j:langchain4j-anthropic:1.0.0-beta1")
-    implementation("dev.langchain4j:langchain4j-ollama:1.0.0-beta1")
+    implementation("dev.langchain4j:langchain4j:1.11.0")
+    implementation("dev.langchain4j:langchain4j-open-ai:1.11.0")
+    implementation("dev.langchain4j:langchain4j-anthropic:1.11.0")
+    implementation("dev.langchain4j:langchain4j-ollama:1.11.0")
 
     // Kotlinx
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")

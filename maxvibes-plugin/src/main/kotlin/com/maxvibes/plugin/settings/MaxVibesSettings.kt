@@ -25,10 +25,10 @@ class MaxVibesSettings : PersistentStateComponent<MaxVibesSettings.State> {
 
     data class State(
         var provider: String = "ANTHROPIC",
-        var modelId: String = "claude-sonnet-4-20250514",
+        var modelId: String = "claude-sonnet-4-5-20250929",
         var ollamaBaseUrl: String = "http://localhost:11434",
         var temperature: Double = 0.2,
-        var maxTokens: Int = 4096,
+        var maxTokens: Int = 32768  ,
         var enableMockFallback: Boolean = true
     )
 
@@ -146,9 +146,11 @@ class MaxVibesSettings : PersistentStateComponent<MaxVibesSettings.State> {
                 "o3-mini" to "O3 Mini (Reasoning)"
             ),
             "ANTHROPIC" to listOf(
-                "claude-sonnet-4-20250514" to "Claude Sonnet 4 (Recommended)",
-                "claude-opus-4-1" to "Claude Opus 4.1 (Most Capable)",
-                "claude-haiku-3-5" to "Claude Haiku 3.5 (Fastest)"
+                "claude-sonnet-4-5-20250929" to "Claude Sonnet 4.5 (Recommended)",
+                "claude-opus-4-6" to "Claude Opus 4.6 (Most Intelligent)",
+                "claude-opus-4-5-20251101" to "Claude Opus 4.5",
+                "claude-haiku-4-5-20251001" to "Claude Haiku 4.5 (Fastest)",
+                "claude-sonnet-4-20250514" to "Claude Sonnet 4 (Legacy)"
             ),
             "OLLAMA" to listOf(
                 "llama3.2" to "Llama 3.2 (Default)",

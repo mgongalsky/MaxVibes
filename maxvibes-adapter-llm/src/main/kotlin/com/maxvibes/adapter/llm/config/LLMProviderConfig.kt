@@ -19,7 +19,7 @@ data class LLMProviderConfig(
     val modelId: String,
     val baseUrl: String? = null,
     val temperature: Double = 0.2,
-    val maxTokens: Int = 4096
+    val maxTokens: Int = 32768
 ) {
     companion object {
         /**
