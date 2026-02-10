@@ -138,6 +138,15 @@ class LangChainLLMService(
                 .temperature(config.temperature)
                 .timeout(Duration.ofSeconds(300))
                 .build()
+
+            LLMProviderType.DEEPSEEK -> OpenAiChatModel.builder()
+                .baseUrl(config.baseUrl ?: "https://api.deepseek.com")
+                .apiKey(config.apiKey)
+                .modelName(config.modelId.ifBlank { "deepseek-chat" })
+                .temperature(config.temperature)
+                .maxCompletionTokens(config.maxTokens)
+                .timeout(Duration.ofSeconds(120))
+                .build()
         }
     }
 

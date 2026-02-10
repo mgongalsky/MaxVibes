@@ -14,6 +14,7 @@ import com.maxvibes.application.port.input.ContextAwareModifyUseCase
 import com.maxvibes.application.port.input.ModifyCodeUseCase
 import com.maxvibes.application.port.output.*
 import com.maxvibes.application.service.AnalyzeCodeService
+import com.maxvibes.application.service.ClipboardInteractionService
 import com.maxvibes.application.service.ContextAwareModifyService
 import com.maxvibes.application.service.ModifyCodeService
 import com.maxvibes.domain.model.code.CodeElement
@@ -21,6 +22,7 @@ import com.maxvibes.domain.model.context.ContextRequest
 import com.maxvibes.domain.model.context.GatheredContext
 import com.maxvibes.domain.model.context.ProjectContext
 import com.maxvibes.domain.model.modification.Modification
+import com.maxvibes.plugin.clipboard.ClipboardAdapter
 import com.maxvibes.plugin.settings.MaxVibesSettings
 import com.maxvibes.shared.result.Result
 
@@ -88,6 +90,78 @@ class MaxVibesService(private val project: Project) {
         )
     }
 
+    // ========== Clipboard Service (for CLIPBOARD mode) ==========
+
+    /** Clipboard interaction service. Always available, lightweight. */
+    val clipboardService: ClipboardInteractionService by lazy {
+        ClipboardInteractionService(
+            contextProvider = projectContextProvider,
+            clipboardPort = ClipboardAdapter(),
+            codeRepository = codeRepository,
+            notificationPort = notificationPort,
+            promptPort = promptPort
+        )
+    }
+
+    // ========== Cheap LLM (for CHEAP_API mode) ==========
+
+    @Volatile
+    private var _cheapLLMService: LLMService? = null
+
+    @Volatile
+    private var _cheapContextAwareModifyUseCase: ContextAwareModifyUseCase? = null
+
+    /** Cheap context-aware use case, null until ensureCheapLLMService() is called */
+    val cheapContextAwareModifyUseCase: ContextAwareModifyUseCase?
+        get() = _cheapContextAwareModifyUseCase
+
+    /**
+     * Initializes cheap LLM service. Called when switching to CHEAP_API mode.
+     */
+    fun ensureCheapLLMService() {
+        if (_cheapContextAwareModifyUseCase != null) return
+
+        val settings = MaxVibesSettings.getInstance()
+
+        try {
+            val providerType = try {
+                LLMProviderType.valueOf(settings.cheapProvider)
+            } catch (_: Exception) {
+                LLMProviderType.ANTHROPIC
+            }
+
+            val baseUrl = when (providerType) {
+                LLMProviderType.OLLAMA -> settings.cheapOllamaBaseUrl
+                LLMProviderType.DEEPSEEK -> "https://api.deepseek.com"
+                else -> null
+            }
+
+            val cheapConfig = LLMProviderConfig(
+                providerType = providerType,
+                apiKey = settings.currentCheapApiKey,
+                modelId = settings.cheapModelId,
+                baseUrl = baseUrl,
+                temperature = settings.cheapTemperature,
+                maxTokens = settings.cheapMaxTokens
+            )
+
+            val cheapLlm = LangChainLLMService(cheapConfig)
+            _cheapLLMService = cheapLlm
+
+            _cheapContextAwareModifyUseCase = ContextAwareModifyService(
+                contextProvider = projectContextProvider,
+                llmService = cheapLlm,
+                codeRepository = codeRepository,
+                notificationPort = notificationPort,
+                promptPort = promptPort
+            )
+
+            LOG.info("Cheap LLM service created: ${settings.cheapProvider} / ${settings.cheapModelId}")
+        } catch (e: Exception) {
+            LOG.warn("Failed to create cheap LLM service: ${e.message}", e)
+        }
+    }
+
     // ========== LLM Service Creation ==========
 
     private fun createLLMService(): LLMService {
@@ -150,6 +224,9 @@ class MaxVibesService(private val project: Project) {
 
     fun refreshLLMService(): LLMService {
         _llmService = createLLMService()
+        // Сбрасываем cheap-сервис чтобы пересоздался при следующем использовании
+        _cheapLLMService = null
+        _cheapContextAwareModifyUseCase = null
         return _llmService!!
     }
 

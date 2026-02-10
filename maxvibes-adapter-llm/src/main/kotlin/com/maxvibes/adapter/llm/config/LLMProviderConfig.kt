@@ -1,4 +1,3 @@
-// maxvibes-adapter-llm/src/main/kotlin/com/maxvibes/adapter/llm/config/LLMProviderConfig.kt
 package com.maxvibes.adapter.llm.config
 
 /**
@@ -7,7 +6,9 @@ package com.maxvibes.adapter.llm.config
 enum class LLMProviderType {
     OPENAI,
     ANTHROPIC,
-    OLLAMA
+    OLLAMA,
+    /** DeepSeek — OpenAI-compatible API, очень дешёвый ($0.14/M tokens) */
+    DEEPSEEK
 }
 
 /**
@@ -54,9 +55,22 @@ data class LLMProviderConfig(
             baseUrl: String = "http://localhost:11434"
         ) = LLMProviderConfig(
             providerType = LLMProviderType.OLLAMA,
-            apiKey = "", // Ollama не требует API key
+            apiKey = "",
             modelId = modelId,
             baseUrl = baseUrl
+        )
+
+        /**
+         * Дефолтная конфигурация для DeepSeek (OpenAI-compatible, дешёвый)
+         */
+        fun deepSeek(
+            apiKey: String,
+            modelId: String = "deepseek-chat"
+        ) = LLMProviderConfig(
+            providerType = LLMProviderType.DEEPSEEK,
+            apiKey = apiKey,
+            modelId = modelId,
+            baseUrl = "https://api.deepseek.com"
         )
     }
 }

@@ -1,4 +1,3 @@
-// maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/settings/MaxVibesSettings.kt
 package com.maxvibes.plugin.settings
 
 import com.intellij.credentialStore.CredentialAttributes
@@ -13,7 +12,7 @@ import com.intellij.util.xmlb.XmlSerializerUtil
 
 /**
  * Persistent settings for MaxVibes plugin.
- * Stores LLM provider configuration.
+ * Stores LLM provider configuration, interaction mode, and cheap LLM config.
  *
  * API keys are stored securely using IntelliJ's PasswordSafe.
  */
@@ -24,12 +23,23 @@ import com.intellij.util.xmlb.XmlSerializerUtil
 class MaxVibesSettings : PersistentStateComponent<MaxVibesSettings.State> {
 
     data class State(
+        // ===== Primary LLM (API mode) =====
         var provider: String = "ANTHROPIC",
         var modelId: String = "claude-sonnet-4-5-20250929",
         var ollamaBaseUrl: String = "http://localhost:11434",
         var temperature: Double = 0.2,
-        var maxTokens: Int = 32768  ,
-        var enableMockFallback: Boolean = true
+        var maxTokens: Int = 32768,
+        var enableMockFallback: Boolean = true,
+
+        // ===== Interaction Mode =====
+        var interactionMode: String = "API",  // API, CLIPBOARD, CHEAP_API
+
+        // ===== Cheap LLM (for CHEAP_API mode) =====
+        var cheapProvider: String = "ANTHROPIC",
+        var cheapModelId: String = "claude-haiku-4-5-20251001",
+        var cheapOllamaBaseUrl: String = "http://localhost:11434",
+        var cheapTemperature: Double = 0.1,
+        var cheapMaxTokens: Int = 16384
     )
 
     private var myState = State()
@@ -40,71 +50,107 @@ class MaxVibesSettings : PersistentStateComponent<MaxVibesSettings.State> {
         XmlSerializerUtil.copyBean(state, myState)
     }
 
-    // Provider
+    // ===== Primary LLM =====
+
     var provider: String
         get() = myState.provider
         set(value) { myState.provider = value }
 
-    // Model ID
     var modelId: String
         get() = myState.modelId
         set(value) { myState.modelId = value }
 
-    // Ollama Base URL
     var ollamaBaseUrl: String
         get() = myState.ollamaBaseUrl
         set(value) { myState.ollamaBaseUrl = value }
 
-    // Temperature
     var temperature: Double
         get() = myState.temperature
         set(value) { myState.temperature = value }
 
-    // Max Tokens
     var maxTokens: Int
         get() = myState.maxTokens
         set(value) { myState.maxTokens = value }
 
-    // Enable Mock Fallback when no API key configured
     var enableMockFallback: Boolean
         get() = myState.enableMockFallback
         set(value) { myState.enableMockFallback = value }
 
+    // ===== Interaction Mode =====
+
+    var interactionMode: String
+        get() = myState.interactionMode
+        set(value) { myState.interactionMode = value }
+
+    // ===== Cheap LLM =====
+
+    var cheapProvider: String
+        get() = myState.cheapProvider
+        set(value) { myState.cheapProvider = value }
+
+    var cheapModelId: String
+        get() = myState.cheapModelId
+        set(value) { myState.cheapModelId = value }
+
+    var cheapOllamaBaseUrl: String
+        get() = myState.cheapOllamaBaseUrl
+        set(value) { myState.cheapOllamaBaseUrl = value }
+
+    var cheapTemperature: Double
+        get() = myState.cheapTemperature
+        set(value) { myState.cheapTemperature = value }
+
+    var cheapMaxTokens: Int
+        get() = myState.cheapMaxTokens
+        set(value) { myState.cheapMaxTokens = value }
+
     // ========== Secure API Key Storage ==========
 
-    /**
-     * Get OpenAI API Key from secure storage
-     */
     var openAIApiKey: String
         get() = getSecureKey(OPENAI_KEY_NAME)
         set(value) = setSecureKey(OPENAI_KEY_NAME, value)
 
-    /**
-     * Get Anthropic API Key from secure storage
-     */
     var anthropicApiKey: String
         get() = getSecureKey(ANTHROPIC_KEY_NAME)
         set(value) = setSecureKey(ANTHROPIC_KEY_NAME, value)
 
-    /**
-     * Get the API key for the currently selected provider
-     */
+    /** API key for cheap/external provider (DeepSeek, etc.) */
+    var cheapApiKey: String
+        get() = getSecureKey(CHEAP_API_KEY_NAME)
+        set(value) = setSecureKey(CHEAP_API_KEY_NAME, value)
+
     val currentApiKey: String
         get() = when (provider) {
             "OPENAI" -> openAIApiKey
             "ANTHROPIC" -> anthropicApiKey
-            "OLLAMA" -> "" // Ollama doesn't need API key
+            "OLLAMA" -> ""
             else -> ""
         }
 
-    /**
-     * Check if the current provider is properly configured
-     */
+    /** API key for cheap provider — reuses main keys for same providers */
+    val currentCheapApiKey: String
+        get() = when (cheapProvider) {
+            "OPENAI" -> openAIApiKey
+            "ANTHROPIC" -> anthropicApiKey
+            "DEEPSEEK" -> cheapApiKey
+            "OLLAMA" -> ""
+            else -> cheapApiKey
+        }
+
     val isConfigured: Boolean
         get() = when (provider) {
             "OPENAI" -> openAIApiKey.isNotBlank()
             "ANTHROPIC" -> anthropicApiKey.isNotBlank()
             "OLLAMA" -> ollamaBaseUrl.isNotBlank()
+            else -> false
+        }
+
+    val isCheapConfigured: Boolean
+        get() = when (cheapProvider) {
+            "OPENAI" -> openAIApiKey.isNotBlank()
+            "ANTHROPIC" -> anthropicApiKey.isNotBlank()
+            "DEEPSEEK" -> cheapApiKey.isNotBlank()
+            "OLLAMA" -> cheapOllamaBaseUrl.isNotBlank()
             else -> false
         }
 
@@ -131,6 +177,7 @@ class MaxVibesSettings : PersistentStateComponent<MaxVibesSettings.State> {
     companion object {
         private const val OPENAI_KEY_NAME = "openai_api_key"
         private const val ANTHROPIC_KEY_NAME = "anthropic_api_key"
+        private const val CHEAP_API_KEY_NAME = "cheap_llm_api_key"
 
         fun getInstance(): MaxVibesSettings {
             return ApplicationManager.getApplication().getService(MaxVibesSettings::class.java)
@@ -160,11 +207,45 @@ class MaxVibesSettings : PersistentStateComponent<MaxVibesSettings.State> {
             )
         )
 
-        // Provider display names
+        /** Cheap models — optimized for cost */
+        val CHEAP_MODELS = mapOf(
+            "ANTHROPIC" to listOf(
+                "claude-haiku-4-5-20251001" to "Claude Haiku 4.5 (\$0.80/\$4 per M tokens)",
+                "claude-sonnet-4-5-20250929" to "Claude Sonnet 4.5 (\$3/\$15 per M tokens)"
+            ),
+            "OPENAI" to listOf(
+                "gpt-4o-mini" to "GPT-4o Mini (\$0.15/\$0.60 per M tokens)",
+                "gpt-4o" to "GPT-4o (\$2.50/\$10 per M tokens)"
+            ),
+            "DEEPSEEK" to listOf(
+                "deepseek-chat" to "DeepSeek V3 (\$0.14/\$0.28 per M tokens)",
+                "deepseek-coder" to "DeepSeek Coder (\$0.14/\$0.28 per M tokens)"
+            ),
+            "OLLAMA" to listOf(
+                "qwen2.5-coder:7b" to "Qwen 2.5 Coder 7B (Free, Local)",
+                "codellama:7b" to "CodeLlama 7B (Free, Local)",
+                "deepseek-coder:6.7b" to "DeepSeek Coder 6.7B (Free, Local)"
+            )
+        )
+
         val PROVIDERS = listOf(
             "ANTHROPIC" to "Anthropic Claude",
             "OPENAI" to "OpenAI GPT",
             "OLLAMA" to "Ollama (Local)"
+        )
+
+        val CHEAP_PROVIDERS = listOf(
+            "ANTHROPIC" to "Anthropic (Haiku)",
+            "OPENAI" to "OpenAI (Mini)",
+            "DEEPSEEK" to "DeepSeek (Cheapest)",
+            "OLLAMA" to "Ollama (Free, Local)"
+        )
+
+        /** Interaction mode display names */
+        val INTERACTION_MODES = listOf(
+            "API" to "\uD83D\uDD0C API (Direct, pay-per-token)",
+            "CLIPBOARD" to "\uD83D\uDCCB Clipboard (Copy-paste, subscription)",
+            "CHEAP_API" to "\uD83D\uDCB0 Cheap API (Budget model)"
         )
     }
 }
