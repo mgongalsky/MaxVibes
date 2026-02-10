@@ -132,10 +132,25 @@ class ClipboardInteractionService(
         val copied = clipboardPort.copyRequestToClipboard(request)
         val status = if (copied) "copied to clipboard" else "generated"
 
+        // Формируем информативное сообщение с reasoning и списком файлов
+        val planningInfo = buildString {
+            if (response.reasoning?.isNotBlank() == true) {
+                appendLine("💭 ${response.reasoning}")
+                appendLine()
+            }
+            appendLine("📁 Files to analyze (${requestedFiles.size}):")
+            requestedFiles.forEach { file ->
+                appendLine("   • ${file.substringAfterLast('/')}")
+            }
+            appendLine()
+            appendLine("📋 Chat JSON with ${gatheredContext.files.size} files $status (~${gatheredContext.totalTokensEstimate} tokens)")
+            appendLine()
+            append("Paste this into Claude/ChatGPT, then paste the response back here.")
+        }
+
         return ClipboardStepResult.WaitingForResponse(
             phase = ClipboardPhase.CHAT,
-            userMessage = "📋 Chat JSON with ${gatheredContext.files.size} files $status (~${gatheredContext.totalTokensEstimate} tokens)\n\n" +
-                    "Paste this into Claude/ChatGPT, then paste the response back here.",
+            userMessage = planningInfo,
             jsonRequest = request
         )
     }

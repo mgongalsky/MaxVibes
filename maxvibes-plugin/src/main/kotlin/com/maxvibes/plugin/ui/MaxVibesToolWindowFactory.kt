@@ -439,7 +439,7 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
     private fun handleApiResult(result: ContextAwareResult, session: ChatSession) {
         val responseText = buildResultText(result)
         session.addMessage(MessageRole.ASSISTANT, responseText)
-        appendToChat("\n\uD83E\uDD16 MaxVibes:\n$responseText\n")
+        appendAssistantMessage(responseText)
         appendToChat("\u2500".repeat(50) + "\n")
         setInputEnabled(true)
         statusLabel.text = if (result.success) "Ready" else "Completed with errors"
@@ -450,7 +450,7 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
         when (result) {
             is ClipboardStepResult.WaitingForResponse -> {
                 session.addMessage(MessageRole.ASSISTANT, result.userMessage)
-                appendToChat("\n\uD83D\uDCCB MaxVibes:\n${result.userMessage}\n")
+                appendToChat("\n\uD83D\uDCCB MaxVibes:\n${formatMarkdown(result.userMessage)}\n")
                 appendToChat("\u2500".repeat(50) + "\n")
                 setInputEnabled(true); updateModeIndicator()
                 statusLabel.text = "Waiting for LLM response..."
@@ -473,7 +473,7 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
                     }
                 }
                 session.addMessage(MessageRole.ASSISTANT, text)
-                appendToChat("\n\uD83E\uDD16 MaxVibes:\n$text\n")
+                appendAssistantMessage(text)
                 appendToChat("\u2500".repeat(50) + "\n")
                 setInputEnabled(true); updateModeIndicator()
                 statusLabel.text = if (result.success) "Ready" else "Completed with errors"
@@ -523,7 +523,7 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
             session.messages.forEach { msg ->
                 when (msg.role) {
                     MessageRole.USER -> appendToChat("\n\uD83D\uDC64 You:\n${msg.content}\n")
-                    MessageRole.ASSISTANT -> appendToChat("\n\uD83E\uDD16 MaxVibes:\n${msg.content}\n")
+                    MessageRole.ASSISTANT -> appendAssistantMessage(msg.content)
                     MessageRole.SYSTEM -> appendToChat("\n\u2699\uFE0F ${msg.content}\n")
                 }
             }
@@ -555,6 +555,53 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
     private fun appendToChat(text: String) {
         chatArea.append(text)
         chatArea.caretPosition = chatArea.document.length
+    }
+
+    /** Appends assistant message with markdown cleanup */
+    private fun appendAssistantMessage(text: String) {
+        appendToChat("\n\uD83E\uDD16 MaxVibes:\n${formatMarkdown(text)}\n")
+    }
+
+    /**
+     * Конвертирует markdown в читаемый plain text для JBTextArea.
+     * Обрабатывает: **bold**, *italic*, `code`, заголовки, списки, горизонтальные линии.
+     */
+    private fun formatMarkdown(text: String): String {
+        return text.lines().joinToString("\n") { line ->
+            var l = line
+
+            // Заголовки: ### Title → ═══ TITLE ═══
+            val h3 = Regex("^###\\s+(.+)").find(l)
+            if (h3 != null) return@joinToString "  ─── ${h3.groupValues[1].trim()} ───"
+
+            val h2 = Regex("^##\\s+(.+)").find(l)
+            if (h2 != null) return@joinToString "══ ${h2.groupValues[1].trim().uppercase()} ══"
+
+            val h1 = Regex("^#\\s+(.+)").find(l)
+            if (h1 != null) return@joinToString "═══ ${h1.groupValues[1].trim().uppercase()} ═══"
+
+            // Горизонтальная линия: --- или *** или ___
+            if (l.trim().matches(Regex("^[-*_]{3,}$"))) return@joinToString "─".repeat(40)
+
+            // Списки: - item → • item, * item → • item
+            l = l.replace(Regex("^(\\s*)[-*]\\s+"), "$1• ")
+
+            // Нумерованные списки оставляем как есть
+
+            // Bold+italic: ***text*** → TEXT
+            l = l.replace(Regex("\\*{3}(.+?)\\*{3}")) { it.groupValues[1].uppercase() }
+
+            // Bold: **text** → TEXT  (капслок привлекает внимание в plain text)
+            l = l.replace(Regex("\\*{2}(.+?)\\*{2}")) { it.groupValues[1].uppercase() }
+
+            // Italic: *text* → text (просто убираем звёздочки)
+            l = l.replace(Regex("(?<![*])\\*([^*]+?)\\*(?![*])")) { it.groupValues[1] }
+
+            // Inline code: `code` → [code]
+            l = l.replace(Regex("`([^`]+?)`")) { "[${it.groupValues[1]}]" }
+
+            l
+        }
     }
 
     private fun setInputEnabled(enabled: Boolean) {
