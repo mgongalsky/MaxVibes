@@ -93,6 +93,24 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
         toolTipText = "Show plan without applying changes"
     }
 
+    private val attachTraceButton = JButton("\uD83D\uDCCE Trace").apply {
+        toolTipText = "Paste error/stacktrace/logs from clipboard (Ctrl+Shift+V)"
+        font = font.deriveFont(11f)
+    }
+
+    private val traceIndicator = JBLabel("").apply {
+        foreground = JBColor(Color(0xFF9800), Color(0xFFB74D))
+        font = font.deriveFont(Font.BOLD, 11f)
+        isVisible = false
+    }
+
+    private val clearTraceButton = JButton("\u2715").apply {
+        toolTipText = "Remove attached trace"
+        font = font.deriveFont(9f)
+        preferredSize = Dimension(20, 20)
+        isVisible = false
+    }
+
     private val statusLabel = JBLabel("Ready").apply {
         foreground = JBColor.GRAY
     }
@@ -112,6 +130,9 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     private var currentMode: InteractionMode = InteractionMode.API
 
+    /** Attached error trace / stacktrace / logs */
+    private var attachedTrace: String? = null
+
     init {
         setupUI()
         setupListeners()
@@ -124,45 +145,57 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
     private fun setupUI() {
         border = JBUI.Borders.empty()
 
-        val headerPanel = JPanel(BorderLayout(5, 0)).apply {
-            border = JBUI.Borders.empty(8)
+        // ===== Header: Two rows to avoid overlapping =====
+        val headerPanel = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            border = JBUI.Borders.empty(4, 8)
             background = JBColor.background()
 
-            val titlePanel = JPanel(FlowLayout(FlowLayout.LEFT, 5, 0)).apply {
+            // Row 1: Mode selector + indicator
+            val row1 = JPanel(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
                 background = JBColor.background()
                 add(JBLabel("<html><b>MaxVibes</b></html>"))
-                add(modeComboBox.apply {
-                    preferredSize = Dimension(220, 24)
-                    font = font.deriveFont(11f)
-                })
+                add(modeComboBox.apply { preferredSize = Dimension(200, 24); font = font.deriveFont(11f) })
                 add(modeIndicator)
                 if (promptService.hasCustomPrompts()) {
-                    add(JBLabel("\u270E").apply {
-                        toolTipText = "Using custom prompts"
-                        foreground = JBColor.BLUE
-                    })
+                    add(JBLabel("\u270E").apply { toolTipText = "Using custom prompts"; foreground = JBColor.BLUE })
                 }
             }
-            add(titlePanel, BorderLayout.WEST)
 
-            val controlsPanel = JPanel(FlowLayout(FlowLayout.RIGHT, 3, 0)).apply {
+            // Row 2: Session controls
+            val row2 = JPanel(FlowLayout(FlowLayout.LEFT, 3, 2)).apply {
                 background = JBColor.background()
-                add(sessionComboBox)
-                add(newChatButton.apply { preferredSize = Dimension(60, 24); font = font.deriveFont(11f) })
-                add(clearButton.apply { preferredSize = Dimension(60, 24); font = font.deriveFont(11f) })
-                add(promptsButton.apply { preferredSize = Dimension(32, 24); font = font.deriveFont(11f) })
+                add(sessionComboBox.apply { preferredSize = Dimension(180, 24) })
+                add(newChatButton.apply { preferredSize = Dimension(50, 24); font = font.deriveFont(11f) })
+                add(clearButton.apply { preferredSize = Dimension(50, 24); font = font.deriveFont(11f) })
+                add(promptsButton.apply { preferredSize = Dimension(28, 24); font = font.deriveFont(11f) })
             }
-            add(controlsPanel, BorderLayout.EAST)
+
+            add(row1)
+            add(row2)
         }
 
+        // ===== Chat Area =====
         val chatScroll = JBScrollPane(chatArea).apply {
             border = JBUI.Borders.empty()
             verticalScrollBarPolicy = ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED
         }
 
-        val inputPanel = JPanel(BorderLayout(5, 5)).apply {
-            border = JBUI.Borders.empty(8)
+        // ===== Trace indicator bar (shown when trace is attached) =====
+        val traceBar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
             background = JBColor.background()
+            border = JBUI.Borders.empty(2, 8, 0, 8)
+            add(traceIndicator)
+            add(clearTraceButton)
+            isVisible = false  // controlled by updateTraceIndicator()
+        }
+
+        // ===== Input Area =====
+        val inputPanel = JPanel(BorderLayout(5, 4)).apply {
+            border = JBUI.Borders.empty(4, 8, 8, 8)
+            background = JBColor.background()
+
+            add(traceBar, BorderLayout.NORTH)
 
             val inputWrapper = JPanel(BorderLayout()).apply {
                 border = JBUI.Borders.customLine(JBColor.border(), 1)
@@ -170,19 +203,21 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
             }
             add(inputWrapper, BorderLayout.CENTER)
 
-            val buttonsPanel = JPanel(FlowLayout(FlowLayout.RIGHT, 5, 0)).apply {
+            val buttonsPanel = JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
                 background = JBColor.background()
+                add(attachTraceButton.apply { preferredSize = Dimension(80, 26) })
                 add(dryRunCheckbox)
                 add(sendButton)
             }
             add(buttonsPanel, BorderLayout.SOUTH)
         }
 
+        // ===== Status Bar =====
         val statusBar = JPanel(BorderLayout()).apply {
-            border = JBUI.Borders.empty(3, 10)
+            border = JBUI.Borders.empty(2, 10)
             background = JBColor.background()
             add(statusLabel, BorderLayout.WEST)
-            add(JBLabel("<html><small>Ctrl+Enter to send</small></html>").apply {
+            add(JBLabel("<html><small>Ctrl+Enter send | Ctrl+Shift+V trace</small></html>").apply {
                 foreground = JBColor.GRAY
             }, BorderLayout.EAST)
         }
@@ -201,6 +236,7 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
         newChatButton.addActionListener {
             service.clipboardService.reset()
             chatHistory.createNewSession()
+            clearAttachedTrace()
             refreshSessionList()
             loadCurrentSession()
             updateModeIndicator()
@@ -209,6 +245,7 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
         clearButton.addActionListener {
             service.clipboardService.reset()
             chatHistory.clearActiveSession()
+            clearAttachedTrace()
             loadCurrentSession()
             updateModeIndicator()
         }
@@ -217,6 +254,9 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
             promptService.openOrCreatePrompts()
             statusLabel.text = "Prompts opened in editor"
         }
+
+        attachTraceButton.addActionListener { attachTraceFromClipboard() }
+        clearTraceButton.addActionListener { clearAttachedTrace() }
 
         sessionComboBox.addActionListener {
             val selected = sessionComboBox.selectedItem as? SessionItem ?: return@addActionListener
@@ -236,6 +276,9 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
             override fun keyPressed(e: KeyEvent) {
                 if (e.keyCode == KeyEvent.VK_ENTER && e.isControlDown) {
                     sendMessage()
+                    e.consume()
+                } else if (e.keyCode == KeyEvent.VK_V && e.isControlDown && e.isShiftDown) {
+                    attachTraceFromClipboard()
                     e.consume()
                 }
             }
@@ -303,27 +346,87 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
         }
     }
 
+    // ==================== Trace Attachment ====================
+
+    private fun attachTraceFromClipboard() {
+        try {
+            val clipboard = Toolkit.getDefaultToolkit().systemClipboard
+            val content = clipboard.getData(java.awt.datatransfer.DataFlavor.stringFlavor) as? String
+            if (content.isNullOrBlank()) {
+                statusLabel.text = "Clipboard is empty"
+                return
+            }
+
+            attachedTrace = content
+            updateTraceIndicator()
+
+            // Показываем preview в чате
+            val preview = content.lines().take(5).joinToString("\n")
+            val totalLines = content.lines().size
+            val suffix = if (totalLines > 5) "\n   ... ($totalLines lines total)" else ""
+            appendToChat("\n\uD83D\uDCCE Trace attached (${content.length} chars, $totalLines lines):\n   $preview$suffix\n")
+
+            statusLabel.text = "Trace attached — will be included in next request"
+        } catch (e: Exception) {
+            statusLabel.text = "Failed to read clipboard: ${e.message}"
+        }
+    }
+
+    private fun clearAttachedTrace() {
+        if (attachedTrace != null) {
+            attachedTrace = null
+            updateTraceIndicator()
+            statusLabel.text = "Trace removed"
+        }
+    }
+
+    private fun updateTraceIndicator() {
+        val trace = attachedTrace
+        val hasTrace = !trace.isNullOrBlank()
+
+        traceIndicator.isVisible = hasTrace
+        clearTraceButton.isVisible = hasTrace
+        traceIndicator.parent?.isVisible = hasTrace
+
+        if (hasTrace) {
+            val lines = trace!!.lines().size
+            val chars = trace.length
+            traceIndicator.text = "\uD83D\uDCCE Trace: ${lines}L / ${chars}ch"
+        }
+    }
+
     // ==================== Send Message ====================
 
     private fun sendMessage() {
         val userInput = inputArea.text.trim()
         if (userInput.isBlank()) return
 
+        // Забираем trace, чтобы прокинуть в запрос
+        val trace = attachedTrace
+        clearAttachedTrace()
+
         when (currentMode) {
-            InteractionMode.API -> sendApiMessage(userInput)
-            InteractionMode.CLIPBOARD -> sendClipboardMessage(userInput)
-            InteractionMode.CHEAP_API -> sendCheapApiMessage(userInput)
+            InteractionMode.API -> sendApiMessage(userInput, trace)
+            InteractionMode.CLIPBOARD -> sendClipboardMessage(userInput, trace)
+            InteractionMode.CHEAP_API -> sendCheapApiMessage(userInput, trace)
         }
     }
 
-    // --- API Mode (existing logic, untouched) ---
+    // --- API Mode ---
 
-    private fun sendApiMessage(userMessage: String) {
+    private fun sendApiMessage(userMessage: String, trace: String? = null) {
         val isDryRun = dryRunCheckbox.isSelected
         val session = chatHistory.getActiveSession()
 
-        session.addMessage(MessageRole.USER, userMessage)
+        // Показываем в чате
         appendToChat("\n\uD83D\uDC64 You:\n$userMessage\n")
+        if (!trace.isNullOrBlank()) {
+            appendToChat("\uD83D\uDCCE [trace attached: ${trace.lines().size} lines]\n")
+        }
+
+        // В задачу включаем trace
+        val fullTask = buildTaskWithTrace(userMessage, trace)
+        session.addMessage(MessageRole.USER, fullTask)
         inputArea.text = ""
         setInputEnabled(false)
         statusLabel.text = "Thinking..."
@@ -333,7 +436,7 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
                 service.notificationService.setProgressIndicator(indicator)
                 runBlocking {
                     val historyDTOs = session.messages.dropLast(1).map { it.toChatMessageDTO() }
-                    val request = ContextAwareRequest(task = userMessage, history = historyDTOs, dryRun = isDryRun)
+                    val request = ContextAwareRequest(task = fullTask, history = historyDTOs, dryRun = isDryRun)
                     val result = service.contextAwareModifyUseCase.execute(request)
                     ApplicationManager.getApplication().invokeLater { handleApiResult(result, session) }
                 }
@@ -350,12 +453,13 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     // --- Clipboard Mode ---
 
-    private fun sendClipboardMessage(userInput: String) {
+    private fun sendClipboardMessage(userInput: String, trace: String? = null) {
         val cs = service.clipboardService
         val session = chatHistory.getActiveSession()
         inputArea.text = ""
 
         if (cs.isWaitingForResponse()) {
+            // Paste response phase — trace не нужен тут
             session.addMessage(MessageRole.USER, "[Pasted LLM response]")
             appendToChat("\n\uD83D\uDCE5 Pasted LLM response (${userInput.length} chars)\n")
             setInputEnabled(false); statusLabel.text = "Processing response..."
@@ -377,8 +481,12 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
                 }
             })
         } else {
-            session.addMessage(MessageRole.USER, userInput)
+            // New task phase — включаем trace
             appendToChat("\n\uD83D\uDC64 You:\n$userInput\n")
+            if (!trace.isNullOrBlank()) {
+                appendToChat("\uD83D\uDCCE [trace attached: ${trace.lines().size} lines]\n")
+            }
+            session.addMessage(MessageRole.USER, userInput)
             setInputEnabled(false); statusLabel.text = "Generating JSON..."
 
             ProgressManager.getInstance().run(object : Task.Backgroundable(project, "MaxVibes: Generating request...", true) {
@@ -386,7 +494,7 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
                     service.notificationService.setProgressIndicator(indicator)
                     runBlocking {
                         val historyDTOs = session.messages.dropLast(1).map { it.toChatMessageDTO() }
-                        val result = cs.startTask(userInput, historyDTOs)
+                        val result = cs.startTask(userInput, historyDTOs, attachedContext = trace)
                         ApplicationManager.getApplication().invokeLater { handleClipboardResult(result, session) }
                     }
                 }
@@ -403,12 +511,18 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     // --- Cheap API Mode ---
 
-    private fun sendCheapApiMessage(userMessage: String) {
+    private fun sendCheapApiMessage(userMessage: String, trace: String? = null) {
         val isDryRun = dryRunCheckbox.isSelected
         val session = chatHistory.getActiveSession()
 
-        session.addMessage(MessageRole.USER, userMessage)
+        // Показываем в чате
         appendToChat("\n\uD83D\uDC64 You:\n$userMessage\n")
+        if (!trace.isNullOrBlank()) {
+            appendToChat("\uD83D\uDCCE [trace attached: ${trace.lines().size} lines]\n")
+        }
+
+        val fullTask = buildTaskWithTrace(userMessage, trace)
+        session.addMessage(MessageRole.USER, fullTask)
         inputArea.text = ""
         setInputEnabled(false)
         statusLabel.text = "Thinking (cheap mode)..."
@@ -418,7 +532,7 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
                 service.notificationService.setProgressIndicator(indicator)
                 runBlocking {
                     val historyDTOs = session.messages.dropLast(1).map { it.toChatMessageDTO() }
-                    val request = ContextAwareRequest(task = userMessage, history = historyDTOs, dryRun = isDryRun)
+                    val request = ContextAwareRequest(task = fullTask, history = historyDTOs, dryRun = isDryRun)
                     val useCase = service.cheapContextAwareModifyUseCase ?: service.contextAwareModifyUseCase
                     val result = useCase.execute(request)
                     ApplicationManager.getApplication().invokeLater { handleApiResult(result, session) }
@@ -541,16 +655,29 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
             |  $modeHint
             |
             |  Just type your task:
-            |  - "Add a Logger class with debug and error methods"
-            |  - "Create unit tests for UserService"
-            |  - "Refactor this to use coroutines"
+            |  • "Add a Logger class with debug and error methods"
+            |  • "Create unit tests for UserService"
+            |  • "Fix this error" + 📎 Trace button to attach stacktrace
             |
-            |  Switch modes in the dropdown above.
+            |  Shortcuts: Ctrl+Enter send | Ctrl+Shift+V attach trace
             |
         """.trimMargin() + "\n")
     }
 
     // ==================== Utilities ====================
+
+    /**
+     * Склеивает задачу с трейсом/логами для отправки в LLM.
+     */
+    private fun buildTaskWithTrace(task: String, trace: String?): String {
+        if (trace.isNullOrBlank()) return task
+        return buildString {
+            appendLine(task)
+            appendLine()
+            appendLine("--- Error/Trace/Logs ---")
+            append(trace)
+        }
+    }
 
     private fun appendToChat(text: String) {
         chatArea.append(text)
@@ -608,6 +735,8 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
         inputArea.isEnabled = enabled
         sendButton.isEnabled = enabled
         dryRunCheckbox.isEnabled = enabled
+        attachTraceButton.isEnabled = enabled
+        clearTraceButton.isEnabled = enabled
         newChatButton.isEnabled = enabled
         clearButton.isEnabled = enabled
         promptsButton.isEnabled = enabled

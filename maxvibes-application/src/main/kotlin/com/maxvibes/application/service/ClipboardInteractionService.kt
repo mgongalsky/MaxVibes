@@ -30,8 +30,13 @@ class ClipboardInteractionService(
 
     /**
      * Шаг 1: Пользователь ввёл задачу. Генерируем Planning JSON.
+     * @param attachedContext дополнительный контекст (stacktrace, логи, ошибки)
      */
-    suspend fun startTask(task: String, history: List<ChatMessageDTO> = emptyList()): ClipboardStepResult {
+    suspend fun startTask(
+        task: String,
+        history: List<ChatMessageDTO> = emptyList(),
+        attachedContext: String? = null
+    ): ClipboardStepResult {
         notificationPort.showProgress("Gathering project context...", 0.1)
 
         val projectContextResult = contextProvider.getProjectContext()
@@ -46,14 +51,20 @@ class ClipboardInteractionService(
             projectContext = projectContext,
             history = history,
             prompts = prompts,
-            currentPhase = ClipboardPhase.PLANNING
+            currentPhase = ClipboardPhase.PLANNING,
+            attachedContext = attachedContext
         )
+
+        val contextMap = mutableMapOf("fileTree" to projectContext.fileTree.toCompactString(maxDepth = 4))
+        if (!attachedContext.isNullOrBlank()) {
+            contextMap["errorTrace"] = attachedContext
+        }
 
         val request = ClipboardRequest(
             phase = ClipboardPhase.PLANNING,
             task = task,
             projectName = projectContext.name,
-            context = mapOf("fileTree" to projectContext.fileTree.toCompactString(maxDepth = 4)),
+            context = contextMap,
             systemInstruction = buildPlanningInstruction(projectContext, prompts)
         )
 
@@ -120,11 +131,16 @@ class ClipboardInteractionService(
             )
         }
 
+        val chatContext = gatheredContext.files.toMutableMap()
+        if (!state.attachedContext.isNullOrBlank()) {
+            chatContext["errorTrace"] = state.attachedContext
+        }
+
         val request = ClipboardRequest(
             phase = ClipboardPhase.CHAT,
             task = state.task,
             projectName = state.projectContext.name,
-            context = gatheredContext.files,
+            context = chatContext,
             chatHistory = historyEntries,
             systemInstruction = buildChatInstruction(state.projectContext, state.prompts)
         )
@@ -277,5 +293,6 @@ private data class ClipboardSessionState(
     val history: List<ChatMessageDTO>,
     val prompts: PromptTemplates,
     val currentPhase: ClipboardPhase,
-    val gatheredFiles: Map<String, String> = emptyMap()
+    val gatheredFiles: Map<String, String> = emptyMap(),
+    val attachedContext: String? = null
 )
