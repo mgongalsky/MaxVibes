@@ -74,7 +74,8 @@ data class ChatContext(
     val projectContext: ProjectContext,
     val gatheredFiles: Map<String, String> = emptyMap(),
     val totalTokensEstimate: Int = 0,
-    val prompts: PromptTemplates = PromptTemplates.EMPTY
+    val prompts: PromptTemplates = PromptTemplates.EMPTY,
+    val planOnly: Boolean = false
 )
 
 /**

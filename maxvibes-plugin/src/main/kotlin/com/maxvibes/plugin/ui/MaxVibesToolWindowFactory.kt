@@ -1,11 +1,13 @@
 package com.maxvibes.plugin.ui
 
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ComboBox
+import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.ui.JBColor
@@ -31,6 +33,9 @@ import kotlinx.coroutines.runBlocking
 import java.awt.*
 import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
+import java.io.File
 import javax.swing.*
 
 // ==================== Factory ====================
@@ -166,6 +171,10 @@ class ChatPanel(
         toolTipText = "Show plan without applying changes"
     }
 
+    private val planOnlyCheckbox = JBCheckBox("\uD83D\uDCAC Plan").apply {
+        toolTipText = "Plan-only mode: discuss without generating code changes"
+    }
+
     private val attachTraceButton = JButton("\uD83D\uDCCE Trace").apply {
         toolTipText = "Paste error/stacktrace/logs from clipboard (Ctrl+Shift+V)"
         font = font.deriveFont(11f)
@@ -226,6 +235,18 @@ class ChatPanel(
         font = font.deriveFont(11f)
     }
 
+    private val contextFilesButton = JButton("\uD83D\uDCCE Ctx").apply {
+        toolTipText = "Manage global context files"
+        font = font.deriveFont(11f)
+        isFocusPainted = false
+    }
+
+    private val claudeInstrButton = JButton("\uD83D\uDCCB").apply {
+        toolTipText = "Claude instructions (copy for clipboard mode)"
+        font = font.deriveFont(11f)
+        isFocusPainted = false
+    }
+
     // --- Services ---
     private val service: MaxVibesService by lazy { MaxVibesService.getInstance(project) }
     private val chatHistory: ChatHistoryService by lazy { ChatHistoryService.getInstance(project) }
@@ -238,6 +259,7 @@ class ChatPanel(
     init {
         setupUI()
         setupListeners()
+        setupClickableLinks()
         loadCurrentSession()
         syncModeFromSettings()
     }
@@ -270,6 +292,8 @@ class ChatPanel(
 
                 val rightControls = JPanel(FlowLayout(FlowLayout.RIGHT, 3, 0)).apply {
                     background = JBColor.background()
+                    add(contextFilesButton.apply { preferredSize = Dimension(56, 24) })
+                    add(claudeInstrButton.apply { preferredSize = Dimension(26, 24) })
                     add(clearButton.apply { preferredSize = Dimension(48, 24) })
                     add(promptsButton.apply { preferredSize = Dimension(26, 24) })
                 }
@@ -338,6 +362,7 @@ class ChatPanel(
             val buttonsPanel = JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
                 background = JBColor.background()
                 add(attachTraceButton.apply { preferredSize = Dimension(80, 26) })
+                add(planOnlyCheckbox)
                 add(dryRunCheckbox)
                 add(sendButton)
             }
@@ -349,7 +374,7 @@ class ChatPanel(
             border = JBUI.Borders.empty(2, 10)
             background = JBColor.background()
             add(statusLabel, BorderLayout.WEST)
-            add(JBLabel("<html><small>Ctrl+Enter send | Ctrl+Shift+V trace</small></html>").apply {
+            add(JBLabel("<html><small>Ctrl+Enter send | Click file paths to open</small></html>").apply {
                 foreground = JBColor.GRAY
             }, BorderLayout.EAST)
         }
@@ -406,6 +431,9 @@ class ChatPanel(
             statusLabel.text = "Prompts opened"
         }
 
+        contextFilesButton.addActionListener { showContextFilesDialog() }
+        claudeInstrButton.addActionListener { showClaudeInstructionsDialog() }
+
         attachTraceButton.addActionListener { attachTraceFromClipboard() }
         clearTraceButton.addActionListener { clearAttachedTrace() }
 
@@ -426,11 +454,239 @@ class ChatPanel(
         })
     }
 
+    // ==================== Clickable File Links ====================
+
+    private fun setupClickableLinks() {
+        chatArea.addMouseListener(object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) {
+                val filePath = getFilePathAtPosition(e.point) ?: return
+                openFileInEditor(filePath)
+            }
+        })
+
+        chatArea.addMouseMotionListener(object : java.awt.event.MouseMotionAdapter() {
+            override fun mouseMoved(e: MouseEvent) {
+                val filePath = getFilePathAtPosition(e.point)
+                chatArea.cursor = if (filePath != null) {
+                    Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+                } else {
+                    Cursor.getDefaultCursor()
+                }
+            }
+        })
+    }
+
+    /**
+     * Extracts file path from the text at the given point in chatArea.
+     * Detects patterns like: src/main/kotlin/..., *.kt, *.java, etc.
+     */
+    private fun getFilePathAtPosition(point: Point): String? {
+        val offset = chatArea.viewToModel2D(point)
+        if (offset < 0 || offset >= chatArea.document.length) return null
+
+        val text = chatArea.text
+        val lineStart = text.lastIndexOf('\n', offset - 1).let { if (it < 0) 0 else it + 1 }
+        val lineEnd = text.indexOf('\n', offset).let { if (it < 0) text.length else it }
+        val line = text.substring(lineStart, lineEnd)
+        val posInLine = offset - lineStart
+
+        // Match file path patterns in the line
+        val filePathRegex = Regex("""(?:^|[\s\u2022(])([a-zA-Z][\w./\\-]*\.(?:kt|java|xml|json|md|gradle|kts|yaml|yml|properties|txt))""")
+        for (match in filePathRegex.findAll(line)) {
+            val group = match.groups[1] ?: continue
+            if (posInLine >= group.range.first && posInLine <= group.range.last + 1) {
+                return group.value
+            }
+        }
+        return null
+    }
+
+    private fun openFileInEditor(relativePath: String) {
+        val basePath = project.basePath ?: return
+        // Try exact path first
+        val file = LocalFileSystem.getInstance().findFileByPath("$basePath/$relativePath")
+        if (file != null && !file.isDirectory) {
+            FileEditorManager.getInstance(project).openFile(file, true)
+            statusLabel.text = "Opened: ${relativePath.substringAfterLast('/')}"
+            return
+        }
+        // Try searching by filename
+        val fileName = relativePath.substringAfterLast('/')
+        val found = findFileRecursively(File(basePath), fileName)
+        if (found != null) {
+            val vf = LocalFileSystem.getInstance().findFileByIoFile(found)
+            if (vf != null) {
+                FileEditorManager.getInstance(project).openFile(vf, true)
+                statusLabel.text = "Opened: $fileName"
+                return
+            }
+        }
+        statusLabel.text = "File not found: $relativePath"
+    }
+
+    private fun findFileRecursively(dir: File, name: String): File? {
+        if (!dir.isDirectory) return null
+        val skipDirs = setOf("build", ".gradle", ".idea", "node_modules", ".git")
+        for (child in dir.listFiles() ?: return null) {
+            if (child.isDirectory) {
+                if (child.name in skipDirs) continue
+                val found = findFileRecursively(child, name)
+                if (found != null) return found
+            } else if (child.name == name) {
+                return child
+            }
+        }
+        return null
+    }
+
+    // ==================== Context Files Dialog ====================
+
+    private fun showContextFilesDialog() {
+        val currentFiles = chatHistory.getGlobalContextFiles().toMutableList()
+
+        val listModel = DefaultListModel<String>().apply {
+            currentFiles.forEach { addElement(it) }
+        }
+        val fileList = JList(listModel).apply {
+            selectionMode = ListSelectionModel.SINGLE_SELECTION
+            font = Font(Font.MONOSPACED, Font.PLAIN, 12)
+        }
+
+        val panel = JPanel(BorderLayout(8, 8)).apply {
+            preferredSize = Dimension(500, 350)
+            border = JBUI.Borders.empty(8)
+
+            add(JBLabel("<html><b>Global Context Files</b><br>" +
+                    "<small>These files are included in every LLM request as background context.<br>" +
+                    "Useful for architecture docs, coding guidelines, etc.</small></html>").apply {
+                border = JBUI.Borders.empty(0, 0, 8, 0)
+            }, BorderLayout.NORTH)
+
+            add(JBScrollPane(fileList), BorderLayout.CENTER)
+
+            val buttonsPanel = JPanel(FlowLayout(FlowLayout.LEFT, 4, 4)).apply {
+                add(JButton("+ Add file").apply {
+                    addActionListener {
+                        val path = JOptionPane.showInputDialog(
+                            this@ChatPanel,
+                            "Relative path from project root\n(e.g. ARCHITECTURE.md, docs/guide.md):",
+                            "Add Context File",
+                            JOptionPane.PLAIN_MESSAGE
+                        ) ?: return@addActionListener
+                        val normalized = path.trim().replace('\\', '/')
+                        if (normalized.isNotBlank() && !listModel.contains(normalized)) {
+                            val basePath = project.basePath
+                            val exists = basePath != null && File(basePath, normalized).exists()
+                            if (exists) {
+                                listModel.addElement(normalized)
+                            } else {
+                                val addAnyway = JOptionPane.showConfirmDialog(
+                                    this@ChatPanel,
+                                    "File '$normalized' not found in project.\nAdd anyway?",
+                                    "File Not Found",
+                                    JOptionPane.YES_NO_OPTION,
+                                    JOptionPane.WARNING_MESSAGE
+                                )
+                                if (addAnyway == JOptionPane.YES_OPTION) {
+                                    listModel.addElement(normalized)
+                                }
+                            }
+                        }
+                    }
+                })
+                add(JButton("- Remove").apply {
+                    addActionListener {
+                        val idx = fileList.selectedIndex
+                        if (idx >= 0) listModel.remove(idx)
+                    }
+                })
+                add(JButton("Browse...").apply {
+                    addActionListener {
+                        val basePath = project.basePath ?: return@addActionListener
+                        val chooser = JFileChooser(basePath).apply {
+                            fileSelectionMode = JFileChooser.FILES_ONLY
+                            isMultiSelectionEnabled = true
+                            dialogTitle = "Select context files"
+                        }
+                        if (chooser.showOpenDialog(this@ChatPanel) == JFileChooser.APPROVE_OPTION) {
+                            for (f in chooser.selectedFiles) {
+                                val rel = f.toRelativeString(File(basePath)).replace('\\', '/')
+                                if (!listModel.contains(rel)) {
+                                    listModel.addElement(rel)
+                                }
+                            }
+                        }
+                    }
+                })
+            }
+            add(buttonsPanel, BorderLayout.SOUTH)
+        }
+
+        val result = JOptionPane.showConfirmDialog(
+            this, panel, "Global Context Files",
+            JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE
+        )
+        if (result == JOptionPane.OK_OPTION) {
+            val newFiles = (0 until listModel.size()).map { listModel.getElementAt(it) }
+            chatHistory.setGlobalContextFiles(newFiles)
+            updateContextIndicator()
+            statusLabel.text = "Context files: ${newFiles.size}"
+        }
+    }
+
+    private fun updateContextIndicator() {
+        val count = chatHistory.getGlobalContextFiles().size
+        contextFilesButton.text = if (count > 0) "\uD83D\uDCCE Ctx($count)" else "\uD83D\uDCCE Ctx"
+    }
+
+    // ==================== Claude Instructions Dialog ====================
+
+    private fun showClaudeInstructionsDialog() {
+        val instrFile = File(project.basePath ?: return, ".maxvibes/claude-instructions.md")
+
+        if (!instrFile.exists()) {
+            instrFile.parentFile?.mkdirs()
+            instrFile.writeText(DEFAULT_CLAUDE_INSTRUCTIONS)
+        }
+
+        val content = instrFile.readText()
+
+        val popup = JPopupMenu().apply {
+            add(JMenuItem("\uD83D\uDCCB Copy to clipboard").apply {
+                font = font.deriveFont(12f)
+                addActionListener {
+                    val clipboard = Toolkit.getDefaultToolkit().systemClipboard
+                    clipboard.setContents(java.awt.datatransfer.StringSelection(content), null)
+                    statusLabel.text = "Claude instructions copied!"
+                }
+            })
+            add(JMenuItem("\u270F\uFE0F Edit in editor").apply {
+                font = font.deriveFont(12f)
+                addActionListener {
+                    val vf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(instrFile)
+                    if (vf != null) {
+                        FileEditorManager.getInstance(project).openFile(vf, true)
+                        statusLabel.text = "Claude instructions opened"
+                    }
+                }
+            })
+            add(JMenuItem("\uD83D\uDD04 Reset to default").apply {
+                font = font.deriveFont(12f)
+                addActionListener {
+                    instrFile.writeText(DEFAULT_CLAUDE_INSTRUCTIONS)
+                    statusLabel.text = "Claude instructions reset"
+                }
+            })
+        }
+        popup.show(claudeInstrButton, 0, claudeInstrButton.height)
+    }
+
     // ==================== Breadcrumb ====================
 
     fun refreshHeader() {
         updateBreadcrumb()
         updateModeIndicator()
+        updateContextIndicator()
     }
 
     private fun updateBreadcrumb() {
@@ -453,8 +709,8 @@ class ChatPanel(
                 if (!isLast) {
                     cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
                     val sid = s.id
-                    addMouseListener(object : java.awt.event.MouseAdapter() {
-                        override fun mouseClicked(e: java.awt.event.MouseEvent) {
+                    addMouseListener(object : MouseAdapter() {
+                        override fun mouseClicked(e: MouseEvent) {
                             chatHistory.setActiveSession(sid)
                             loadCurrentSession()
                         }
@@ -586,19 +842,26 @@ class ChatPanel(
 
     private fun sendApiMessage(msg: String, trace: String?) {
         val isDryRun = dryRunCheckbox.isSelected
+        val isPlanOnly = planOnlyCheckbox.isSelected
         val session = chatHistory.getActiveSession()
+        val globalCtx = chatHistory.getGlobalContextFiles()
         appendToChat("\n\uD83D\uDC64 You:\n$msg\n")
         if (!trace.isNullOrBlank()) appendToChat("\uD83D\uDCCE [trace: ${trace.lines().size} lines]\n")
+        if (isPlanOnly) appendToChat("\uD83D\uDCAC [plan-only mode]\n")
         val fullTask = buildTaskWithTrace(msg, trace)
         session.addMessage(MessageRole.USER, fullTask)
-        inputArea.text = ""; setInputEnabled(false); statusLabel.text = "Thinking..."
+        inputArea.text = ""; setInputEnabled(false)
+        statusLabel.text = if (isPlanOnly) "Planning..." else "Thinking..."
 
         ProgressManager.getInstance().run(object : Task.Backgroundable(project, "MaxVibes: Processing...", true) {
             override fun run(indicator: ProgressIndicator) {
                 service.notificationService.setProgressIndicator(indicator)
                 runBlocking {
                     val dtos = session.messages.dropLast(1).map { it.toChatMessageDTO() }
-                    val req = ContextAwareRequest(task = fullTask, history = dtos, dryRun = isDryRun)
+                    val req = ContextAwareRequest(
+                        task = fullTask, history = dtos, dryRun = isDryRun,
+                        planOnly = isPlanOnly, globalContextFiles = globalCtx
+                    )
                     val result = service.contextAwareModifyUseCase.execute(req)
                     ApplicationManager.getApplication().invokeLater { handleApiResult(result, session) }
                 }
@@ -665,9 +928,12 @@ class ChatPanel(
 
     private fun sendCheapApiMessage(msg: String, trace: String?) {
         val isDryRun = dryRunCheckbox.isSelected
+        val isPlanOnly = planOnlyCheckbox.isSelected
         val session = chatHistory.getActiveSession()
+        val globalCtx = chatHistory.getGlobalContextFiles()
         appendToChat("\n\uD83D\uDC64 You:\n$msg\n")
         if (!trace.isNullOrBlank()) appendToChat("\uD83D\uDCCE [trace: ${trace.lines().size} lines]\n")
+        if (isPlanOnly) appendToChat("\uD83D\uDCAC [plan-only mode]\n")
         val fullTask = buildTaskWithTrace(msg, trace)
         session.addMessage(MessageRole.USER, fullTask)
         inputArea.text = ""; setInputEnabled(false); statusLabel.text = "Thinking (cheap)..."
@@ -677,7 +943,10 @@ class ChatPanel(
                 service.notificationService.setProgressIndicator(indicator)
                 runBlocking {
                     val dtos = session.messages.dropLast(1).map { it.toChatMessageDTO() }
-                    val req = ContextAwareRequest(task = fullTask, history = dtos, dryRun = isDryRun)
+                    val req = ContextAwareRequest(
+                        task = fullTask, history = dtos, dryRun = isDryRun,
+                        planOnly = isPlanOnly, globalContextFiles = globalCtx
+                    )
                     val uc = service.cheapContextAwareModifyUseCase ?: service.contextAwareModifyUseCase
                     val result = uc.execute(req)
                     ApplicationManager.getApplication().invokeLater { handleApiResult(result, session) }
@@ -703,6 +972,11 @@ class ChatPanel(
         updateBreadcrumb()
     }
 
+    /**
+     * Handle clipboard result.
+     * NOTE: result.message from ClipboardInteractionService already includes modification summary,
+     * so we do NOT add a second summary here (fixes duplicate file creation display).
+     */
     private fun handleClipboardResult(result: ClipboardStepResult, session: ChatSession) {
         when (result) {
             is ClipboardStepResult.WaitingForResponse -> {
@@ -713,18 +987,8 @@ class ChatPanel(
                 statusLabel.text = "Waiting for LLM response..."
             }
             is ClipboardStepResult.Completed -> {
-                val text = buildString {
-                    if (result.message.isNotBlank()) append(result.message)
-                    else if (result.modifications.isNotEmpty()) append("Changes applied.")
-                    else append("Done.")
-                    if (result.modifications.isNotEmpty()) {
-                        appendLine("\n───────────────")
-                        val ok = result.modifications.filterIsInstance<ModificationResult.Success>()
-                        val fail = result.modifications.filterIsInstance<ModificationResult.Failure>()
-                        if (ok.isNotEmpty()) { appendLine("\u2705 ${ok.size} applied:"); ok.forEach { appendLine("   \u2022 ${it.affectedPath.value.substringAfterLast('/')}") } }
-                        if (fail.isNotEmpty()) { appendLine("\u274C ${fail.size} failed:"); fail.forEach { appendLine("   \u2022 ${it.error.message}") } }
-                    }
-                }
+                // message already contains modification summary from ClipboardInteractionService
+                val text = result.message.ifBlank { "Done." }
                 session.addMessage(MessageRole.ASSISTANT, text)
                 appendAssistantMessage(text)
                 appendToChat("\u2500".repeat(50) + "\n")
@@ -744,11 +1008,17 @@ class ChatPanel(
     private fun buildResultText(result: ContextAwareResult): String = buildString {
         append(result.message)
         if (result.modifications.isNotEmpty()) {
-            appendLine("\n\n───────────────")
+            appendLine("\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500")
             val ok = result.modifications.filterIsInstance<ModificationResult.Success>()
             val fail = result.modifications.filterIsInstance<ModificationResult.Failure>()
-            if (ok.isNotEmpty()) { appendLine("\u2705 ${ok.size} applied:"); ok.forEach { appendLine("   \u2022 ${it.affectedPath.value.substringAfterLast('/')}") } }
-            if (fail.isNotEmpty()) { appendLine("\u274C ${fail.size} failed:"); fail.forEach { appendLine("   \u2022 ${it.error.message}") } }
+            if (ok.isNotEmpty()) {
+                appendLine("\u2705 ${ok.size} applied:")
+                ok.forEach { appendLine("   \u2022 ${it.affectedPath.value}") }
+            }
+            if (fail.isNotEmpty()) {
+                appendLine("\u274C ${fail.size} failed:")
+                fail.forEach { appendLine("   \u2022 ${it.error.message}") }
+            }
         }
     }
 
@@ -759,6 +1029,7 @@ class ChatPanel(
         chatArea.text = ""
         updateBreadcrumb()
         updateModeIndicator()
+        updateContextIndicator()
 
         if (session.messages.isEmpty()) {
             showWelcome()
@@ -780,9 +1051,9 @@ class ChatPanel(
 
     private fun showWelcome() {
         val mode = when (currentMode) {
-            InteractionMode.API -> "API — direct LLM calls"
-            InteractionMode.CLIPBOARD -> "Clipboard — paste JSON into Claude/ChatGPT"
-            InteractionMode.CHEAP_API -> "Cheap API — budget model"
+            InteractionMode.API -> "API \u2014 direct LLM calls"
+            InteractionMode.CLIPBOARD -> "Clipboard \u2014 paste JSON into Claude/ChatGPT"
+            InteractionMode.CHEAP_API -> "Cheap API \u2014 budget model"
         }
         val session = chatHistory.getActiveSession()
         val branchHint = if (session.depth > 0) {
@@ -790,11 +1061,14 @@ class ChatPanel(
             "\n  \u2514 Branch from: \"${parent?.title ?: "?"}\""
         } else ""
 
+        val ctxCount = chatHistory.getGlobalContextFiles().size
+        val ctxHint = if (ctxCount > 0) "\n  \uD83D\uDCCE $ctxCount global context file(s) active" else ""
+
         appendToChat("""
-            |  MaxVibes  \u2022  $mode$branchHint
+            |  MaxVibes  \u2022  $mode$branchHint$ctxHint
             |
             |  Type your task, or use Sessions to browse dialogs.
-            |  Ctrl+Enter send | Ctrl+Shift+V trace
+            |  Ctrl+Enter send | Click file paths to open
             |
         """.trimMargin() + "\n")
     }
@@ -819,9 +1093,15 @@ class ChatPanel(
     private fun formatMarkdown(text: String): String {
         return text.lines().joinToString("\n") { line ->
             var l = line
-            Regex("^###\\s+(.+)").find(l)?.let { return@joinToString "  \u2500\u2500\u2500 ${it.groupValues[1].trim()} \u2500\u2500\u2500" }
-            Regex("^##\\s+(.+)").find(l)?.let { return@joinToString "\u2550\u2550 ${it.groupValues[1].trim().uppercase()} \u2550\u2550" }
-            Regex("^#\\s+(.+)").find(l)?.let { return@joinToString "\u2550\u2550\u2550 ${it.groupValues[1].trim().uppercase()} \u2550\u2550\u2550" }
+            Regex("^###\\s+(.+)").find(l)?.let {
+                return@joinToString "  \u2500\u2500\u2500 ${it.groupValues[1].trim()} \u2500\u2500\u2500"
+            }
+            Regex("^##\\s+(.+)").find(l)?.let {
+                return@joinToString "\u2550\u2550 ${it.groupValues[1].trim().uppercase()} \u2550\u2550"
+            }
+            Regex("^#\\s+(.+)").find(l)?.let {
+                return@joinToString "\u2550\u2550\u2550 ${it.groupValues[1].trim().uppercase()} \u2550\u2550\u2550"
+            }
             if (l.trim().matches(Regex("^[-*_]{3,}$"))) return@joinToString "\u2500".repeat(40)
             l = l.replace(Regex("^(\\s*)[-*]\\s+"), "$1\u2022 ")
             l = l.replace(Regex("\\*{3}(.+?)\\*{3}")) { it.groupValues[1].uppercase() }
@@ -834,11 +1114,13 @@ class ChatPanel(
 
     private fun setInputEnabled(enabled: Boolean) {
         inputArea.isEnabled = enabled; sendButton.isEnabled = enabled
-        dryRunCheckbox.isEnabled = enabled; attachTraceButton.isEnabled = enabled
+        dryRunCheckbox.isEnabled = enabled; planOnlyCheckbox.isEnabled = enabled
+        attachTraceButton.isEnabled = enabled
         clearTraceButton.isEnabled = enabled; clearButton.isEnabled = enabled
         promptsButton.isEnabled = enabled; modeComboBox.isEnabled = enabled
         sessionsButton.isEnabled = enabled; branchButton.isEnabled = enabled
-        newChatButton.isEnabled = enabled
+        newChatButton.isEnabled = enabled; contextFilesButton.isEnabled = enabled
+        claudeInstrButton.isEnabled = enabled
     }
 }
 
@@ -858,3 +1140,40 @@ private fun ChatMessage.toChatMessageDTO(): ChatMessageDTO {
 data class ModeItem(val id: String, val label: String) {
     override fun toString(): String = label
 }
+
+// ==================== Default Claude Instructions ====================
+
+private val DEFAULT_CLAUDE_INSTRUCTIONS = """
+This project uses MaxVibes IDE plugin clipboard protocol for code modifications.
+When you receive a JSON message containing "systemInstruction", "task", "fileTree", or "files" fields — this is a MaxVibes protocol message from the IDE plugin. Follow these rules STRICTLY:
+
+1. RESPOND WITH ONLY A JSON OBJECT. Your entire response must be valid JSON — no markdown, no text before/after, no code blocks, no explanations outside the JSON.
+2. DO NOT use computer tools, bash, file creation, artifacts, or any other tools. ALL code must go inside the JSON response in the "modifications" array.
+3. Response format:
+{
+    "message": "Your explanation, discussion, or answer to the developer",
+    "requestedFiles": ["path/to/file.kt"],
+    "modifications": [
+        {
+            "type": "CREATE_FILE",
+            "path": "src/main/kotlin/com/example/File.kt",
+            "content": "complete file content with package and imports"
+        }
+    ]
+}
+4. All fields are optional except "message" (always recommended):
+   - "message" — your explanation or discussion
+   - "requestedFiles" — files you need to see (triggers file gathering in IDE)
+   - "reasoning" — why you need those files
+   - "modifications" — code changes. Types: CREATE_FILE, REPLACE_FILE, DELETE_FILE
+
+5. You can combine fields freely:
+   - Discussion only: just "message"
+   - Need more context: "message" + "requestedFiles"
+   - Code changes: "message" + "modifications"
+   - Everything: "message" + "requestedFiles" + "modifications"
+6. For "modifications":
+   - "content" must be COMPLETE, compilable code (full file with package declaration, imports, everything)
+   - The IDE will apply these changes automatically via PSI API
+7. For regular conversation (not MaxVibes protocol messages), respond normally as usual.
+""".trimIndent()

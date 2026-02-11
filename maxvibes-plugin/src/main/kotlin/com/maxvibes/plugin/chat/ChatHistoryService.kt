@@ -123,6 +123,10 @@ class ChatHistoryState {
     var sessions: MutableList<ChatSession> = mutableListOf()
 
     var activeSessionId: String? = null
+
+    /** Global context files — always included in every LLM request (relative paths from project root) */
+    @XCollection(style = XCollection.Style.v2, elementTypes = [String::class])
+    var globalContextFiles: MutableList<String> = mutableListOf()
 }
 
 /**
@@ -183,6 +187,19 @@ class ChatHistoryService : PersistentStateComponent<ChatHistoryState> {
         state.activeSessionId = sessionId
     }
 
+    // ==================== Rename ====================
+
+    /**
+     * Переименовывает сессию.
+     * @return true если переименование успешно, false если сессия не найдена.
+     */
+    fun renameSession(sessionId: String, newTitle: String): Boolean {
+        val session = getSessionById(sessionId) ?: return false
+        session.title = newTitle.trim().ifBlank { "Untitled" }
+        session.updatedAt = java.time.Instant.now().toEpochMilli()
+        return true
+    }
+
     // ==================== Tree Operations ====================
 
     /** Возвращает корневые сессии (без родителя) */
@@ -237,7 +254,6 @@ class ChatHistoryService : PersistentStateComponent<ChatHistoryState> {
      * Возвращает список корневых узлов с рекурсивно заполненными children.
      */
     fun buildTree(): List<SessionTreeNode> {
-        val sessionMap = state.sessions.associateBy { it.id }
         val nodeMap = state.sessions.associate { it.id to SessionTreeNode(it) }.toMutableMap()
 
         // Привязываем детей к родителям
@@ -284,7 +300,7 @@ class ChatHistoryService : PersistentStateComponent<ChatHistoryState> {
         state.activeSessionId = session.id
 
         // Обновляем updatedAt родителя, чтобы он поднялся в списке
-        parent.updatedAt = Instant.now().toEpochMilli()
+        parent.updatedAt = java.time.Instant.now().toEpochMilli()
 
         trimOldSessions()
         return session
@@ -333,6 +349,31 @@ class ChatHistoryService : PersistentStateComponent<ChatHistoryState> {
 
     fun clearActiveSession() {
         getActiveSession().clear()
+    }
+
+    // ==================== Global Context Files ====================
+
+    /** Get the list of global context files */
+    fun getGlobalContextFiles(): List<String> {
+        return state.globalContextFiles.toList()
+    }
+
+    /** Set the list of global context files */
+    fun setGlobalContextFiles(files: List<String>) {
+        state.globalContextFiles = files.distinct().toMutableList()
+    }
+
+    /** Add a global context file (if not already present) */
+    fun addGlobalContextFile(relativePath: String) {
+        val normalized = relativePath.replace('\\', '/')
+        if (normalized !in state.globalContextFiles) {
+            state.globalContextFiles.add(normalized)
+        }
+    }
+
+    /** Remove a global context file */
+    fun removeGlobalContextFile(relativePath: String) {
+        state.globalContextFiles.remove(relativePath.replace('\\', '/'))
     }
 
     // ==================== Internal Helpers ====================

@@ -8,14 +8,15 @@ import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.shared.result.Result
 
 /**
- * Сервис для чата с автоматическим сбором контекста
+ * Сервис для чата с автоматическим сбором контекста.
+ * Поддерживает planOnly mode (обсуждение без модификаций) и глобальные контекстные файлы.
  */
 class ContextAwareModifyService(
     private val contextProvider: ProjectContextPort,
     private val llmService: LLMService,
     private val codeRepository: CodeRepository,
     private val notificationPort: NotificationPort,
-    private val promptPort: PromptPort? = null  // Optional для обратной совместимости
+    private val promptPort: PromptPort? = null
 ) : ContextAwareModifyUseCase {
 
     override suspend fun execute(request: ContextAwareRequest): ContextAwareResult {
@@ -40,8 +41,8 @@ class ContextAwareModifyService(
         }
         val contextRequest = (planResult as Result.Success).value
 
-        // Объединяем запрошенные файлы
-        val filesToGather = (contextRequest.requestedFiles + request.additionalFiles)
+        // Объединяем запрошенные файлы + глобальные контекстные файлы
+        val filesToGather = (contextRequest.requestedFiles + request.additionalFiles + request.globalContextFiles)
             .distinct()
             .filterNot { it in request.excludeFiles }
 
@@ -69,13 +70,15 @@ class ContextAwareModifyService(
         }
 
         // 4. Chat — LLM отвечает текстом + модификации
-        notificationPort.showProgress("Generating response...", 0.6)
+        val modeLabel = if (request.planOnly) "Discussing (plan only)..." else "Generating response..."
+        notificationPort.showProgress(modeLabel, 0.6)
 
         val chatContext = ChatContext(
             projectContext = projectContext,
             gatheredFiles = gatheredContext.files,
             totalTokensEstimate = gatheredContext.totalTokensEstimate,
-            prompts = prompts
+            prompts = prompts,
+            planOnly = request.planOnly
         )
 
         val chatResult = llmService.chat(
@@ -94,13 +97,18 @@ class ContextAwareModifyService(
 
         val chatResponse = (chatResult as Result.Success).value
 
-        // 5. Применяем модификации (если есть)
-        val modificationResults = if (chatResponse.modifications.isNotEmpty()) {
+        // 5. Применяем модификации (если есть и НЕ planOnly)
+        val modificationResults = if (chatResponse.modifications.isNotEmpty() && !request.planOnly) {
             notificationPort.showProgress("Applying ${chatResponse.modifications.size} changes...", 0.8)
             codeRepository.applyModifications(chatResponse.modifications)
         } else {
             emptyList()
         }
+
+        // Если planOnly и LLM всё-таки вернул модификации — предупреждаем
+        val planOnlyNote = if (request.planOnly && chatResponse.modifications.isNotEmpty()) {
+            "\n\n⚠️ Plan-only mode: ${chatResponse.modifications.size} modification(s) were suggested but NOT applied."
+        } else ""
 
         // 6. Формируем результат
         val successCount = modificationResults.count { it is ModificationResult.Success }
@@ -113,12 +121,12 @@ class ContextAwareModifyService(
                 notificationPort.showSuccess("Applied $successCount changes")
             }
         } else {
-            notificationPort.showSuccess("Done")
+            notificationPort.showSuccess(if (request.planOnly) "Plan complete" else "Done")
         }
 
         return ContextAwareResult(
             success = failCount == 0,
-            message = chatResponse.message,
+            message = chatResponse.message + planOnlyNote,
             requestedFiles = filesToGather,
             gatheredFiles = gatheredContext.files.keys.toList(),
             modifications = modificationResults,

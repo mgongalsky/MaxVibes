@@ -14,7 +14,7 @@ interface ContextAwareModifyUseCase {
      * 2. LLM определяет нужные файлы (planning)
      * 3. Собирает содержимое файлов
      * 4. LLM отвечает текстом + генерирует модификации
-     * 5. Применяет изменения
+     * 5. Применяет изменения (если не planOnly)
      */
     suspend fun execute(request: ContextAwareRequest): ContextAwareResult
 }
@@ -24,7 +24,13 @@ data class ContextAwareRequest(
     val history: List<ChatMessageDTO> = emptyList(),
     val additionalFiles: List<String> = emptyList(),
     val excludeFiles: List<String> = emptyList(),
-    val dryRun: Boolean = false
+    val dryRun: Boolean = false,
+
+    /** Plan-only mode: LLM discusses but does NOT generate or apply modifications */
+    val planOnly: Boolean = false,
+
+    /** Global context files — always included in LLM context (relative paths in project) */
+    val globalContextFiles: List<String> = emptyList()
 )
 
 data class ContextAwareResult(

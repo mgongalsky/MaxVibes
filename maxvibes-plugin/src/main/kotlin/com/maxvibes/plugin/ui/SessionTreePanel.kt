@@ -20,7 +20,7 @@ import javax.swing.tree.TreePath
 
 /**
  * Full-window panel for browsing the session tree.
- * Shows all dialogs as a tree with branches, allows opening, creating, deleting.
+ * Shows all dialogs as a tree with branches, allows opening, creating, deleting, renaming.
  */
 class SessionTreePanel(
     private val chatHistory: ChatHistoryService,
@@ -118,6 +118,10 @@ class SessionTreePanel(
                         font = font.deriveFont(12f)
                         addActionListener { onOpenSession(data.sessionId) }
                     })
+                    add(JMenuItem("\u270F\uFE0F Rename").apply {
+                        font = font.deriveFont(12f)
+                        addActionListener { renameSession(data) }
+                    })
                     add(JMenuItem("\u2442 New branch here").apply {
                         font = font.deriveFont(12f)
                         addActionListener { onNewBranch(data.sessionId) }
@@ -143,6 +147,26 @@ class SessionTreePanel(
             border = JBUI.Borders.empty(4, 12)
         }
         add(hint, BorderLayout.SOUTH)
+    }
+
+    /**
+     * Shows an input dialog to rename a session.
+     */
+    private fun renameSession(data: TreeNodeData) {
+        val newTitle = JOptionPane.showInputDialog(
+            this,
+            "Rename dialog:",
+            "Rename",
+            JOptionPane.PLAIN_MESSAGE,
+            null,
+            null,
+            data.title
+        ) as? String
+
+        if (newTitle != null && newTitle.isNotBlank() && newTitle != data.title) {
+            chatHistory.renameSession(data.sessionId, newTitle)
+            refresh()
+        }
     }
 
     fun refresh() {
