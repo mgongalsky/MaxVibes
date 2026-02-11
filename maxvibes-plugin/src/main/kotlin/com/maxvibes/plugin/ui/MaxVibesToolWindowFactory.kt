@@ -65,10 +65,6 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
         toolTipText = "Send message (Ctrl+Enter)"
     }
 
-    private val newChatButton = JButton("New").apply {
-        toolTipText = "Start new chat"
-    }
-
     private val clearButton = JButton("Clear").apply {
         toolTipText = "Clear current chat"
     }
@@ -77,8 +73,11 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
         toolTipText = "Edit prompts (.maxvibes/prompts/)"
     }
 
-    private val sessionComboBox = ComboBox<SessionItem>().apply {
-        renderer = SessionListRenderer()
+    /** Tree navigator replaces the old sessionComboBox + newChatButton */
+    private val treeNavigator: ChatTreeNavigator = ChatTreeNavigator(project) { sessionId ->
+        chatHistory.setActiveSession(sessionId)
+        loadCurrentSession()
+        // refresh() вызывается внутри loadCurrentSession() через treeNavigator.refresh()
     }
 
     /** Mode selector */
@@ -145,34 +144,28 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
     private fun setupUI() {
         border = JBUI.Borders.empty()
 
-        // ===== Header: Two rows to avoid overlapping =====
+        // ===== Header: Mode row + Tree Navigator =====
         val headerPanel = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            border = JBUI.Borders.empty(4, 8)
+            border = JBUI.Borders.empty(4, 0)
             background = JBColor.background()
 
-            // Row 1: Mode selector + indicator
-            val row1 = JPanel(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
+            // Row 1: Mode selector + indicator + prompts
+            val modeRow = JPanel(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
                 background = JBColor.background()
                 add(JBLabel("<html><b>MaxVibes</b></html>"))
                 add(modeComboBox.apply { preferredSize = Dimension(200, 24); font = font.deriveFont(11f) })
                 add(modeIndicator)
+                add(clearButton.apply { preferredSize = Dimension(50, 24); font = font.deriveFont(11f) })
+                add(promptsButton.apply { preferredSize = Dimension(28, 24); font = font.deriveFont(11f) })
                 if (promptService.hasCustomPrompts()) {
                     add(JBLabel("\u270E").apply { toolTipText = "Using custom prompts"; foreground = JBColor.BLUE })
                 }
             }
 
-            // Row 2: Session controls
-            val row2 = JPanel(FlowLayout(FlowLayout.LEFT, 3, 2)).apply {
-                background = JBColor.background()
-                add(sessionComboBox.apply { preferredSize = Dimension(180, 24) })
-                add(newChatButton.apply { preferredSize = Dimension(50, 24); font = font.deriveFont(11f) })
-                add(clearButton.apply { preferredSize = Dimension(50, 24); font = font.deriveFont(11f) })
-                add(promptsButton.apply { preferredSize = Dimension(28, 24); font = font.deriveFont(11f) })
-            }
-
-            add(row1)
-            add(row2)
+            // Row 2-3: Tree navigator (breadcrumb + branch controls)
+            add(modeRow)
+            add(treeNavigator)
         }
 
         // ===== Chat Area =====
@@ -233,13 +226,54 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
     private fun setupListeners() {
         sendButton.addActionListener { sendMessage() }
 
-        newChatButton.addActionListener {
+        // Tree navigator callbacks
+        treeNavigator.onNewRoot = {
             service.clipboardService.reset()
             chatHistory.createNewSession()
             clearAttachedTrace()
-            refreshSessionList()
             loadCurrentSession()
+            treeNavigator.refresh()
             updateModeIndicator()
+            statusLabel.text = "New root dialog created"
+        }
+
+        treeNavigator.onNewBranch = {
+            val activeSession = chatHistory.getActiveSession()
+            val branchTitle = promptForBranchTitle(activeSession.title)
+            if (branchTitle != null) {
+                service.clipboardService.reset()
+                val branch = chatHistory.createBranch(activeSession.id, branchTitle)
+                if (branch != null) {
+                    clearAttachedTrace()
+                    loadCurrentSession()
+                    treeNavigator.refresh()
+                    updateModeIndicator()
+                    statusLabel.text = "Branch created: ${branch.title}"
+                } else {
+                    statusLabel.text = "Failed to create branch"
+                }
+            }
+        }
+
+        treeNavigator.onDeleteSession = { sessionId ->
+            val session = chatHistory.getSessionById(sessionId)
+            if (session != null) {
+                val childCount = chatHistory.getChildCount(sessionId)
+                val msg = if (childCount > 0) {
+                    "Delete \"${session.title}\"?\n$childCount branch(es) will be re-attached to parent."
+                } else {
+                    "Delete \"${session.title}\"?"
+                }
+                val confirm = JOptionPane.showConfirmDialog(
+                    this, msg, "Delete Dialog", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE
+                )
+                if (confirm == JOptionPane.YES_OPTION) {
+                    chatHistory.deleteSession(sessionId)
+                    loadCurrentSession()
+                    treeNavigator.refresh()
+                    statusLabel.text = "Dialog deleted"
+                }
+            }
         }
 
         clearButton.addActionListener {
@@ -258,14 +292,6 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
         attachTraceButton.addActionListener { attachTraceFromClipboard() }
         clearTraceButton.addActionListener { clearAttachedTrace() }
 
-        sessionComboBox.addActionListener {
-            val selected = sessionComboBox.selectedItem as? SessionItem ?: return@addActionListener
-            if (selected.id != chatHistory.getActiveSession().id) {
-                chatHistory.setActiveSession(selected.id)
-                loadCurrentSession()
-            }
-        }
-
         modeComboBox.addActionListener {
             val selected = modeComboBox.selectedItem as? ModeItem ?: return@addActionListener
             val newMode = InteractionMode.valueOf(selected.id)
@@ -283,6 +309,21 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
                 }
             }
         })
+    }
+
+    // ==================== Branch Title Dialog ====================
+
+    private fun promptForBranchTitle(parentTitle: String): String? {
+        val defaultTitle = "Branch: ${parentTitle.take(25)}"
+        return JOptionPane.showInputDialog(
+            this,
+            "Name for the new branch:",
+            "New Branch",
+            JOptionPane.PLAIN_MESSAGE,
+            null,
+            null,
+            defaultTitle
+        ) as? String
     }
 
     // ==================== Mode Switching ====================
@@ -325,15 +366,27 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
             }
             InteractionMode.CLIPBOARD -> {
                 val cs = service.clipboardService
-                if (cs.isWaitingForResponse()) {
-                    val phase = cs.getCurrentPhase()
-                    modeIndicator.text = if (phase == ClipboardPhase.PLANNING) "\u23F3 Paste planning response" else "\u23F3 Paste chat response"
-                    modeIndicator.isVisible = true
-                    sendButton.text = "Paste Response"
-                } else {
-                    modeIndicator.text = "\uD83D\uDCCB"
-                    modeIndicator.isVisible = true
-                    sendButton.text = "Generate JSON"
+                when {
+                    cs.isWaitingForResponse() -> {
+                        val phase = cs.getCurrentPhase()
+                        modeIndicator.text = when (phase) {
+                            ClipboardPhase.PLANNING -> "\u23F3 Paste LLM response (planning)"
+                            ClipboardPhase.CHAT -> "\u23F3 Paste LLM response (chat)"
+                            else -> "\u23F3 Paste LLM response"
+                        }
+                        modeIndicator.isVisible = true
+                        sendButton.text = "Paste Response"
+                    }
+                    cs.hasActiveSession() -> {
+                        modeIndicator.text = "\uD83D\uDCCB Session active — continue or paste"
+                        modeIndicator.isVisible = true
+                        sendButton.text = "Send / Paste"
+                    }
+                    else -> {
+                        modeIndicator.text = "\uD83D\uDCCB"
+                        modeIndicator.isVisible = true
+                        sendButton.text = "Generate JSON"
+                    }
                 }
                 dryRunCheckbox.isVisible = false
             }
@@ -360,7 +413,6 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
             attachedTrace = content
             updateTraceIndicator()
 
-            // Показываем preview в чате
             val preview = content.lines().take(5).joinToString("\n")
             val totalLines = content.lines().size
             val suffix = if (totalLines > 5) "\n   ... ($totalLines lines total)" else ""
@@ -401,7 +453,6 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
         val userInput = inputArea.text.trim()
         if (userInput.isBlank()) return
 
-        // Забираем trace, чтобы прокинуть в запрос
         val trace = attachedTrace
         clearAttachedTrace()
 
@@ -418,13 +469,11 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
         val isDryRun = dryRunCheckbox.isSelected
         val session = chatHistory.getActiveSession()
 
-        // Показываем в чате
         appendToChat("\n\uD83D\uDC64 You:\n$userMessage\n")
         if (!trace.isNullOrBlank()) {
             appendToChat("\uD83D\uDCCE [trace attached: ${trace.lines().size} lines]\n")
         }
 
-        // В задачу включаем trace
         val fullTask = buildTaskWithTrace(userMessage, trace)
         session.addMessage(MessageRole.USER, fullTask)
         inputArea.text = ""
@@ -453,60 +502,83 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     // --- Clipboard Mode ---
 
+    /**
+     * Clipboard mode has 3 states:
+     * 1. Waiting for paste → handlePastedResponse (process LLM output)
+     * 2. Active session, not waiting → continueDialog (user sends follow-up)
+     * 3. No session → startTask (fresh start)
+     */
     private fun sendClipboardMessage(userInput: String, trace: String? = null) {
         val cs = service.clipboardService
         val session = chatHistory.getActiveSession()
         inputArea.text = ""
 
-        if (cs.isWaitingForResponse()) {
-            // Paste response phase — trace не нужен тут
-            session.addMessage(MessageRole.USER, "[Pasted LLM response]")
-            appendToChat("\n\uD83D\uDCE5 Pasted LLM response (${userInput.length} chars)\n")
-            setInputEnabled(false); statusLabel.text = "Processing response..."
+        when {
+            // State 1: Waiting for LLM response paste
+            cs.isWaitingForResponse() -> {
+                session.addMessage(MessageRole.USER, "[Pasted LLM response]")
+                appendToChat("\n\uD83D\uDCE5 Pasted LLM response (${userInput.length} chars)\n")
+                setInputEnabled(false); statusLabel.text = "Processing response..."
 
-            ProgressManager.getInstance().run(object : Task.Backgroundable(project, "MaxVibes: Processing response...", true) {
-                override fun run(indicator: ProgressIndicator) {
-                    service.notificationService.setProgressIndicator(indicator)
-                    runBlocking {
-                        val result = cs.handlePastedResponse(userInput)
-                        ApplicationManager.getApplication().invokeLater { handleClipboardResult(result, session) }
-                    }
+                runClipboardBackground("MaxVibes: Processing response...") {
+                    cs.handlePastedResponse(userInput)
                 }
-                override fun onCancel() {
-                    ApplicationManager.getApplication().invokeLater {
-                        cs.reset()
-                        appendToChat("\n\u26A0\uFE0F Cancelled. Clipboard session reset.\n")
-                        setInputEnabled(true); updateModeIndicator()
-                    }
-                }
-            })
-        } else {
-            // New task phase — включаем trace
-            appendToChat("\n\uD83D\uDC64 You:\n$userInput\n")
-            if (!trace.isNullOrBlank()) {
-                appendToChat("\uD83D\uDCCE [trace attached: ${trace.lines().size} lines]\n")
             }
-            session.addMessage(MessageRole.USER, userInput)
-            setInputEnabled(false); statusLabel.text = "Generating JSON..."
 
-            ProgressManager.getInstance().run(object : Task.Backgroundable(project, "MaxVibes: Generating request...", true) {
-                override fun run(indicator: ProgressIndicator) {
-                    service.notificationService.setProgressIndicator(indicator)
-                    runBlocking {
-                        val historyDTOs = session.messages.dropLast(1).map { it.toChatMessageDTO() }
-                        val result = cs.startTask(userInput, historyDTOs, attachedContext = trace)
-                        ApplicationManager.getApplication().invokeLater { handleClipboardResult(result, session) }
-                    }
+            // State 2: Active session, user continues dialog
+            cs.hasActiveSession() -> {
+                appendToChat("\n\uD83D\uDC64 You:\n$userInput\n")
+                if (!trace.isNullOrBlank()) {
+                    appendToChat("\uD83D\uDCCE [trace attached: ${trace.lines().size} lines]\n")
                 }
-                override fun onCancel() {
-                    ApplicationManager.getApplication().invokeLater {
-                        cs.reset()
-                        appendToChat("\n\u26A0\uFE0F Cancelled\n")
-                        setInputEnabled(true); updateModeIndicator()
-                    }
+                session.addMessage(MessageRole.USER, userInput)
+                setInputEnabled(false); statusLabel.text = "Continuing dialog..."
+
+                runClipboardBackground("MaxVibes: Generating follow-up...") {
+                    cs.continueDialog(userInput, attachedContext = trace)
                 }
-            })
+            }
+
+            // State 3: No session — new task
+            else -> {
+                appendToChat("\n\uD83D\uDC64 You:\n$userInput\n")
+                if (!trace.isNullOrBlank()) {
+                    appendToChat("\uD83D\uDCCE [trace attached: ${trace.lines().size} lines]\n")
+                }
+                session.addMessage(MessageRole.USER, userInput)
+                setInputEnabled(false); statusLabel.text = "Generating JSON..."
+
+                runClipboardBackground("MaxVibes: Generating request...") {
+                    val historyDTOs = session.messages.dropLast(1).map { it.toChatMessageDTO() }
+                    cs.startTask(userInput, historyDTOs, attachedContext = trace)
+                }
+            }
         }
+    }
+
+    /** Helper to run clipboard operations in background */
+    private fun runClipboardBackground(
+        title: String,
+        action: suspend () -> ClipboardStepResult
+    ) {
+        val session = chatHistory.getActiveSession()
+
+        ProgressManager.getInstance().run(object : Task.Backgroundable(project, title, true) {
+            override fun run(indicator: ProgressIndicator) {
+                service.notificationService.setProgressIndicator(indicator)
+                runBlocking {
+                    val result = action()
+                    ApplicationManager.getApplication().invokeLater { handleClipboardResult(result, session) }
+                }
+            }
+            override fun onCancel() {
+                ApplicationManager.getApplication().invokeLater {
+                    service.clipboardService.reset()
+                    appendToChat("\n\u26A0\uFE0F Cancelled. Clipboard session reset.\n")
+                    setInputEnabled(true); updateModeIndicator()
+                }
+            }
+        })
     }
 
     // --- Cheap API Mode ---
@@ -515,7 +587,6 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
         val isDryRun = dryRunCheckbox.isSelected
         val session = chatHistory.getActiveSession()
 
-        // Показываем в чате
         appendToChat("\n\uD83D\uDC64 You:\n$userMessage\n")
         if (!trace.isNullOrBlank()) {
             appendToChat("\uD83D\uDCCE [trace attached: ${trace.lines().size} lines]\n")
@@ -557,7 +628,7 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
         appendToChat("\u2500".repeat(50) + "\n")
         setInputEnabled(true)
         statusLabel.text = if (result.success) "Ready" else "Completed with errors"
-        refreshSessionList()
+        treeNavigator.refresh()
     }
 
     private fun handleClipboardResult(result: ClipboardStepResult, session: ChatSession) {
@@ -590,8 +661,10 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
                 appendAssistantMessage(text)
                 appendToChat("\u2500".repeat(50) + "\n")
                 setInputEnabled(true); updateModeIndicator()
-                statusLabel.text = if (result.success) "Ready" else "Completed with errors"
-                refreshSessionList()
+                val sessionHint = if (service.clipboardService.hasActiveSession())
+                    " \u2022 Session active, you can continue" else ""
+                statusLabel.text = (if (result.success) "Ready" else "Completed with errors") + sessionHint
+                treeNavigator.refresh()
             }
             is ClipboardStepResult.Error -> {
                 session.addMessage(MessageRole.SYSTEM, "Error: ${result.message}")
@@ -615,25 +688,22 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     // ==================== Session Management ====================
 
-    private fun refreshSessionList() {
-        sessionComboBox.removeAllItems()
-        chatHistory.getSessions().forEach { session ->
-            sessionComboBox.addItem(SessionItem(session.id, session.title, session.updatedAt))
-        }
-        val activeId = chatHistory.getActiveSession().id
-        for (i in 0 until sessionComboBox.itemCount) {
-            if (sessionComboBox.getItemAt(i).id == activeId) { sessionComboBox.selectedIndex = i; break }
-        }
-    }
-
     private fun loadCurrentSession() {
-        refreshSessionList()
         val session = chatHistory.getActiveSession()
         chatArea.text = ""
+        treeNavigator.refresh()
 
         if (session.messages.isEmpty()) {
             showWelcome()
         } else {
+            // Показываем breadcrumb-контекст при загрузке ветки
+            val path = chatHistory.getSessionPath(session.id)
+            if (path.size > 1) {
+                val parentChain = path.dropLast(1).joinToString(" \u203A ") { it.title.take(25) }
+                appendToChat("\u2514 Branch of: $parentChain\n")
+                appendToChat("\u2500".repeat(50) + "\n")
+            }
+
             session.messages.forEach { msg ->
                 when (msg.role) {
                     MessageRole.USER -> appendToChat("\n\uD83D\uDC64 You:\n${msg.content}\n")
@@ -650,25 +720,31 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
             InteractionMode.CLIPBOARD -> "Mode: Clipboard — paste JSON into Claude chat"
             InteractionMode.CHEAP_API -> "Mode: Cheap API — budget-friendly model"
         }
+
+        val session = chatHistory.getActiveSession()
+        val depth = session.depth
+        val branchHint = if (depth > 0) {
+            val parent = chatHistory.getParent(session.id)
+            "\n  \u2514 This is a branch (depth $depth) from: \"${parent?.title ?: "?"}\""
+        } else ""
+
         appendToChat("""
             |  Welcome to MaxVibes!
-            |  $modeHint
+            |  $modeHint$branchHint
             |
             |  Just type your task:
-            |  • "Add a Logger class with debug and error methods"
-            |  • "Create unit tests for UserService"
-            |  • "Fix this error" + 📎 Trace button to attach stacktrace
+            |  \u2022 "Add a Logger class with debug and error methods"
+            |  \u2022 "Create unit tests for UserService"
+            |  \u2022 "Fix this error" + \uD83D\uDCCE Trace button to attach stacktrace
             |
-            |  Shortcuts: Ctrl+Enter send | Ctrl+Shift+V attach trace
+            |  Navigation: use breadcrumbs above or \u25BC for tree view
+            |  Branch: split current dialog into a sub-branch
             |
         """.trimMargin() + "\n")
     }
 
     // ==================== Utilities ====================
 
-    /**
-     * Склеивает задачу с трейсом/логами для отправки в LLM.
-     */
     private fun buildTaskWithTrace(task: String, trace: String?): String {
         if (trace.isNullOrBlank()) return task
         return buildString {
@@ -684,47 +760,29 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
         chatArea.caretPosition = chatArea.document.length
     }
 
-    /** Appends assistant message with markdown cleanup */
     private fun appendAssistantMessage(text: String) {
         appendToChat("\n\uD83E\uDD16 MaxVibes:\n${formatMarkdown(text)}\n")
     }
 
-    /**
-     * Конвертирует markdown в читаемый plain text для JBTextArea.
-     * Обрабатывает: **bold**, *italic*, `code`, заголовки, списки, горизонтальные линии.
-     */
     private fun formatMarkdown(text: String): String {
         return text.lines().joinToString("\n") { line ->
             var l = line
 
-            // Заголовки: ### Title → ═══ TITLE ═══
             val h3 = Regex("^###\\s+(.+)").find(l)
-            if (h3 != null) return@joinToString "  ─── ${h3.groupValues[1].trim()} ───"
+            if (h3 != null) return@joinToString "  \u2500\u2500\u2500 ${h3.groupValues[1].trim()} \u2500\u2500\u2500"
 
             val h2 = Regex("^##\\s+(.+)").find(l)
-            if (h2 != null) return@joinToString "══ ${h2.groupValues[1].trim().uppercase()} ══"
+            if (h2 != null) return@joinToString "\u2550\u2550 ${h2.groupValues[1].trim().uppercase()} \u2550\u2550"
 
             val h1 = Regex("^#\\s+(.+)").find(l)
-            if (h1 != null) return@joinToString "═══ ${h1.groupValues[1].trim().uppercase()} ═══"
+            if (h1 != null) return@joinToString "\u2550\u2550\u2550 ${h1.groupValues[1].trim().uppercase()} \u2550\u2550\u2550"
 
-            // Горизонтальная линия: --- или *** или ___
-            if (l.trim().matches(Regex("^[-*_]{3,}$"))) return@joinToString "─".repeat(40)
+            if (l.trim().matches(Regex("^[-*_]{3,}$"))) return@joinToString "\u2500".repeat(40)
 
-            // Списки: - item → • item, * item → • item
-            l = l.replace(Regex("^(\\s*)[-*]\\s+"), "$1• ")
-
-            // Нумерованные списки оставляем как есть
-
-            // Bold+italic: ***text*** → TEXT
+            l = l.replace(Regex("^(\\s*)[-*]\\s+"), "$1\u2022 ")
             l = l.replace(Regex("\\*{3}(.+?)\\*{3}")) { it.groupValues[1].uppercase() }
-
-            // Bold: **text** → TEXT  (капслок привлекает внимание в plain text)
             l = l.replace(Regex("\\*{2}(.+?)\\*{2}")) { it.groupValues[1].uppercase() }
-
-            // Italic: *text* → text (просто убираем звёздочки)
             l = l.replace(Regex("(?<![*])\\*([^*]+?)\\*(?![*])")) { it.groupValues[1] }
-
-            // Inline code: `code` → [code]
             l = l.replace(Regex("`([^`]+?)`")) { "[${it.groupValues[1]}]" }
 
             l
@@ -737,10 +795,8 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(BorderLayout()) {
         dryRunCheckbox.isEnabled = enabled
         attachTraceButton.isEnabled = enabled
         clearTraceButton.isEnabled = enabled
-        newChatButton.isEnabled = enabled
         clearButton.isEnabled = enabled
         promptsButton.isEnabled = enabled
-        sessionComboBox.isEnabled = enabled
         modeComboBox.isEnabled = enabled
     }
 }
@@ -758,22 +814,6 @@ private fun ChatMessage.toChatMessageDTO(): ChatMessageDTO {
     )
 }
 
-data class SessionItem(val id: String, val title: String, val updatedAt: Long) {
-    override fun toString(): String = title
-}
-
 data class ModeItem(val id: String, val label: String) {
     override fun toString(): String = label
-}
-
-class SessionListRenderer : DefaultListCellRenderer() {
-    private val dateFormat = SimpleDateFormat("MMM d, HH:mm", Locale.getDefault())
-    override fun getListCellRendererComponent(list: JList<*>?, value: Any?, index: Int, isSelected: Boolean, cellHasFocus: Boolean): Component {
-        super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
-        if (value is SessionItem) {
-            val date = dateFormat.format(Date(value.updatedAt))
-            text = "<html><b>${value.title.take(25)}</b> <small style='color:gray'>$date</small></html>"
-        }
-        return this
-    }
 }

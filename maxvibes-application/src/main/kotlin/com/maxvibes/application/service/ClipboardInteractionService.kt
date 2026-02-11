@@ -13,10 +13,21 @@ import com.maxvibes.shared.result.Result
 /**
  * Сервис для clipboard-режима взаимодействия.
  *
- * Multi-step workflow:
- *   1. User sends task → Planning JSON → clipboard
- *   2. User pastes planning response → gather files → Chat JSON → clipboard
- *   3. User pastes chat response → apply modifications
+ * Непрерывный диалог:
+ *   User msg → JSON (с fileTree) → clipboard → paste response →
+ *     ├─ has requestedFiles? → gather files → JSON (с содержимым файлов) → clipboard → paste response → ...
+ *     ├─ has modifications? → apply → show message → session alive, user can continue
+ *     └─ message only? → show message → session alive, user can continue
+ *
+ * Контекст:
+ *   - chatHistory: полная текстовая история (без кода)
+ *   - freshFiles: полное содержимое только свежезапрошенных файлов
+ *   - previouslyGatheredPaths: пути ранее собранных файлов (без содержимого)
+ *   - fileTree: всегда включено
+ *
+ * Единый формат ответа Claude:
+ *   { "message": "...", "requestedFiles": [...], "modifications": [...] }
+ *   Все поля опциональны, но message рекомендуется всегда.
  */
 class ClipboardInteractionService(
     private val contextProvider: ProjectContextPort,
@@ -28,225 +39,490 @@ class ClipboardInteractionService(
     /** Текущее состояние clipboard-сессии */
     private var sessionState: ClipboardSessionState? = null
 
+    /** Ждём ли мы вставки ответа от LLM */
+    private var waitingForPaste: Boolean = false
+
+    // ==================== Public API ====================
+
     /**
-     * Шаг 1: Пользователь ввёл задачу. Генерируем Planning JSON.
-     * @param attachedContext дополнительный контекст (stacktrace, логи, ошибки)
+     * Начинает новый диалог: генерирует первый JSON с fileTree.
      */
     suspend fun startTask(
         task: String,
         history: List<ChatMessageDTO> = emptyList(),
         attachedContext: String? = null
     ): ClipboardStepResult {
-        notificationPort.showProgress("Gathering project context...", 0.1)
+        log("Starting new clipboard task: \"${task.take(60)}...\"")
 
+        notificationPort.showProgress("Gathering project context...", 0.1)
         val projectContextResult = contextProvider.getProjectContext()
         if (projectContextResult is Result.Failure) {
-            return ClipboardStepResult.Error("Failed to get project context: ${projectContextResult.error.message}")
+            return error("Failed to get project context: ${projectContextResult.error.message}")
         }
         val projectContext = (projectContextResult as Result.Success).value
         val prompts = promptPort?.getPrompts() ?: PromptTemplates.EMPTY
 
+        log("Project: ${projectContext.name}, files in tree: ${projectContext.fileTree.totalFiles}")
+
         sessionState = ClipboardSessionState(
             task = task,
             projectContext = projectContext,
-            history = history,
+            dialogHistory = history.toMutableList(),
             prompts = prompts,
-            currentPhase = ClipboardPhase.PLANNING,
+            allGatheredFiles = mutableMapOf(),
             attachedContext = attachedContext
         )
 
-        val contextMap = mutableMapOf("fileTree" to projectContext.fileTree.toCompactString(maxDepth = 4))
-        if (!attachedContext.isNullOrBlank()) {
-            contextMap["errorTrace"] = attachedContext
-        }
+        // Добавляем user message в историю
+        addToHistory(ChatRole.USER, task)
 
-        val request = ClipboardRequest(
-            phase = ClipboardPhase.PLANNING,
-            task = task,
-            projectName = projectContext.name,
-            context = contextMap,
-            systemInstruction = buildPlanningInstruction(projectContext, prompts)
-        )
-
-        val copied = clipboardPort.copyRequestToClipboard(request)
-        val status = if (copied) "copied to clipboard" else "generated"
-
-        return ClipboardStepResult.WaitingForResponse(
-            phase = ClipboardPhase.PLANNING,
-            userMessage = "📋 Planning JSON $status\n\nPaste this into Claude/ChatGPT, then paste the response back here.",
-            jsonRequest = request
+        return generateAndCopyJson(
+            freshFiles = emptyMap(),
+            isFirstMessage = true
         )
     }
 
     /**
-     * Шаг 2/3: Пользователь вставил ответ от LLM.
+     * Продолжает существующий диалог: генерирует JSON с новым сообщением.
+     * Используется когда пользователь хочет продолжить разговор (не paste).
+     */
+    suspend fun continueDialog(
+        message: String,
+        attachedContext: String? = null
+    ): ClipboardStepResult {
+        val state = sessionState
+            ?: return error("No active clipboard session. Start a new task first.")
+
+        log("Continuing dialog: \"${message.take(60)}...\"")
+
+        // Обновляем attached context если есть
+        if (!attachedContext.isNullOrBlank()) {
+            sessionState = state.copy(attachedContext = attachedContext)
+        }
+
+        addToHistory(ChatRole.USER, message)
+
+        return generateAndCopyJson(
+            freshFiles = emptyMap(),
+            isFirstMessage = false
+        )
+    }
+
+    /**
+     * Обрабатывает вставленный ответ от LLM.
+     * Единый обработчик — сам определяет что делать по содержимому ответа.
      */
     suspend fun handlePastedResponse(rawText: String): ClipboardStepResult {
         val state = sessionState
-            ?: return ClipboardStepResult.Error("No active clipboard session. Start a new task first.")
+            ?: return error("No active clipboard session. Start a new task first.")
+
+        log("Parsing pasted response (${rawText.length} chars)...")
+
+        waitingForPaste = false  // Response received, no longer waiting
 
         val response = clipboardPort.parseResponse(rawText)
-            ?: return ClipboardStepResult.Error(
-                "Failed to parse LLM response. Make sure you pasted the complete JSON response.\n" +
-                        "Expected: {\"requestedFiles\": [...]} or {\"message\": \"...\", \"modifications\": [...]}"
-            )
-
-        return when (state.currentPhase) {
-            ClipboardPhase.PLANNING -> handlePlanningResponse(response, state)
-            ClipboardPhase.CHAT -> handleChatResponse(response, state)
-        }
-    }
-
-    private suspend fun handlePlanningResponse(
-        response: ClipboardResponse,
-        state: ClipboardSessionState
-    ): ClipboardStepResult {
-        val requestedFiles = response.requestedFiles
-        if (requestedFiles.isEmpty()) {
-            return ClipboardStepResult.Error("LLM didn't request any files. Try rephrasing the task.")
-        }
-
-        notificationPort.showProgress("Gathering ${requestedFiles.size} files...", 0.4)
-
-        val gatherResult = contextProvider.gatherFiles(requestedFiles)
-        if (gatherResult is Result.Failure) {
-            return ClipboardStepResult.Error("Failed to gather files: ${gatherResult.error.message}")
-        }
-        val gatheredContext = (gatherResult as Result.Success).value
-
-        // Переходим в CHAT фазу
-        sessionState = state.copy(
-            currentPhase = ClipboardPhase.CHAT,
-            gatheredFiles = gatheredContext.files
-        )
-
-        val historyEntries = state.history.map { msg ->
-            ClipboardHistoryEntry(
-                role = when (msg.role) {
-                    ChatRole.USER -> "user"
-                    ChatRole.ASSISTANT -> "assistant"
-                    ChatRole.SYSTEM -> "system"
-                },
-                content = msg.content
+        if (response == null) {
+            log("ERROR: Failed to parse response")
+            return error(
+                "Failed to parse LLM response.\n\n" +
+                        "Expected JSON format:\n" +
+                        "{\n" +
+                        "  \"message\": \"explanation text\",\n" +
+                        "  \"requestedFiles\": [\"path/file.kt\"],  // optional\n" +
+                        "  \"modifications\": [...]                  // optional\n" +
+                        "}\n\n" +
+                        "Tip: make sure you pasted the complete response."
             )
         }
 
-        val chatContext = gatheredContext.files.toMutableMap()
-        if (!state.attachedContext.isNullOrBlank()) {
-            chatContext["errorTrace"] = state.attachedContext
+        log("Parsed: message=${response.message.take(50)}..., " +
+                "requestedFiles=${response.requestedFiles.size}, " +
+                "modifications=${response.modifications.size}, " +
+                "reasoning=${response.reasoning?.take(40) ?: "none"}")
+
+        // Добавляем ответ ассистента в историю (только message, без кода)
+        if (response.message.isNotBlank()) {
+            addToHistory(ChatRole.ASSISTANT, response.message)
         }
 
-        val request = ClipboardRequest(
-            phase = ClipboardPhase.CHAT,
-            task = state.task,
-            projectName = state.projectContext.name,
-            context = chatContext,
-            chatHistory = historyEntries,
-            systemInstruction = buildChatInstruction(state.projectContext, state.prompts)
-        )
-
-        val copied = clipboardPort.copyRequestToClipboard(request)
-        val status = if (copied) "copied to clipboard" else "generated"
-
-        // Формируем информативное сообщение с reasoning и списком файлов
-        val planningInfo = buildString {
-            if (response.reasoning?.isNotBlank() == true) {
-                appendLine("💭 ${response.reasoning}")
-                appendLine()
-            }
-            appendLine("📁 Files to analyze (${requestedFiles.size}):")
-            requestedFiles.forEach { file ->
-                appendLine("   • ${file.substringAfterLast('/')}")
-            }
-            appendLine()
-            appendLine("📋 Chat JSON with ${gatheredContext.files.size} files $status (~${gatheredContext.totalTokensEstimate} tokens)")
-            appendLine()
-            append("Paste this into Claude/ChatGPT, then paste the response back here.")
-        }
-
-        return ClipboardStepResult.WaitingForResponse(
-            phase = ClipboardPhase.CHAT,
-            userMessage = planningInfo,
-            jsonRequest = request
-        )
+        return processUnifiedResponse(response)
     }
 
-    private suspend fun handleChatResponse(
-        response: ClipboardResponse,
-        state: ClipboardSessionState
-    ): ClipboardStepResult {
-        val modifications = response.modifications.mapNotNull { convertModification(it) }
+    fun isWaitingForResponse(): Boolean = waitingForPaste
+    fun getCurrentPhase(): ClipboardPhase? {
+        val state = sessionState ?: return null
+        return if (state.allGatheredFiles.isEmpty()) ClipboardPhase.PLANNING else ClipboardPhase.CHAT
+    }
+    fun hasActiveSession(): Boolean = sessionState != null
+    fun reset() {
+        log("Session reset")
+        sessionState = null
+        waitingForPaste = false
+    }
 
-        val modResults = if (modifications.isNotEmpty()) {
-            notificationPort.showProgress("Applying ${modifications.size} changes...", 0.8)
-            codeRepository.applyModifications(modifications)
+    // ==================== Core Logic ====================
+
+    /**
+     * Обрабатывает единый ответ — определяет действия по содержимому.
+     */
+    private suspend fun processUnifiedResponse(response: ClipboardResponse): ClipboardStepResult {
+        val state = sessionState ?: return error("No active session")
+
+        val hasFiles = response.requestedFiles.isNotEmpty()
+        val hasMods = response.modifications.isNotEmpty()
+        val hasMessage = response.message.isNotBlank()
+
+        log("Processing: hasFiles=$hasFiles, hasMods=$hasMods, hasMessage=$hasMessage")
+
+        // --- Шаг 1: Применяем модификации (если есть) ---
+        val modResults = if (hasMods) {
+            applyModifications(response.modifications)
         } else {
             emptyList()
         }
 
+        // --- Шаг 2: Собираем запрошенные файлы (если есть) ---
+        if (hasFiles) {
+            val freshFiles = gatherRequestedFiles(response.requestedFiles)
+            if (freshFiles == null) {
+                // Ошибка сбора — но всё равно показываем message и mods
+                return buildCompletedResult(response, modResults,
+                    extraMessage = "\n\n⚠️ Failed to gather some requested files.")
+            }
+
+            // Если были и моды и файлы — показываем результат модов + новый JSON
+            val modSummary = if (modResults.isNotEmpty()) {
+                buildModSummary(modResults) + "\n\n"
+            } else ""
+
+            // Генерируем следующий JSON с новыми файлами
+            return generateAndCopyJson(
+                freshFiles = freshFiles,
+                isFirstMessage = false,
+                prefixMessage = modSummary + buildFileGatherMessage(response, freshFiles)
+            )
+        }
+
+        // --- Шаг 3: Только message и/или mods — показываем результат ---
+        // Сессия остаётся активной для продолжения диалога!
+        return buildCompletedResult(response, modResults)
+    }
+
+    /**
+     * Генерирует JSON-запрос и копирует в буфер.
+     */
+    private fun generateAndCopyJson(
+        freshFiles: Map<String, String>,
+        isFirstMessage: Boolean,
+        prefixMessage: String? = null
+    ): ClipboardStepResult {
+        val state = sessionState ?: return error("No active session")
+
+        val previousPaths = state.allGatheredFiles.keys.toList()
+
+        log("Generating JSON: freshFiles=${freshFiles.size}, previousPaths=${previousPaths.size}, " +
+                "historySize=${state.dialogHistory.size}")
+
+        val request = ClipboardRequest(
+            phase = if (state.allGatheredFiles.isEmpty() && freshFiles.isEmpty())
+                ClipboardPhase.PLANNING else ClipboardPhase.CHAT,
+            task = state.task,
+            projectName = state.projectContext.name,
+            systemInstruction = buildSystemInstruction(state),
+            fileTree = state.projectContext.fileTree.toCompactString(maxDepth = 4),
+            freshFiles = freshFiles,
+            previouslyGatheredPaths = previousPaths,
+            chatHistory = state.dialogHistory.map { msg ->
+                ClipboardHistoryEntry(
+                    role = when (msg.role) {
+                        ChatRole.USER -> "user"
+                        ChatRole.ASSISTANT -> "assistant"
+                        ChatRole.SYSTEM -> "system"
+                    },
+                    content = msg.content
+                )
+            },
+            attachedContext = state.attachedContext
+        )
+
+        val copied = clipboardPort.copyRequestToClipboard(request)
+        val copyStatus = if (copied) "copied to clipboard ✓" else "generated (copy manually)"
+
+        val totalTokens = estimateTokens(request)
+        val phase = request.phase.name.lowercase()
+
+        val userMessage = buildString {
+            if (!prefixMessage.isNullOrBlank()) {
+                appendLine(prefixMessage)
+                appendLine()
+            }
+
+            appendLine("📋 JSON $copyStatus")
+            appendLine("   Phase: $phase | History: ${state.dialogHistory.size} msgs | ~$totalTokens tokens")
+
+            if (freshFiles.isNotEmpty()) {
+                appendLine("   📁 Fresh files (${freshFiles.size}):")
+                freshFiles.keys.forEach { path ->
+                    appendLine("      • ${path.substringAfterLast('/')}")
+                }
+            }
+            if (previousPaths.isNotEmpty()) {
+                appendLine("   📂 Previously gathered: ${previousPaths.size} file(s)")
+            }
+
+            appendLine()
+            append("Paste this into Claude/ChatGPT, then paste the response back here.")
+        }
+
+        log("JSON ready: $copyStatus, ~$totalTokens tokens")
+
+        waitingForPaste = true
+
+        return ClipboardStepResult.WaitingForResponse(
+            phase = request.phase,
+            userMessage = userMessage,
+            jsonRequest = request
+        )
+    }
+
+    // ==================== File Gathering ====================
+
+    private suspend fun gatherRequestedFiles(
+        requestedPaths: List<String>
+    ): Map<String, String>? {
+        val state = sessionState ?: return null
+
+        // Фильтруем уже собранные файлы
+        val newPaths = requestedPaths.filter { it !in state.allGatheredFiles }
+        val alreadyGathered = requestedPaths.filter { it in state.allGatheredFiles }
+
+        if (alreadyGathered.isNotEmpty()) {
+            log("Already gathered (skipping): ${alreadyGathered.size} files")
+        }
+
+        if (newPaths.isEmpty()) {
+            log("All requested files already gathered, re-sending existing")
+            // Все файлы уже были — отправляем из кэша
+            return requestedPaths.associateWith { state.allGatheredFiles[it] ?: "" }
+        }
+
+        log("Gathering ${newPaths.size} new files...")
+        notificationPort.showProgress("Gathering ${newPaths.size} files...", 0.4)
+
+        val gatherResult = contextProvider.gatherFiles(newPaths)
+        if (gatherResult is Result.Failure) {
+            log("ERROR: Failed to gather files: ${gatherResult.error.message}")
+            return null
+        }
+        val gathered = (gatherResult as Result.Success).value
+
+        // Сохраняем в кэш
+        state.allGatheredFiles.putAll(gathered.files)
+
+        log("Gathered ${gathered.files.size} files, total cached: ${state.allGatheredFiles.size}")
+
+        // Возвращаем только свежезапрошенные (полное содержимое)
+        return gathered.files
+    }
+
+    // ==================== Modifications ====================
+
+    private suspend fun applyModifications(
+        clipboardMods: List<ClipboardModification>
+    ): List<ModificationResult> {
+        val modifications = clipboardMods.mapNotNull { convertModification(it) }
+        if (modifications.isEmpty()) return emptyList()
+
+        log("Applying ${modifications.size} modifications...")
+        notificationPort.showProgress("Applying ${modifications.size} changes...", 0.8)
+
+        val results = codeRepository.applyModifications(modifications)
+
+        val successCount = results.count { it is ModificationResult.Success }
+        val failCount = results.size - successCount
+
+        log("Modifications: $successCount success, $failCount failed")
+
+        if (failCount > 0) {
+            notificationPort.showWarning("Applied $successCount changes, $failCount failed")
+        } else if (successCount > 0) {
+            notificationPort.showSuccess("Applied $successCount changes")
+        }
+
+        return results
+    }
+
+    // ==================== Result Building ====================
+
+    private fun buildCompletedResult(
+        response: ClipboardResponse,
+        modResults: List<ModificationResult>,
+        extraMessage: String = ""
+    ): ClipboardStepResult {
         val successCount = modResults.count { it is ModificationResult.Success }
         val failCount = modResults.size - successCount
 
-        // Сессия завершена
-        sessionState = null
-
-        if (modResults.isNotEmpty()) {
-            if (failCount > 0) notificationPort.showWarning("Applied $successCount changes, $failCount failed")
-            else notificationPort.showSuccess("Applied $successCount changes")
-        } else {
-            notificationPort.showSuccess("Done")
+        val message = buildString {
+            if (response.message.isNotBlank()) {
+                append(response.message)
+            }
+            if (modResults.isNotEmpty()) {
+                if (isNotBlank()) appendLine()
+                append(buildModSummary(modResults))
+            }
+            if (extraMessage.isNotBlank()) {
+                append(extraMessage)
+            }
+            if (isBlank()) {
+                append("Done (no message from LLM).")
+            }
         }
 
+        // Сессия НЕ сбрасывается — пользователь может продолжить диалог!
+        if (modResults.isNotEmpty()) {
+            notificationPort.showSuccess("Done. Session active — you can continue the dialog.")
+        }
+
+        log("Completed: message=${response.message.take(40)}..., mods=$successCount ok/$failCount fail. Session stays active.")
+
         return ClipboardStepResult.Completed(
-            message = response.message,
+            message = message,
             modifications = modResults,
             success = failCount == 0
         )
     }
 
-    fun isWaitingForResponse(): Boolean = sessionState != null
-    fun getCurrentPhase(): ClipboardPhase? = sessionState?.currentPhase
-    fun reset() { sessionState = null }
-
-    // ==================== Helpers ====================
-
-    private fun buildPlanningInstruction(projectContext: ProjectContext, prompts: PromptTemplates): String {
-        return prompts.planningSystem.ifBlank {
-            "You are an expert software architect. Analyze the task and project file tree.\n" +
-                    "Respond ONLY with JSON: {\"requestedFiles\": [\"path/to/file.kt\", ...], \"reasoning\": \"why these files\"}\n" +
-                    "Project: ${projectContext.name}, Language: ${projectContext.techStack.language}"
+    private fun buildModSummary(modResults: List<ModificationResult>): String = buildString {
+        val ok = modResults.filterIsInstance<ModificationResult.Success>()
+        val fail = modResults.filterIsInstance<ModificationResult.Failure>()
+        appendLine("\n───────────────")
+        if (ok.isNotEmpty()) {
+            appendLine("✅ Applied ${ok.size} change(s):")
+            ok.forEach { appendLine("   • ${it.affectedPath.value.substringAfterLast('/')}") }
+        }
+        if (fail.isNotEmpty()) {
+            appendLine("❌ Failed ${fail.size} change(s):")
+            fail.forEach { appendLine("   • ${it.error.message}") }
         }
     }
 
-    private fun buildChatInstruction(projectContext: ProjectContext, prompts: PromptTemplates): String {
-        return prompts.chatSystem.ifBlank {
-            """You are MaxVibes AI coding assistant. Project: ${projectContext.name}, Language: ${projectContext.techStack.language}.
+    private fun buildFileGatherMessage(
+        response: ClipboardResponse,
+        freshFiles: Map<String, String>
+    ): String = buildString {
+        if (response.reasoning?.isNotBlank() == true) {
+            appendLine("💭 ${response.reasoning}")
+            appendLine()
+        }
+        appendLine("📁 Gathered ${freshFiles.size} file(s):")
+        freshFiles.keys.forEach { path ->
+            appendLine("   • ${path.substringAfterLast('/')}")
+        }
+    }
 
-CRITICAL: Respond with a SINGLE JSON object. Do NOT write any text outside the JSON.
-Put ALL your explanation, reasoning, and description of changes into the "message" field.
-The "message" field should be detailed — explain what you're creating, why, and how it works.
+    // ==================== System Instructions ====================
 
-Response format:
-```json
+    private fun buildSystemInstruction(state: ClipboardSessionState): String {
+        val isFirstPhase = state.allGatheredFiles.isEmpty()
+
+        return if (isFirstPhase) {
+            buildPlanningInstruction(state)
+        } else {
+            buildChatInstruction(state)
+        }
+    }
+
+    private fun buildPlanningInstruction(state: ClipboardSessionState): String {
+        val custom = state.prompts.planningSystem
+        if (custom.isNotBlank()) return custom
+
+        return """⚠️ CRITICAL: This is a MaxVibes clipboard protocol message. You MUST respond with ONLY a JSON object as plain text in the chat.
+DO NOT use computer tools. DO NOT create files. DO NOT use bash. DO NOT use artifacts.
+DO NOT write code to disk. Your ENTIRE response must be a single JSON object — nothing else.
+
+You are an expert software architect assistant in a clipboard-based dialog through MaxVibes IDE plugin.
+
+TASK: Analyze the task and project file tree, then decide what you need.
+
+Your response must be EXACTLY this JSON format (and nothing else):
 {
-    "message": "Your full detailed explanation here. Describe what files you're creating/modifying, what features you're adding, how the code works, any important notes. This text will be shown to the user in the chat window, so make it informative and helpful.",
+    "message": "Your thoughts, questions, or discussion about the task",
+    "requestedFiles": ["path/to/file.kt", ...],
+    "reasoning": "Why you need these specific files"
+}
+
+Rules:
+- "message" is REQUIRED — always explain your thinking
+- "requestedFiles" — list files you need to see. Leave empty [] if you just want to discuss.
+- If the task is just a question/discussion (no coding needed), set "requestedFiles": [] and put your answer in "message"
+- DO NOT wrap the JSON in markdown code blocks. Just output raw JSON.
+- Project: ${state.projectContext.name}, Language: ${state.projectContext.techStack.language}"""
+    }
+
+    private fun buildChatInstruction(state: ClipboardSessionState): String {
+        val custom = state.prompts.chatSystem
+        if (custom.isNotBlank()) return custom
+
+        return """⚠️ CRITICAL: This is a MaxVibes clipboard protocol message. You MUST respond with ONLY a JSON object as plain text in the chat.
+DO NOT use computer tools. DO NOT create files. DO NOT use bash. DO NOT use artifacts.
+DO NOT write code to disk. ALL code goes into the "modifications" array inside the JSON.
+Your ENTIRE response must be a single JSON object — nothing else.
+
+You are MaxVibes AI coding assistant in a continuous clipboard-based dialog.
+Project: ${state.projectContext.name}, Language: ${state.projectContext.techStack.language}.
+
+Your response must be EXACTLY this JSON format (and nothing else):
+{
+    "message": "Your detailed explanation, discussion, or answer",
+    "requestedFiles": ["path/to/file.kt"],
     "modifications": [
         {
             "type": "CREATE_FILE",
             "path": "src/main/kotlin/com/example/File.kt",
-            "content": "full file content with package, imports, everything"
+            "content": "full file content"
         }
     ]
 }
-```
 
-Rules:
-- "type": "CREATE_FILE" for new files, "REPLACE_FILE" for modifying existing files
-- "content" must contain complete, compilable code with package declarations and imports
-- "message" must contain your full explanation — do NOT leave it empty
-- If no code changes needed, set "modifications": [] and put your answer in "message"
-- Do NOT write anything outside the JSON block"""
-        }
+ALL FIELDS ARE OPTIONAL except "message" which is always recommended:
+- "message" — your explanation or discussion. Always include this.
+- "requestedFiles" — if you need to see more files before you can code. Will trigger file gathering.
+- "modifications" — code changes to apply. Types: CREATE_FILE, REPLACE_FILE, DELETE_FILE.
+  - "content" must be complete, compilable code with package/imports.
+
+IMPORTANT:
+- You can combine any fields: discuss + request files, discuss + modify code, or all three.
+- If no coding needed (planning, discussion, questions), just use "message" with empty arrays.
+- Previously gathered files are listed by path — you already saw their content in earlier messages.
+- To request a file you saw before again, include it in "requestedFiles" and it will be re-sent.
+- DO NOT wrap the JSON in markdown code blocks. Just output raw JSON.
+- ALL code MUST go in modifications[].content — never use tools or file creation."""
+    }
+
+    // ==================== Helpers ====================
+
+    private fun addToHistory(role: ChatRole, content: String) {
+        val state = sessionState ?: return
+        state.dialogHistory.add(ChatMessageDTO(role = role, content = content))
+    }
+
+    private fun estimateTokens(request: ClipboardRequest): Int {
+        val textSize = request.systemInstruction.length +
+                request.fileTree.length +
+                request.freshFiles.values.sumOf { it.length } +
+                request.chatHistory.sumOf { it.content.length } +
+                (request.attachedContext?.length ?: 0)
+        return textSize / 4  // rough token estimate
+    }
+
+    private fun log(message: String) {
+        // Verbose logging — будет видно в IDE и в нотификациях
+        println("[MaxVibes Clipboard] $message")
+    }
+
+    private fun error(message: String): ClipboardStepResult.Error {
+        log("ERROR: $message")
+        return ClipboardStepResult.Error(message)
     }
 
     private fun convertModification(mod: ClipboardModification): Modification? {
@@ -290,9 +566,9 @@ sealed class ClipboardStepResult {
 private data class ClipboardSessionState(
     val task: String,
     val projectContext: ProjectContext,
-    val history: List<ChatMessageDTO>,
+    val dialogHistory: MutableList<ChatMessageDTO>,
     val prompts: PromptTemplates,
-    val currentPhase: ClipboardPhase,
-    val gatheredFiles: Map<String, String> = emptyMap(),
+    /** Все когда-либо собранные файлы за эту сессию (path → content) */
+    val allGatheredFiles: MutableMap<String, String>,
     val attachedContext: String? = null
 )

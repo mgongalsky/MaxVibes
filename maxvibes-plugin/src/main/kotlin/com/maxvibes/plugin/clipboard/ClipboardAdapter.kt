@@ -11,6 +11,14 @@ import java.awt.datatransfer.StringSelection
  *
  * Сериализует запросы в JSON и копирует в системный буфер.
  * Парсит ответы из разных форматов (raw JSON, ```json```, mixed text+JSON).
+ *
+ * Единый формат ответа:
+ * {
+ *   "message": "text for user",         // recommended
+ *   "requestedFiles": ["path/file.kt"], // optional
+ *   "reasoning": "why these files",     // optional
+ *   "modifications": [...]              // optional
+ * }
  */
 class ClipboardAdapter : ClipboardPort {
 
@@ -32,6 +40,7 @@ class ClipboardAdapter : ClipboardPort {
             Toolkit.getDefaultToolkit().systemClipboard.setContents(selection, null)
             true
         } catch (e: Exception) {
+            println("[MaxVibes Clipboard] Failed to copy to clipboard: ${e.message}")
             false
         }
     }
@@ -55,13 +64,26 @@ class ClipboardAdapter : ClipboardPort {
         // Attempt 4: JSON внутри текста
         val embedded = findEmbeddedJson(text)
 
-        val jsonText = jsonBlock ?: codeBlock ?: rawJson ?: embedded ?: return null
+        val jsonText = jsonBlock ?: codeBlock ?: rawJson ?: embedded
+
+        if (jsonText == null) {
+            // Attempt 5: Весь текст — это просто сообщение (без JSON)
+            // Это валидный случай для чистого диалога
+            if (text.isNotBlank() && !text.contains("{")) {
+                println("[MaxVibes Clipboard] No JSON found, treating as plain message")
+                return ClipboardResponse(message = text)
+            }
+            println("[MaxVibes Clipboard] Failed to find JSON in response")
+            return null
+        }
 
         // Собираем текст ДО и ПОСЛЕ JSON-блока — это объяснение от Claude
         val surroundingText = extractSurroundingText(text, jsonBlockMatch ?: codeBlockMatch)
 
         return try {
-            val response = parseJsonResponse(jsonText)
+            val response = parseUnifiedResponse(jsonText)
+            println("[MaxVibes Clipboard] Parsed: message=${response.message.take(50)}, " +
+                    "files=${response.requestedFiles.size}, mods=${response.modifications.size}")
 
             // Если message пустой в JSON, но Claude написал текст вокруг — используем его
             if (response.message.isBlank() && surroundingText.isNotBlank()) {
@@ -70,7 +92,15 @@ class ClipboardAdapter : ClipboardPort {
                 response
             }
         } catch (e: Exception) {
-            try { embedded?.let { parseJsonResponse(it) } } catch (_: Exception) { null }
+            println("[MaxVibes Clipboard] JSON parse error: ${e.message}")
+            try {
+                embedded?.let { parseUnifiedResponse(it) }
+            } catch (_: Exception) {
+                // Последняя попытка — весь текст как message
+                if (surroundingText.isNotBlank()) {
+                    ClipboardResponse(message = surroundingText)
+                } else null
+            }
         }
     }
 
@@ -88,7 +118,6 @@ class ClipboardAdapter : ClipboardPort {
             if (before.isNotBlank() && after.isNotBlank()) append("\n\n")
             if (after.isNotBlank()) append(after)
         }
-            // Убираем артефакты markdown
             .replace(Regex("^```\\w*\\s*"), "")
             .replace(Regex("\\s*```$"), "")
             .trim()
@@ -98,65 +127,82 @@ class ClipboardAdapter : ClipboardPort {
 
     private fun serializeRequest(request: ClipboardRequest): String {
         val obj = buildJsonObject {
-            put("phase", request.phase.name)
-            put("task", request.task)
-            put("projectName", request.projectName)
+            // Protocol marker — helps LLM recognize this is a structured protocol
+            put("_protocol", "MaxVibes IDE Plugin — respond with JSON only, do NOT use tools/artifacts/computer")
+            put("_responseFormat", "Respond with ONLY a raw JSON object: {\"message\": \"...\", \"requestedFiles\": [...], \"modifications\": [...]}")
 
             if (request.systemInstruction.isNotBlank()) {
                 put("systemInstruction", request.systemInstruction)
             }
 
-            putJsonObject("context") {
-                request.context.forEach { (key, value) ->
-                    put(key, if (value.length > 8000) value.take(8000) + "\n... [truncated]" else value)
+            put("task", request.task)
+            put("projectName", request.projectName)
+
+            // File tree — always included
+            if (request.fileTree.isNotBlank()) {
+                put("fileTree", truncate(request.fileTree, 8000))
+            }
+
+            // Fresh files — full content of just-requested files
+            if (request.freshFiles.isNotEmpty()) {
+                putJsonObject("files") {
+                    request.freshFiles.forEach { (path, content) ->
+                        put(path, truncate(content, 12000))
+                    }
                 }
             }
 
+            // Previously gathered paths — just paths, no content
+            if (request.previouslyGatheredPaths.isNotEmpty()) {
+                putJsonArray("previouslyGatheredFiles") {
+                    request.previouslyGatheredPaths.forEach { add(it) }
+                }
+            }
+
+            // Chat history
             if (request.chatHistory.isNotEmpty()) {
                 putJsonArray("chatHistory") {
                     request.chatHistory.forEach { entry ->
                         addJsonObject {
                             put("role", entry.role)
-                            put("content", entry.content)
+                            put("content", truncate(entry.content, 4000))
                         }
                     }
                 }
+            }
+
+            // Attached context (errors, traces)
+            val trace = request.attachedContext
+            if (!trace.isNullOrBlank()) {
+                put("errorTrace", truncate(trace, 4000))
             }
         }
 
         return json.encodeToString(JsonObject.serializer(), obj)
     }
 
+    private fun truncate(text: String, maxLength: Int): String {
+        return if (text.length > maxLength) {
+            text.take(maxLength) + "\n... [truncated, ${text.length - maxLength} chars omitted]"
+        } else text
+    }
+
     // ==================== Parsing ====================
 
-    private fun parseJsonResponse(jsonText: String): ClipboardResponse {
+    /**
+     * Парсит единый формат ответа. Все поля опциональны.
+     */
+    private fun parseUnifiedResponse(jsonText: String): ClipboardResponse {
         val obj = lenientJson.parseToJsonElement(jsonText).jsonObject
 
-        val hasRequestedFiles = obj.containsKey("requestedFiles")
-        val hasModifications = obj.containsKey("modifications")
-        val explicitPhase = obj["phase"]?.jsonPrimitive?.contentOrNull
-
-        val phase = when {
-            explicitPhase != null -> try { ClipboardPhase.valueOf(explicitPhase) } catch (_: Exception) { null }
-            hasRequestedFiles -> ClipboardPhase.PLANNING
-            hasModifications -> ClipboardPhase.CHAT
-            else -> ClipboardPhase.CHAT
-        } ?: ClipboardPhase.CHAT
-
-        return when (phase) {
-            ClipboardPhase.PLANNING -> ClipboardResponse(
-                phase = ClipboardPhase.PLANNING,
-                requestedFiles = obj["requestedFiles"]?.jsonArray
-                    ?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList(),
-                reasoning = obj["reasoning"]?.jsonPrimitive?.contentOrNull
-            )
-            ClipboardPhase.CHAT -> ClipboardResponse(
-                phase = ClipboardPhase.CHAT,
-                message = obj["message"]?.jsonPrimitive?.contentOrNull ?: "",
-                modifications = obj["modifications"]?.jsonArray
-                    ?.mapNotNull { parseModification(it.jsonObject) } ?: emptyList()
-            )
-        }
+        return ClipboardResponse(
+            message = obj["message"]?.jsonPrimitive?.contentOrNull ?: "",
+            requestedFiles = obj["requestedFiles"]?.jsonArray
+                ?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList(),
+            reasoning = obj["reasoning"]?.jsonPrimitive?.contentOrNull,
+            modifications = obj["modifications"]?.jsonArray
+                ?.mapNotNull { parseModification(it.jsonObject) } ?: emptyList()
+        )
     }
 
     private fun parseModification(obj: JsonObject): ClipboardModification? {

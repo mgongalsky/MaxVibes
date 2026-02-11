@@ -1,13 +1,12 @@
 package com.maxvibes.domain.model.interaction
 
 /**
- * Фаза clipboard-протокола. Те же две фазы что и API mode,
- * но данные передаются через JSON-копипаст.
+ * Фаза clipboard-протокола — используется внутренне для трекинга.
  */
 enum class ClipboardPhase {
     /** Фаза 1: задача + file tree → список нужных файлов */
     PLANNING,
-    /** Фаза 2: задача + контекст файлов → ответ + модификации */
+    /** Фаза 2+: задача + контекст файлов → ответ + модификации */
     CHAT
 }
 
@@ -19,12 +18,18 @@ data class ClipboardRequest(
     val phase: ClipboardPhase,
     val task: String,
     val projectName: String,
-    /** Для PLANNING: fileTree; для CHAT: содержимое файлов */
-    val context: Map<String, String>,
-    /** История чата (только для CHAT фазы) */
+    /** Системный промпт (формат ответа) */
+    val systemInstruction: String = "",
+    /** Файловое дерево проекта (всегда включено) */
+    val fileTree: String = "",
+    /** Полное содержимое запрошенных файлов (свежезапрошенные) */
+    val freshFiles: Map<String, String> = emptyMap(),
+    /** Пути ранее собранных файлов (для контекста, без содержимого) */
+    val previouslyGatheredPaths: List<String> = emptyList(),
+    /** История чата (полная) */
     val chatHistory: List<ClipboardHistoryEntry> = emptyList(),
-    /** Системный промпт (вшит в JSON чтобы LLM знал формат ответа) */
-    val systemInstruction: String = ""
+    /** Дополнительный контекст (ошибки, трейсы) */
+    val attachedContext: String? = null
 )
 
 data class ClipboardHistoryEntry(
@@ -33,16 +38,22 @@ data class ClipboardHistoryEntry(
 )
 
 /**
- * Ответ от LLM, вставленный пользователем.
- * Парсится MaxVibes из текста.
+ * Единый ответ от LLM. Все поля опциональны.
+ *
+ * Claude может комбинировать любые поля в одном ответе:
+ * - message only → чистый диалог (обсуждение, планы)
+ * - message + requestedFiles → нужны ещё файлы
+ * - message + modifications → код + объяснение
+ * - message + requestedFiles + modifications → всё сразу
  */
 data class ClipboardResponse(
-    val phase: ClipboardPhase,
+    /** Текстовое сообщение пользователю (обязательно рекомендуется) */
     val message: String = "",
-    /** Для PLANNING: список запрошенных файлов */
+    /** Запрошенные файлы для следующего шага */
     val requestedFiles: List<String> = emptyList(),
+    /** Объяснение выбора файлов / рассуждение */
     val reasoning: String? = null,
-    /** Для CHAT: модификации кода */
+    /** Модификации кода */
     val modifications: List<ClipboardModification> = emptyList()
 )
 
