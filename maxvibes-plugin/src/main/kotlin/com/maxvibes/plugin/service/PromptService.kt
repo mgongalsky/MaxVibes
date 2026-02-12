@@ -41,12 +41,10 @@ class PromptService(private val project: Project) : PromptPort {
     }
 
     override fun openOrCreatePrompts() {
-        // Создаём директорию если нет
         if (!promptsDir.exists()) {
             promptsDir.mkdirs()
         }
 
-        // Создаём файлы с дефолтами если нет
         val chatFile = File(promptsDir, CHAT_SYSTEM_FILE)
         if (!chatFile.exists()) {
             chatFile.writeText(DEFAULT_CHAT_SYSTEM)
@@ -57,10 +55,8 @@ class PromptService(private val project: Project) : PromptPort {
             planningFile.writeText(DEFAULT_PLANNING_SYSTEM)
         }
 
-        // Обновляем VFS и открываем файлы
         LocalFileSystem.getInstance().refreshAndFindFileByIoFile(promptsDir)?.let { dir ->
             dir.refresh(false, true)
-
             dir.findChild(CHAT_SYSTEM_FILE)?.let { openInEditor(it) }
             dir.findChild(PLANNING_SYSTEM_FILE)?.let { openInEditor(it) }
         }
@@ -95,37 +91,68 @@ LANGUAGE: {{language}}
 
 ## How to respond
 
-1. First, explain what you're going to do in plain language
-2. Describe what changes you made (files created, functions added, etc.)
-3. If you need to create or modify code, include a JSON block at the END of your response
+1. Briefly explain what you're going to do
+2. If code changes are needed, include a JSON block at the END of your response
 
-## Response format
+## Modification types
 
-Write naturally, like a helpful colleague. Be concise but informative.
+PREFER element-level operations for modifying existing files! This is much more efficient.
 
-After your explanation, if there are code changes, add:
+| Type | When to use | path format |
+|------|------------|-------------|
+| REPLACE_ELEMENT | Change a function, class, or property | file:path/File.kt/class[Name]/function[method] |
+| CREATE_ELEMENT | Add new function/property/class to parent | file:path/File.kt/class[Name] |
+| DELETE_ELEMENT | Remove an element | file:path/File.kt/class[Name]/function[old] |
+| ADD_IMPORT | Add import to file | file:path/File.kt |
+| REMOVE_IMPORT | Remove import from file | file:path/File.kt |
+| CREATE_FILE | New file | file:src/.../File.kt |
+| REPLACE_FILE | Rewrite entire file (use sparingly!) | file:path/File.kt |
+
+## Element path format
+
+```
+file:src/main/kotlin/com/example/User.kt/class[User]/function[validate]
+```
+
+Supported: class[Name], interface[Name], object[Name], function[Name], property[Name],
+enum[Name], enum_entry[Name], companion_object, init, constructor[primary]
+
+## JSON format
+
 ```json
 {
     "modifications": [
         {
-            "type": "CREATE_FILE" | "REPLACE_FILE",
-            "path": "src/main/kotlin/com/example/File.kt",
-            "content": "full file content"
+            "type": "REPLACE_ELEMENT",
+            "path": "file:src/main/kotlin/com/example/User.kt/class[User]/function[validate]",
+            "content": "fun validate(): Boolean {\n    return name.isNotBlank() && email.contains(\"@\")\n}",
+            "elementKind": "FUNCTION"
+        },
+        {
+            "type": "ADD_IMPORT",
+            "path": "file:src/main/kotlin/com/example/User.kt",
+            "importPath": "com.example.validation.EmailValidator"
+        },
+        {
+            "type": "CREATE_ELEMENT",
+            "path": "file:src/main/kotlin/com/example/User.kt/class[User]",
+            "content": "fun toDTO(): UserDTO = UserDTO(name, email)",
+            "elementKind": "FUNCTION",
+            "position": "LAST_CHILD"
         }
     ]
 }
 ```
 
-## Rules for code
+## Rules
 
-- Always include package declaration and imports
-- Write clean, idiomatic Kotlin
-- Follow existing project patterns
-- For new files: use CREATE_FILE
-- For changing existing files: use REPLACE_FILE with complete new content
-
-If the user just asks a question or wants to chat, respond normally without JSON.
-If the user asks to modify code, explain what you'll do, then include the JSON.
+- **PREFER REPLACE_ELEMENT/CREATE_ELEMENT** over REPLACE_FILE for existing files
+- Only use REPLACE_FILE when the majority of the file changes
+- For REPLACE_ELEMENT: content = the COMPLETE element (annotations, modifiers, signature, body)
+- For CREATE_ELEMENT: set elementKind (FUNCTION, CLASS, PROPERTY, etc.) and position
+- Use ADD_IMPORT/REMOVE_IMPORT for import changes
+- Write clean, idiomatic Kotlin following existing project patterns
+- If the user just asks a question, respond normally without JSON
 """.trimIndent()
 
 private val DEFAULT_PLANNING_SYSTEM = """

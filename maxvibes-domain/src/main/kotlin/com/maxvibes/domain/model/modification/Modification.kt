@@ -11,7 +11,10 @@ enum class InsertPosition {
 sealed interface Modification {
     val targetPath: ElementPath
 
+    // ═══════════════════════════════════════════════════
     // File-level operations
+    // ═══════════════════════════════════════════════════
+
     data class CreateFile(
         override val targetPath: ElementPath,
         val content: String
@@ -26,7 +29,10 @@ sealed interface Modification {
         override val targetPath: ElementPath
     ) : Modification
 
+    // ═══════════════════════════════════════════════════
     // Element-level operations
+    // ═══════════════════════════════════════════════════
+
     data class CreateElement(
         override val targetPath: ElementPath,
         val elementKind: ElementKind,
@@ -41,6 +47,30 @@ sealed interface Modification {
 
     data class DeleteElement(
         override val targetPath: ElementPath
+    ) : Modification
+
+    // ═══════════════════════════════════════════════════
+    // Import operations (lightweight, no full file rewrite)
+    // ═══════════════════════════════════════════════════
+
+    /**
+     * Add an import statement to a file.
+     * targetPath = file path (e.g. file:src/main/kotlin/User.kt)
+     * importPath = fully qualified import (e.g. "com.example.dto.UserDTO")
+     */
+    data class AddImport(
+        override val targetPath: ElementPath,
+        val importPath: String
+    ) : Modification
+
+    /**
+     * Remove an import statement from a file.
+     * targetPath = file path
+     * importPath = fully qualified import to remove
+     */
+    data class RemoveImport(
+        override val targetPath: ElementPath,
+        val importPath: String
     ) : Modification
 }
 

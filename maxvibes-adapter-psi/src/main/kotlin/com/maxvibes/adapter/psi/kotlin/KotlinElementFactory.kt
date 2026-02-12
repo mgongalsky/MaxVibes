@@ -3,7 +3,10 @@ package com.maxvibes.adapter.psi.kotlin
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiElement
 import com.maxvibes.domain.model.code.ElementKind
+import org.jetbrains.kotlin.name.FqName
+import org.jetbrains.kotlin.psi.KtImportDirective
 import org.jetbrains.kotlin.psi.KtPsiFactory
+import org.jetbrains.kotlin.resolve.ImportPath
 
 /**
  * Фабрика для создания Kotlin PSI элементов из текста
@@ -25,8 +28,19 @@ class KotlinElementFactory(private val project: Project) {
                 ElementKind.CONSTRUCTOR -> null // Handled separately
             }
         } catch (e: Exception) {
+            println("[KotlinElementFactory] Failed to create element of kind $kind: ${e.message}")
             null
         }
+    }
+
+    /**
+     * Create an import directive PSI element.
+     * @param fqName fully qualified name, e.g. "com.example.dto.UserDTO"
+     * @param isAllUnder true for star imports (com.example.*)
+     */
+    fun createImportDirective(fqName: String, isAllUnder: Boolean = false): KtImportDirective {
+        val importPath = ImportPath(FqName(fqName), isAllUnder)
+        return psiFactory.createImportDirective(importPath)
     }
 
     fun createClass(text: String) = psiFactory.createClass(text)
@@ -42,6 +56,8 @@ class KotlinElementFactory(private val project: Project) {
     fun createFile(name: String, text: String) = psiFactory.createFile(name, text)
 
     fun createNewLine() = psiFactory.createNewLine()
+
+    fun createNewLine(count: Int): PsiElement = psiFactory.createNewLine(count)
 
     fun createWhiteSpace(text: String = " ") = psiFactory.createWhiteSpace(text)
 }

@@ -19,20 +19,32 @@ class ChatResponseDTO {
 }
 
 class ModificationDTO {
-    @Description("Type of modification: CREATE_FILE, REPLACE_FILE, DELETE_FILE, CREATE_ELEMENT, REPLACE_ELEMENT, DELETE_ELEMENT")
+    @Description("""Type of modification. PREFER element-level operations for existing files:
+- CREATE_FILE: Create a new file (content = full file with package/imports)
+- REPLACE_ELEMENT: Replace a specific element in existing file (path points to the element, e.g. file:path/File.kt/class[Name]/function[method])
+- CREATE_ELEMENT: Add a new element to a parent (path points to parent, e.g. file:path/File.kt/class[Name])
+- DELETE_ELEMENT: Remove an element
+- ADD_IMPORT: Add an import to a file (path = file path, importPath = FQ name like com.example.Foo)
+- REMOVE_IMPORT: Remove an import from a file
+- REPLACE_FILE: Replace entire file (use ONLY when most of the file changes)
+- DELETE_FILE: Delete a file""")
     var type: String = ""
 
-    @Description("File path relative to project root, e.g. src/main/kotlin/com/example/MyClass.kt")
+    @Description("""Element path. Format: file:relative/path/File.kt for file-level, or file:relative/path/File.kt/class[ClassName]/function[funcName] for elements.
+Supported segments: class[Name], interface[Name], object[Name], function[Name], property[Name], enum[Name], enum_entry[Name], companion_object, init, constructor[primary]""")
     var path: String = ""
 
-    @Description("Full code content for the file or element. Must be complete, compilable code with package and imports")
+    @Description("Code content. For CREATE_FILE/REPLACE_FILE: complete file. For REPLACE_ELEMENT: complete element code. For CREATE_ELEMENT: new element code. For ADD_IMPORT/REMOVE_IMPORT: leave empty (use importPath instead)")
     var content: String = ""
 
-    @Description("Kind of code element: FILE, CLASS, FUNCTION, PROPERTY")
+    @Description("Kind of element: FILE, CLASS, INTERFACE, OBJECT, ENUM, FUNCTION, PROPERTY")
     var elementKind: String = "FILE"
 
-    @Description("Where to insert: LAST_CHILD, FIRST_CHILD, BEFORE, AFTER")
+    @Description("Insert position for CREATE_ELEMENT: LAST_CHILD, FIRST_CHILD, BEFORE, AFTER")
     var position: String = "LAST_CHILD"
+
+    @Description("For ADD_IMPORT/REMOVE_IMPORT only: fully qualified import path, e.g. com.example.dto.UserDTO")
+    var importPath: String = ""
 
     override fun toString(): String = "ModificationDTO(type=$type, path=$path, content=${content.take(50)}...)"
 }

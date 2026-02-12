@@ -437,7 +437,7 @@ class LangChainLLMService(
 
     /** Convert ModificationDTO (from AiServices) to domain Modification */
     private fun convertModification(dto: ModificationDTO): Modification? {
-        if (dto.type.isBlank() || dto.path.isBlank()) return null
+        if (dto.type.isBlank() || (dto.path.isBlank() && dto.type.uppercase() !in setOf("ADD_IMPORT", "REMOVE_IMPORT"))) return null
 
         val elementPath = ElementPath(dto.path)
         val elementKind = try { ElementKind.valueOf(dto.elementKind.uppercase()) } catch (e: Exception) { ElementKind.FILE }
@@ -450,6 +450,16 @@ class LangChainLLMService(
             "CREATE_ELEMENT" -> Modification.CreateElement(targetPath = elementPath, elementKind = elementKind, content = dto.content, position = position)
             "REPLACE_ELEMENT" -> Modification.ReplaceElement(targetPath = elementPath, newContent = dto.content)
             "DELETE_ELEMENT" -> Modification.DeleteElement(targetPath = elementPath)
+            "ADD_IMPORT" -> {
+                val importFqName = dto.importPath.ifBlank { dto.content.removePrefix("import ").trim() }
+                if (importFqName.isBlank()) null
+                else Modification.AddImport(targetPath = elementPath, importPath = importFqName)
+            }
+            "REMOVE_IMPORT" -> {
+                val importFqName = dto.importPath.ifBlank { dto.content.removePrefix("import ").trim() }
+                if (importFqName.isBlank()) null
+                else Modification.RemoveImport(targetPath = elementPath, importPath = importFqName)
+            }
             else -> null
         }
     }
@@ -693,6 +703,8 @@ class LangChainLLMService(
         val content = json["content"]?.jsonPrimitive?.contentOrNull ?: ""
         val elementKindStr = json["elementKind"]?.jsonPrimitive?.contentOrNull ?: "FILE"
         val positionStr = json["position"]?.jsonPrimitive?.contentOrNull ?: "LAST_CHILD"
+        val importPathStr = json["importPath"]?.jsonPrimitive?.contentOrNull ?: ""
+
         val elementPath = ElementPath(path)
         val elementKind = try { ElementKind.valueOf(elementKindStr.uppercase()) } catch (e: Exception) { ElementKind.FILE }
         val position = try { InsertPosition.valueOf(positionStr.uppercase()) } catch (e: Exception) { InsertPosition.LAST_CHILD }
@@ -704,6 +716,14 @@ class LangChainLLMService(
             "CREATE_ELEMENT" -> Modification.CreateElement(targetPath = elementPath, elementKind = elementKind, content = content, position = position)
             "REPLACE_ELEMENT" -> Modification.ReplaceElement(targetPath = elementPath, newContent = content)
             "DELETE_ELEMENT" -> Modification.DeleteElement(targetPath = elementPath)
+            "ADD_IMPORT" -> {
+                val fqName = importPathStr.ifBlank { content.removePrefix("import ").trim() }
+                if (fqName.isBlank()) null else Modification.AddImport(targetPath = elementPath, importPath = fqName)
+            }
+            "REMOVE_IMPORT" -> {
+                val fqName = importPathStr.ifBlank { content.removePrefix("import ").trim() }
+                if (fqName.isBlank()) null else Modification.RemoveImport(targetPath = elementPath, importPath = fqName)
+            }
             else -> null
         }
     }
@@ -748,43 +768,76 @@ class LangChainLLMService(
 
     // ==================== Default Prompts ====================
 
+// ==================== Default Prompts ====================
+
     companion object {
         private val DEFAULT_CHAT_SYSTEM_PROMPT = """
             You are MaxVibes, an AI coding assistant integrated into IntelliJ IDEA. You help developers write and modify Kotlin code.
-            
+
             PROJECT: {{projectName}}
             LANGUAGE: {{language}}
-            
-            HOW TO RESPOND:
-            1. First, explain what you're going to do in plain language
-            2. Describe what changes you made (files created, functions added, etc.)
-            3. If you need to create or modify code, include a JSON block at the END of your response
-            
-            RESPONSE FORMAT:
-            - Write naturally, like a helpful colleague
-            - Be concise but informative
-            - After your explanation, if there are code changes, add:
+
+            ## How to respond
+
+            1. Briefly explain what you're going to do
+            2. If code changes are needed, include a JSON block at the END of your response
+
+            ## Modification types (prefer element-level for existing files!)
+
+            | Type | When to use | path format | content |
+            |------|------------|-------------|---------|
+            | CREATE_FILE | New file | file:src/.../File.kt | Full file with package + imports |
+            | REPLACE_ELEMENT | Change a specific function/class/property | file:path/File.kt/class[Name]/function[method] | Complete element code |
+            | CREATE_ELEMENT | Add new function/property/class to parent | file:path/File.kt/class[Name] | New element code |
+            | DELETE_ELEMENT | Remove an element | file:path/File.kt/class[Name]/function[old] | (empty) |
+            | ADD_IMPORT | Add import to file | file:path/File.kt | (empty, use importPath) |
+            | REMOVE_IMPORT | Remove import from file | file:path/File.kt | (empty, use importPath) |
+            | REPLACE_FILE | Rewrite entire file | file:path/File.kt | Full file (use sparingly!) |
+
+            ## Element path format
+
+            file:src/main/kotlin/com/example/User.kt/class[User]/function[validate]
+
+            Supported segments: class[Name], interface[Name], object[Name], function[Name], property[Name],
+            enum[Name], enum_entry[Name], companion_object, init, constructor[primary]
+
+            ## JSON format
+
             ```json
             {
                 "modifications": [
                     {
-                        "type": "CREATE_FILE" | "REPLACE_FILE",
-                        "path": "src/main/kotlin/com/example/File.kt",
-                        "content": "full file content"
+                        "type": "REPLACE_ELEMENT",
+                        "path": "file:src/main/kotlin/com/example/User.kt/class[User]/function[validate]",
+                        "content": "fun validate(): Boolean {\n    return name.isNotBlank() && email.contains(\"@\")\n}",
+                        "elementKind": "FUNCTION"
+                    },
+                    {
+                        "type": "ADD_IMPORT",
+                        "path": "file:src/main/kotlin/com/example/User.kt",
+                        "importPath": "com.example.validation.EmailValidator"
+                    },
+                    {
+                        "type": "CREATE_ELEMENT",
+                        "path": "file:src/main/kotlin/com/example/User.kt/class[User]",
+                        "content": "fun toDTO(): UserDTO = UserDTO(name, email)",
+                        "elementKind": "FUNCTION",
+                        "position": "LAST_CHILD"
                     }
                 ]
             }
             ```
-            
-            RULES FOR CODE:
-            - Always include package declaration and imports
-            - Write clean, idiomatic Kotlin
-            - Follow existing project patterns
-            - For new files: use CREATE_FILE
-            - For changing existing files: use REPLACE_FILE with complete new content
-            
-            If the user just asks a question or wants to chat, respond normally without JSON.
-            If the user asks to modify code, explain what you'll do, then include the JSON.
+
+            ## Key rules
+
+            - **PREFER REPLACE_ELEMENT/CREATE_ELEMENT** over REPLACE_FILE for existing files
+            - Only use REPLACE_FILE when the majority of the file changes
+            - Only use CREATE_FILE for genuinely new files
+            - For REPLACE_ELEMENT: content must be the COMPLETE element (annotations, modifiers, signature, body)
+            - For CREATE_ELEMENT: elementKind must match the content (FUNCTION, CLASS, PROPERTY, etc.)
+            - Use ADD_IMPORT/REMOVE_IMPORT for import changes — never manually edit the import block
+            - Write clean, idiomatic Kotlin following existing project patterns
+            - If the user just asks a question, respond normally without JSON
         """.trimIndent()
 
         private val DEFAULT_PLANNING_SYSTEM_PROMPT = """
@@ -795,24 +848,39 @@ class LangChainLLMService(
         """.trimIndent()
 
         private val DEFAULT_CODING_SYSTEM_PROMPT = """
-            You are an expert Kotlin developer. Your task is to generate code modifications based on user instructions.
-            CRITICAL: Respond ONLY with a valid JSON object. No markdown, no explanations, just JSON.
+            You are an expert Kotlin developer. Generate precise code modifications.
+            CRITICAL: Respond ONLY with valid JSON. No markdown, no explanations.
+
+            ## Operations (prefer element-level!)
+
+            | Type | path | content | elementKind | importPath |
+            |------|------|---------|-------------|------------|
+            | CREATE_FILE | file:path/File.kt | Full file | FILE | - |
+            | REPLACE_ELEMENT | file:path/File.kt/class[X]/function[Y] | Complete element | FUNCTION/CLASS/... | - |
+            | CREATE_ELEMENT | file:path/File.kt/class[X] | New element | FUNCTION/CLASS/... | - |
+            | DELETE_ELEMENT | file:path/File.kt/class[X]/function[Y] | (empty) | - | - |
+            | ADD_IMPORT | file:path/File.kt | (empty) | - | com.example.Foo |
+            | REMOVE_IMPORT | file:path/File.kt | (empty) | - | com.example.Bar |
+            | REPLACE_FILE | file:path/File.kt | Full file | FILE | - |
+
+            ## Element path segments
+            class[Name], interface[Name], object[Name], function[Name], property[Name],
+            enum_entry[Name], companion_object, init, constructor[primary]
+
+            ## Rules
+            1. PREFER REPLACE_ELEMENT/CREATE_ELEMENT over REPLACE_FILE for existing files
+            2. Use REPLACE_FILE only when >50% of the file changes
+            3. For REPLACE_ELEMENT: path must point to the exact element, content = complete element
+            4. For CREATE_ELEMENT: path = parent container, content = new element, set elementKind + position
+            5. Use ADD_IMPORT/REMOVE_IMPORT for import changes
+            6. Content must be complete, compilable Kotlin
+
             Response format:
             {
                 "modifications": [
-                    {
-                        "type": "CREATE_FILE" | "REPLACE_FILE" | "CREATE_ELEMENT" | "REPLACE_ELEMENT" | "DELETE_ELEMENT",
-                        "path": "src/main/kotlin/com/example/FileName.kt",
-                        "elementKind": "FILE" | "CLASS" | "FUNCTION" | "PROPERTY",
-                        "content": "full code content here",
-                        "position": "LAST_CHILD"
-                    }
+                    { "type": "...", "path": "...", "content": "...", "elementKind": "...", "position": "LAST_CHILD", "importPath": "" }
                 ]
             }
-            Rules:
-            1. For new files: use "CREATE_FILE" with complete file content including package and imports
-            2. For modifying existing code: use "REPLACE_FILE" or "REPLACE_ELEMENT"
-            3. Content must be complete, compilable Kotlin code
         """.trimIndent()
     }
 }
