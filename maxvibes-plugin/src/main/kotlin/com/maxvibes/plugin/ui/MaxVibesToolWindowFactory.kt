@@ -225,9 +225,10 @@ class ChatPanel(
         isFocusPainted = false
     }
 
-    private val clearButton = JButton("Clear").apply {
-        toolTipText = "Clear current chat"
+    private val deleteButton = JButton("\uD83D\uDDD1 Del").apply {
+        toolTipText = "Delete current chat"
         font = font.deriveFont(11f)
+        isFocusPainted = false
     }
 
     private val promptsButton = JButton("\u2699").apply {
@@ -294,7 +295,6 @@ class ChatPanel(
                     background = JBColor.background()
                     add(contextFilesButton.apply { preferredSize = Dimension(56, 24) })
                     add(claudeInstrButton.apply { preferredSize = Dimension(26, 24) })
-                    add(clearButton.apply { preferredSize = Dimension(48, 24) })
                     add(promptsButton.apply { preferredSize = Dimension(26, 24) })
                 }
 
@@ -320,6 +320,7 @@ class ChatPanel(
                     background = JBColor.background()
                     add(newChatButton.apply { preferredSize = Dimension(52, 22) })
                     add(branchButton.apply { preferredSize = Dimension(64, 22) })
+                    add(deleteButton.apply { preferredSize = Dimension(52, 22) })
                     add(sessionsButton.apply { preferredSize = Dimension(86, 22) })
                 }
 
@@ -418,13 +419,7 @@ class ChatPanel(
             }
         }
 
-        clearButton.addActionListener {
-            resetClipboard()
-            chatHistory.clearActiveSession()
-            clearAttachedTrace()
-            loadCurrentSession()
-            updateModeIndicator()
-        }
+        deleteButton.addActionListener { deleteCurrentChat() }
 
         promptsButton.addActionListener {
             promptService.openOrCreatePrompts()
@@ -452,6 +447,34 @@ class ChatPanel(
                 }
             }
         })
+    }
+
+    // ==================== Delete Current Chat ====================
+
+    private fun deleteCurrentChat() {
+        val session = chatHistory.getActiveSession()
+        val childCount = chatHistory.getChildCount(session.id)
+        val msg = if (childCount > 0) {
+            "Delete \"${session.title}\"?\n$childCount branch(es) will be re-attached to parent."
+        } else {
+            "Delete \"${session.title}\"?"
+        }
+        val confirm = JOptionPane.showConfirmDialog(
+            this, msg, "Delete Chat", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE
+        )
+        if (confirm != JOptionPane.YES_OPTION) return
+
+        resetClipboard()
+        clearAttachedTrace()
+        chatHistory.deleteSession(session.id)
+
+        // deleteSession already switches activeSessionId, but if no sessions left — create new
+        if (chatHistory.getAllSessions().isEmpty()) {
+            chatHistory.createNewSession()
+        }
+        loadCurrentSession()
+        updateModeIndicator()
+        statusLabel.text = "Chat deleted"
     }
 
     // ==================== Clickable File Links ====================
@@ -701,27 +724,107 @@ class ChatPanel(
                     foreground = JBColor.GRAY; font = font.deriveFont(11f)
                 })
             }
-            val label = JBLabel(s.title.take(20) + if (s.title.length > 20) ".." else "").apply {
-                font = if (isLast) font.deriveFont(Font.BOLD, 11f) else font.deriveFont(11f)
-                foreground = if (isLast) JBColor.foreground()
-                else JBColor(Color(0x2196F3), Color(0x64B5F6))
-                border = JBUI.Borders.empty(2, 3)
-                if (!isLast) {
-                    cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-                    val sid = s.id
-                    addMouseListener(object : MouseAdapter() {
-                        override fun mouseClicked(e: MouseEvent) {
-                            chatHistory.setActiveSession(sid)
-                            loadCurrentSession()
-                        }
-                    })
+
+            if (isLast) {
+                // Current session: clickable for inline rename
+                val titleText = s.title.take(30) + if (s.title.length > 30) ".." else ""
+                val label = JBLabel(titleText).apply {
+                    font = font.deriveFont(Font.BOLD, 11f)
+                    foreground = JBColor.foreground()
+                    border = JBUI.Borders.empty(2, 3)
+                    cursor = Cursor.getPredefinedCursor(Cursor.TEXT_CURSOR)
+                    toolTipText = "Click to rename"
                 }
+                label.addMouseListener(object : MouseAdapter() {
+                    override fun mouseClicked(e: MouseEvent) {
+                        startInlineRename(label, s.id, s.title)
+                    }
+                })
+                breadcrumbPanel.add(label)
+            } else {
+                // Parent session: clickable to navigate
+                val label = JBLabel(s.title.take(20) + if (s.title.length > 20) ".." else "").apply {
+                    font = font.deriveFont(11f)
+                    foreground = JBColor(Color(0x2196F3), Color(0x64B5F6))
+                    border = JBUI.Borders.empty(2, 3)
+                    cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+                }
+                val sid = s.id
+                label.addMouseListener(object : MouseAdapter() {
+                    override fun mouseClicked(e: MouseEvent) {
+                        chatHistory.setActiveSession(sid)
+                        loadCurrentSession()
+                    }
+                })
+                breadcrumbPanel.add(label)
             }
-            breadcrumbPanel.add(label)
         }
 
         breadcrumbPanel.revalidate()
         breadcrumbPanel.repaint()
+    }
+
+    /**
+     * Replaces the breadcrumb label with an inline JTextField for renaming.
+     * Enter or focus-lost saves, Escape cancels.
+     */
+    private fun startInlineRename(label: JBLabel, sessionId: String, currentTitle: String) {
+        val parent = label.parent ?: return
+        val idx = (0 until parent.componentCount).firstOrNull { parent.getComponent(it) === label } ?: return
+
+        val textField = JTextField(currentTitle).apply {
+            font = label.font
+            preferredSize = Dimension(
+                maxOf(label.preferredSize.width + 40, 120),
+                label.preferredSize.height + 2
+            )
+            border = JBUI.Borders.compound(
+                JBUI.Borders.customLine(JBColor(Color(0x2196F3), Color(0x64B5F6)), 1),
+                JBUI.Borders.empty(1, 3)
+            )
+            selectAll()
+        }
+
+        var committed = false
+
+        fun commitRename() {
+            if (committed) return
+            committed = true
+            val newTitle = textField.text.trim()
+            if (newTitle.isNotBlank() && newTitle != currentTitle) {
+                chatHistory.renameSession(sessionId, newTitle)
+                statusLabel.text = "Renamed to \"$newTitle\""
+            }
+            updateBreadcrumb()
+        }
+
+        fun cancelRename() {
+            if (committed) return
+            committed = true
+            updateBreadcrumb()
+        }
+
+        textField.addActionListener { commitRename() } // Enter
+
+        textField.addKeyListener(object : KeyAdapter() {
+            override fun keyPressed(e: KeyEvent) {
+                if (e.keyCode == KeyEvent.VK_ESCAPE) {
+                    cancelRename(); e.consume()
+                }
+            }
+        })
+
+        textField.addFocusListener(object : java.awt.event.FocusAdapter() {
+            override fun focusLost(e: java.awt.event.FocusEvent?) {
+                commitRename()
+            }
+        })
+
+        parent.remove(idx)
+        parent.add(textField, idx)
+        parent.revalidate()
+        parent.repaint()
+        textField.requestFocusInWindow()
     }
 
     // ==================== Mode ====================
@@ -1116,11 +1219,11 @@ class ChatPanel(
         inputArea.isEnabled = enabled; sendButton.isEnabled = enabled
         dryRunCheckbox.isEnabled = enabled; planOnlyCheckbox.isEnabled = enabled
         attachTraceButton.isEnabled = enabled
-        clearTraceButton.isEnabled = enabled; clearButton.isEnabled = enabled
+        clearTraceButton.isEnabled = enabled
         promptsButton.isEnabled = enabled; modeComboBox.isEnabled = enabled
         sessionsButton.isEnabled = enabled; branchButton.isEnabled = enabled
-        newChatButton.isEnabled = enabled; contextFilesButton.isEnabled = enabled
-        claudeInstrButton.isEnabled = enabled
+        newChatButton.isEnabled = enabled; deleteButton.isEnabled = enabled
+        contextFilesButton.isEnabled = enabled; claudeInstrButton.isEnabled = enabled
     }
 }
 
