@@ -398,11 +398,25 @@ class ClipboardInteractionService(
         appendLine("\n───────────────")
         if (ok.isNotEmpty()) {
             appendLine("✅ Applied ${ok.size} change(s):")
-            ok.forEach { appendLine("   • ${it.affectedPath.value.substringAfterLast('/')}") }
+            ok.forEach { appendLine("   • ${formatAffectedPath(it.affectedPath)}") }
         }
         if (fail.isNotEmpty()) {
             appendLine("❌ Failed ${fail.size} change(s):")
             fail.forEach { appendLine("   • ${it.error.message}") }
+        }
+    }
+
+    /**
+     * Compact display format for element paths, matching UI's formatElementPath.
+     * Example: "LinesGame.kt/function[updateAnimations]"
+     */
+    private fun formatAffectedPath(path: ElementPath): String {
+        val fileName = path.filePath.substringAfterLast('/')
+        val segments = path.segments
+        return if (segments.isNotEmpty()) {
+            "$fileName/${segments.joinToString("/") { it.toPathString() }}"
+        } else {
+            fileName
         }
     }
 

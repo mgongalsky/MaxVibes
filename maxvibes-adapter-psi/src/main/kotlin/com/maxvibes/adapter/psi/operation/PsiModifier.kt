@@ -14,7 +14,6 @@ import org.jetbrains.kotlin.idea.KotlinFileType
 import org.jetbrains.kotlin.psi.KtClassOrObject
 import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.psi.KtImportDirective
-import org.jetbrains.kotlin.psi.KtImportList
 
 /**
  * Модификация PSI элементов.
@@ -23,6 +22,10 @@ import org.jetbrains.kotlin.psi.KtImportList
  * - File-level: createFile, replaceFileContent
  * - Element-level: addElement, replaceElement, deleteElement
  * - Import-level: addImport, removeImport
+ *
+ * replaceElement handles multi-declaration content:
+ * If LLM sends multiple declarations in one REPLACE_ELEMENT,
+ * the first replaces the target and the rest are added after it.
  */
 class PsiModifier(
     private val project: Project,
@@ -33,9 +36,6 @@ class PsiModifier(
     // File operations
     // ═══════════════════════════════════════════════════
 
-    /**
-     * Создаёт файл и добавляет его в указанную директорию
-     */
     fun createFile(directory: PsiDirectory, fileName: String, content: String): PsiFile? {
         println("[PsiModifier] Creating file '$fileName' in ${directory.virtualFile.path}")
 
@@ -56,9 +56,6 @@ class PsiModifier(
         return addedFile
     }
 
-    /**
-     * Заменяет содержимое файла через PSI
-     */
     fun replaceFileContent(file: PsiFile, newContent: String): PsiFile? {
         println("[PsiModifier] Replacing content of ${file.name}")
 
@@ -113,13 +110,17 @@ class PsiModifier(
     }
 
     /**
-     * Заменяет элемент. Для FILE использует replaceFileContent.
-     * Для элементов — PSI replace с сохранением окружающих whitespace.
+     * Заменяет элемент. Handles three cases:
+     *
+     * 1. FILE kind → replaceFileContent
+     * 2. Single declaration → direct PSI replace
+     * 3. Multi-declaration (LLM sent several props/funs in one block) →
+     *    replace target with first, add rest after it
      */
     fun replaceElement(target: PsiElement, content: String, kind: ElementKind): PsiElement? {
         println("[PsiModifier] Replacing element of kind $kind")
 
-        // Для файлов — специальная логика
+        // Case 1: File-level
         if (target is PsiFile || kind == ElementKind.FILE) {
             val file = when (target) {
                 is PsiFile -> target
@@ -131,19 +132,52 @@ class PsiModifier(
             }
         }
 
+        // Try creating single element
         val newElement = elementFactory.createElementFromText(content, kind)
-        if (newElement == null) {
-            println("[PsiModifier] ERROR: Failed to create element from content")
+        if (newElement != null) {
+            // Case 2: Single declaration — simple replace
+            return doReplace(target, newElement)
+        }
+
+        // Case 3: Multi-declaration fallback
+        // Parse all declarations from content
+        val declarations = elementFactory.parseDeclarations(content)
+        if (declarations.isEmpty()) {
+            println("[PsiModifier] ERROR: Failed to create element from content (single and multi both failed)")
             return null
         }
 
-        // Сохраняем whitespace до и после элемента
+        println("[PsiModifier] Multi-declaration content detected: ${declarations.size} declaration(s)")
+
+        // Replace target with first declaration
+        val first = declarations.first()
+        val replaced = doReplace(target, first) ?: return null
+
+        // Add remaining declarations after the first
+        var anchor = replaced
+        for (i in 1 until declarations.size) {
+            val decl = declarations[i]
+            val newLine = elementFactory.createNewLine()
+            val addedNewLine = anchor.parent.addAfter(newLine, anchor)
+            val added = anchor.parent.addAfter(decl.copy(), addedNewLine)
+            CodeStyleManager.getInstance(project).reformat(added)
+            anchor = added
+            println("[PsiModifier] Added extra declaration ${i + 1}/${declarations.size}")
+        }
+
+        println("[PsiModifier] Multi-declaration replace completed")
+        return replaced
+    }
+
+    /**
+     * Core PSI replacement: replace target with newElement, preserve surrounding whitespace.
+     */
+    private fun doReplace(target: PsiElement, newElement: PsiElement): PsiElement? {
         val prevWhitespace = target.prevSibling?.takeIf { it is PsiWhiteSpace }?.text
-        val nextWhitespace = target.nextSibling?.takeIf { it is PsiWhiteSpace }?.text
 
-        val replaced = target.replace(newElement)
+        val replaced = target.replace(newElement.copy())
 
-        // Восстанавливаем whitespace если он был потерян
+        // Восстанавливаем whitespace если был потерян
         if (prevWhitespace != null && replaced.prevSibling?.text != prevWhitespace) {
             val ws = elementFactory.createWhiteSpace(prevWhitespace)
             replaced.parent.addBefore(ws, replaced)
@@ -158,7 +192,6 @@ class PsiModifier(
     fun deleteElement(element: PsiElement) {
         println("[PsiModifier] Deleting element: ${element.javaClass.simpleName}")
 
-        // Удаляем trailing whitespace/newline вместе с элементом, чтобы не оставлять пустых строк
         val nextSibling = element.nextSibling
         if (nextSibling is PsiWhiteSpace && nextSibling.text.count { it == '\n' } <= 2) {
             nextSibling.delete()
@@ -171,15 +204,9 @@ class PsiModifier(
     // Import operations
     // ═══════════════════════════════════════════════════
 
-    /**
-     * Add an import to a KtFile via PSI.
-     * Skips if the import already exists.
-     * @return the added import directive, or null if already present
-     */
     fun addImport(file: KtFile, importFqName: String): KtImportDirective? {
         println("[PsiModifier] Adding import: $importFqName to ${file.name}")
 
-        // Проверяем дубликат
         val existing = file.importDirectives.any { directive ->
             directive.importPath?.pathStr == importFqName
         }
@@ -192,17 +219,14 @@ class PsiModifier(
 
         val importList = file.importList
         return if (importList != null) {
-            // Есть список импортов — добавляем в конец
             val added = importList.add(newImport) as? KtImportDirective
             println("[PsiModifier] Import added to existing import list")
             added
         } else {
-            // Нет импортов — создаём после package declaration
             val packageDirective = file.packageDirective
             val anchor = packageDirective ?: file.firstChild
 
             val added = if (anchor != null) {
-                // Добавляем newline + import после package
                 val newLine = elementFactory.createNewLine(2)
                 file.addAfter(newLine, anchor)
                 file.addAfter(newImport, file.findElementAt(anchor.textRange.endOffset + 1) ?: anchor) as? KtImportDirective
@@ -215,10 +239,6 @@ class PsiModifier(
         }
     }
 
-    /**
-     * Remove a specific import from a KtFile.
-     * @return true if the import was found and removed
-     */
     fun removeImport(file: KtFile, importFqName: String): Boolean {
         println("[PsiModifier] Removing import: $importFqName from ${file.name}")
 
@@ -231,7 +251,6 @@ class PsiModifier(
             return false
         }
 
-        // Удаляем trailing whitespace
         val nextSibling = importToRemove.nextSibling
         if (nextSibling is PsiWhiteSpace && nextSibling.text == "\n") {
             nextSibling.delete()
@@ -239,10 +258,8 @@ class PsiModifier(
 
         importToRemove.delete()
 
-        // Если import list стал пустой — удаляем его
         val importList = file.importList
         if (importList != null && importList.imports.isEmpty()) {
-            // Удаляем пустой import list и лишние newlines
             val prevWs = importList.prevSibling
             if (prevWs is PsiWhiteSpace) {
                 prevWs.delete()

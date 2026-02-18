@@ -1,7 +1,9 @@
 package com.maxvibes.plugin.ui
 
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.runReadAction
 import com.intellij.openapi.fileEditor.FileEditorManager
+import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
@@ -14,11 +16,13 @@ import com.intellij.ui.JBColor
 import com.intellij.ui.components.*
 import com.intellij.ui.content.ContentFactory
 import com.intellij.util.ui.JBUI
+import com.maxvibes.adapter.psi.operation.PsiNavigator
 import com.maxvibes.application.port.input.ContextAwareRequest
 import com.maxvibes.application.port.input.ContextAwareResult
 import com.maxvibes.application.port.output.ChatMessageDTO
 import com.maxvibes.application.port.output.ChatRole
 import com.maxvibes.application.service.ClipboardStepResult
+import com.maxvibes.domain.model.code.ElementPath
 import com.maxvibes.domain.model.interaction.ClipboardPhase
 import com.maxvibes.domain.model.interaction.InteractionMode
 import com.maxvibes.domain.model.modification.ModificationResult
@@ -111,9 +115,11 @@ class MaxVibesToolPanel(private val project: Project) : JPanel(CardLayout()) {
         ) as? String ?: return
 
         chatPanel.resetClipboard()
-        val branch = chatHistory.createBranch(parentId, title) ?: return
-        chatPanel.loadCurrentSession()
-        showChat()
+        val branch = chatHistory.createBranch(parentId, title)
+        if (branch != null) {
+            chatPanel.loadCurrentSession()
+            showChat()
+        }
     }
 
     private fun deleteSession(sessionId: String) {
@@ -256,6 +262,13 @@ class ChatPanel(
 
     private var currentMode: InteractionMode = InteractionMode.API
     private var attachedTrace: String? = null
+
+    /**
+     * Registry: compact display text → full ElementPath value.
+     * Used to navigate to specific elements when user clicks on them in chat.
+     * Example: "LinesGame.kt/function[updateAnimations]" → "file:src/main/kotlin/.../LinesGame.kt/function[updateAnimations]"
+     */
+    private val elementNavRegistry = mutableMapOf<String, String>()
 
     init {
         setupUI()
@@ -468,7 +481,6 @@ class ChatPanel(
         clearAttachedTrace()
         chatHistory.deleteSession(session.id)
 
-        // deleteSession already switches activeSessionId, but if no sessions left — create new
         if (chatHistory.getAllSessions().isEmpty()) {
             chatHistory.createNewSession()
         }
@@ -477,20 +489,23 @@ class ChatPanel(
         statusLabel.text = "Chat deleted"
     }
 
-    // ==================== Clickable File Links ====================
+    // ==================== Clickable File & Element Links ====================
 
     private fun setupClickableLinks() {
         chatArea.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
-                val filePath = getFilePathAtPosition(e.point) ?: return
-                openFileInEditor(filePath)
+                val clickTarget = getClickTargetAtPosition(e.point) ?: return
+                when (clickTarget) {
+                    is ClickTarget.Element -> navigateToElement(clickTarget.fullPath)
+                    is ClickTarget.File -> openFileInEditor(clickTarget.relativePath)
+                }
             }
         })
 
         chatArea.addMouseMotionListener(object : java.awt.event.MouseMotionAdapter() {
             override fun mouseMoved(e: MouseEvent) {
-                val filePath = getFilePathAtPosition(e.point)
-                chatArea.cursor = if (filePath != null) {
+                val target = getClickTargetAtPosition(e.point)
+                chatArea.cursor = if (target != null) {
                     Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
                 } else {
                     Cursor.getDefaultCursor()
@@ -500,10 +515,10 @@ class ChatPanel(
     }
 
     /**
-     * Extracts file path from the text at the given point in chatArea.
-     * Detects patterns like: src/main/kotlin/..., *.kt, *.java, etc.
+     * Determines what was clicked: an element path or a file path.
+     * Priority: element paths first (they contain file paths), then plain file paths.
      */
-    private fun getFilePathAtPosition(point: Point): String? {
+    private fun getClickTargetAtPosition(point: Point): ClickTarget? {
         val offset = chatArea.viewToModel2D(point)
         if (offset < 0 || offset >= chatArea.document.length) return null
 
@@ -513,27 +528,97 @@ class ChatPanel(
         val line = text.substring(lineStart, lineEnd)
         val posInLine = offset - lineStart
 
-        // Match file path patterns in the line
+        // Pattern 1: Element paths — File.kt/segment[name] or File.kt/seg[a]/seg[b]
+        // Matches: LinesGame.kt/function[updateAnimations], User.kt/class[User]/function[validate]
+        // Also matches bare segments: File.kt/companion_object, File.kt/init
+        val elementPathRegex = Regex("""(?:^|[\s\u2022(])([a-zA-Z][\w.-]*\.(?:kt|java)(?:/(?:\w+\[\w+]|\w+))+)""")
+        for (match in elementPathRegex.findAll(line)) {
+            val group = match.groups[1] ?: continue
+            if (posInLine >= group.range.first && posInLine <= group.range.last + 1) {
+                // Look up in registry for full path
+                val displayText = group.value
+                val fullPath = elementNavRegistry[displayText]
+                return if (fullPath != null) {
+                    ClickTarget.Element(fullPath)
+                } else {
+                    // Try to resolve: extract filename, search in project
+                    val fileName = displayText.substringBefore('/')
+                    ClickTarget.File(fileName)
+                }
+            }
+        }
+
+        // Pattern 2: Plain file paths — src/main/kotlin/..., *.kt, *.java, etc.
         val filePathRegex = Regex("""(?:^|[\s\u2022(])([a-zA-Z][\w./\\-]*\.(?:kt|java|xml|json|md|gradle|kts|yaml|yml|properties|txt))""")
         for (match in filePathRegex.findAll(line)) {
             val group = match.groups[1] ?: continue
             if (posInLine >= group.range.first && posInLine <= group.range.last + 1) {
-                return group.value
+                return ClickTarget.File(group.value)
             }
         }
+
         return null
+    }
+
+    /**
+     * Navigate to a specific PSI element in the editor.
+     * Opens the file and scrolls to the element's text offset.
+     */
+    private fun navigateToElement(fullPathValue: String) {
+        val elementPath = ElementPath(fullPathValue)
+        val filePath = elementPath.filePath
+        val basePath = project.basePath ?: return
+
+        // Find the virtual file
+        val virtualFile = LocalFileSystem.getInstance().findFileByPath("$basePath/$filePath")
+            ?: findFileRecursively(File(basePath), filePath.substringAfterLast('/'))?.let {
+                LocalFileSystem.getInstance().findFileByIoFile(it)
+            }
+
+        if (virtualFile == null) {
+            statusLabel.text = "File not found: $filePath"
+            return
+        }
+
+        if (elementPath.segments.isEmpty()) {
+            FileEditorManager.getInstance(project).openFile(virtualFile, true)
+            statusLabel.text = "Opened: ${filePath.substringAfterLast('/')}"
+            return
+        }
+
+        // Navigate to the specific element via PSI
+        try {
+            val navigator = PsiNavigator(project)
+            val offset = runReadAction {
+                val element = navigator.findElement(elementPath)
+                element?.textOffset
+            }
+
+            if (offset != null) {
+                val descriptor = OpenFileDescriptor(project, virtualFile, offset)
+                descriptor.navigate(true)
+                val lastSegment = elementPath.segments.lastOrNull()
+                statusLabel.text = "Navigated to: ${lastSegment?.toPathString() ?: filePath.substringAfterLast('/')}"
+            } else {
+                // Element not found (maybe code changed), just open the file
+                FileEditorManager.getInstance(project).openFile(virtualFile, true)
+                statusLabel.text = "Element not found, opened file"
+            }
+        } catch (e: Exception) {
+            // Fallback: just open the file
+            FileEditorManager.getInstance(project).openFile(virtualFile, true)
+            statusLabel.text = "Opened: ${filePath.substringAfterLast('/')}"
+        }
     }
 
     private fun openFileInEditor(relativePath: String) {
         val basePath = project.basePath ?: return
-        // Try exact path first
         val file = LocalFileSystem.getInstance().findFileByPath("$basePath/$relativePath")
         if (file != null && !file.isDirectory) {
             FileEditorManager.getInstance(project).openFile(file, true)
             statusLabel.text = "Opened: ${relativePath.substringAfterLast('/')}"
             return
         }
-        // Try searching by filename
         val fileName = relativePath.substringAfterLast('/')
         val found = findFileRecursively(File(basePath), fileName)
         if (found != null) {
@@ -560,6 +645,35 @@ class ChatPanel(
             }
         }
         return null
+    }
+
+    // ==================== Element Path Formatting ====================
+
+    /**
+     * Formats an ElementPath for compact display in chat.
+     * Examples:
+     *   file:src/.../User.kt → "User.kt"
+     *   file:src/.../User.kt/class[User]/function[validate] → "User.kt/class[User]/function[validate]"
+     *   file:src/.../User.kt/class[User]/companion_object → "User.kt/class[User]/companion_object"
+     */
+    private fun formatElementPath(path: ElementPath): String {
+        val fileName = path.filePath.substringAfterLast('/')
+        val segments = path.segments
+        return if (segments.isNotEmpty()) {
+            "$fileName/${segments.joinToString("/") { it.toPathString() }}"
+        } else {
+            fileName
+        }
+    }
+
+    /**
+     * Registers element paths from modification results for click navigation.
+     */
+    private fun registerElementPaths(modifications: List<ModificationResult>) {
+        modifications.filterIsInstance<ModificationResult.Success>().forEach { result ->
+            val display = formatElementPath(result.affectedPath)
+            elementNavRegistry[display] = result.affectedPath.value
+        }
     }
 
     // ==================== Context Files Dialog ====================
@@ -726,7 +840,6 @@ class ChatPanel(
             }
 
             if (isLast) {
-                // Current session: clickable for inline rename
                 val titleText = s.title.take(30) + if (s.title.length > 30) ".." else ""
                 val label = JBLabel(titleText).apply {
                     font = font.deriveFont(Font.BOLD, 11f)
@@ -742,7 +855,6 @@ class ChatPanel(
                 })
                 breadcrumbPanel.add(label)
             } else {
-                // Parent session: clickable to navigate
                 val label = JBLabel(s.title.take(20) + if (s.title.length > 20) ".." else "").apply {
                     font = font.deriveFont(11f)
                     foreground = JBColor(Color(0x2196F3), Color(0x64B5F6))
@@ -764,10 +876,6 @@ class ChatPanel(
         breadcrumbPanel.repaint()
     }
 
-    /**
-     * Replaces the breadcrumb label with an inline JTextField for renaming.
-     * Enter or focus-lost saves, Escape cancels.
-     */
     private fun startInlineRename(label: JBLabel, sessionId: String, currentTitle: String) {
         val parent = label.parent ?: return
         val idx = (0 until parent.componentCount).firstOrNull { parent.getComponent(it) === label } ?: return
@@ -804,7 +912,7 @@ class ChatPanel(
             updateBreadcrumb()
         }
 
-        textField.addActionListener { commitRename() } // Enter
+        textField.addActionListener { commitRename() }
 
         textField.addKeyListener(object : KeyAdapter() {
             override fun keyPressed(e: KeyEvent) {
@@ -986,7 +1094,7 @@ class ChatPanel(
         when {
             cs.isWaitingForResponse() -> {
                 session.addMessage(MessageRole.USER, "[Pasted LLM response]")
-                appendToChat("\n\uD83D\uDCE5 Pasted response (${userInput.length} chars)\n")
+                appendToChat("\n\uD83D\uDC64 You:\n[Pasted LLM response]\n")
                 setInputEnabled(false); statusLabel.text = "Processing..."
                 runClipboardBg("Processing response...") { cs.handlePastedResponse(userInput) }
             }
@@ -1067,6 +1175,9 @@ class ChatPanel(
     // ==================== Result Handlers ====================
 
     private fun handleApiResult(result: ContextAwareResult, session: ChatSession) {
+        // Register element paths for click navigation
+        registerElementPaths(result.modifications)
+
         val text = buildResultText(result)
         session.addMessage(MessageRole.ASSISTANT, text)
         appendAssistantMessage(text)
@@ -1090,7 +1201,9 @@ class ChatPanel(
                 statusLabel.text = "Waiting for LLM response..."
             }
             is ClipboardStepResult.Completed -> {
-                // message already contains modification summary from ClipboardInteractionService
+                // Register element paths for click navigation
+                registerElementPaths(result.modifications)
+
                 val text = result.message.ifBlank { "Done." }
                 session.addMessage(MessageRole.ASSISTANT, text)
                 appendAssistantMessage(text)
@@ -1116,7 +1229,7 @@ class ChatPanel(
             val fail = result.modifications.filterIsInstance<ModificationResult.Failure>()
             if (ok.isNotEmpty()) {
                 appendLine("\u2705 ${ok.size} applied:")
-                ok.forEach { appendLine("   \u2022 ${it.affectedPath.value}") }
+                ok.forEach { appendLine("   \u2022 ${formatElementPath(it.affectedPath)}") }
             }
             if (fail.isNotEmpty()) {
                 appendLine("\u274C ${fail.size} failed:")
@@ -1130,6 +1243,7 @@ class ChatPanel(
     fun loadCurrentSession() {
         val session = chatHistory.getActiveSession()
         chatArea.text = ""
+        elementNavRegistry.clear()
         updateBreadcrumb()
         updateModeIndicator()
         updateContextIndicator()
@@ -1227,6 +1341,15 @@ class ChatPanel(
     }
 }
 
+// ==================== Click Target ====================
+
+private sealed class ClickTarget {
+    /** Navigate to a specific PSI element */
+    data class Element(val fullPath: String) : ClickTarget()
+    /** Open a file by relative path */
+    data class File(val relativePath: String) : ClickTarget()
+}
+
 // ==================== Helpers ====================
 
 private fun ChatMessage.toChatMessageDTO(): ChatMessageDTO {
@@ -1248,35 +1371,50 @@ data class ModeItem(val id: String, val label: String) {
 
 private val DEFAULT_CLAUDE_INSTRUCTIONS = """
 This project uses MaxVibes IDE plugin clipboard protocol for code modifications.
-When you receive a JSON message containing "systemInstruction", "task", "fileTree", or "files" fields — this is a MaxVibes protocol message from the IDE plugin. Follow these rules STRICTLY:
+
+When you receive a JSON message containing "_protocol", "systemInstruction", "task", "fileTree", or "files" fields — this is a MaxVibes protocol message from the IDE plugin. Follow these rules STRICTLY:
 
 1. RESPOND WITH ONLY A JSON OBJECT. Your entire response must be valid JSON — no markdown, no text before/after, no code blocks, no explanations outside the JSON.
+
 2. DO NOT use computer tools, bash, file creation, artifacts, or any other tools. ALL code must go inside the JSON response in the "modifications" array.
+
 3. Response format:
 {
-    "message": "Your explanation, discussion, or answer to the developer",
+    "message": "Your explanation or answer",
     "requestedFiles": ["path/to/file.kt"],
-    "modifications": [
-        {
-            "type": "CREATE_FILE",
-            "path": "src/main/kotlin/com/example/File.kt",
-            "content": "complete file content with package and imports"
-        }
-    ]
+    "reasoning": "why you need those files",
+    "modifications": [...]
 }
+
 4. All fields are optional except "message" (always recommended):
    - "message" — your explanation or discussion
    - "requestedFiles" — files you need to see (triggers file gathering in IDE)
    - "reasoning" — why you need those files
-   - "modifications" — code changes. Types: CREATE_FILE, REPLACE_FILE, DELETE_FILE
+   - "modifications" — code changes (see types below)
 
-5. You can combine fields freely:
-   - Discussion only: just "message"
-   - Need more context: "message" + "requestedFiles"
-   - Code changes: "message" + "modifications"
-   - Everything: "message" + "requestedFiles" + "modifications"
-6. For "modifications":
-   - "content" must be COMPLETE, compilable code (full file with package declaration, imports, everything)
-   - The IDE will apply these changes automatically via PSI API
-7. For regular conversation (not MaxVibes protocol messages), respond normally as usual.
+5. Modification types — PREFER element-level for existing files:
+
+   | type             | When                          | path format                                              | content              | extra fields          |
+   |------------------|-------------------------------|----------------------------------------------------------|----------------------|-----------------------|
+   | REPLACE_ELEMENT  | Change a function/class/prop  | file:path/File.kt/class[Name]/function[method]           | Complete element     | elementKind           |
+   | CREATE_ELEMENT   | Add new element to parent     | file:path/File.kt/class[Name]                            | New element code     | elementKind, position |
+   | DELETE_ELEMENT    | Remove an element             | file:path/File.kt/class[Name]/function[old]              | (empty)              |                       |
+   | ADD_IMPORT        | Add import to file            | file:path/File.kt                                        | (empty)              | importPath            |
+   | REMOVE_IMPORT     | Remove import from file       | file:path/File.kt                                        | (empty)              | importPath            |
+   | CREATE_FILE       | New file                      | src/main/kotlin/.../File.kt                              | Full file            |                       |
+   | REPLACE_FILE      | Rewrite entire file           | src/main/kotlin/.../File.kt                              | Full file            |                       |
+
+6. Element path format:
+   file:src/main/kotlin/com/example/User.kt/class[User]/function[validate]
+   Segments: class[Name], interface[Name], object[Name], function[Name], property[Name], companion_object, init, constructor[primary], enum_entry[Name]
+
+7. Key rules for modifications:
+   - PREFER REPLACE_ELEMENT/CREATE_ELEMENT over REPLACE_FILE — saves tokens!
+   - Only use REPLACE_FILE when the majority of the file changes
+   - For REPLACE_ELEMENT: content = COMPLETE element (annotations, modifiers, signature, body)
+   - For CREATE_ELEMENT: set elementKind and position (LAST_CHILD, FIRST_CHILD)
+   - Use ADD_IMPORT/REMOVE_IMPORT for imports — never manually edit the import block
+   - "content" must be complete, compilable Kotlin code
+
+8. For regular conversation (not MaxVibes protocol messages), respond normally as usual.
 """.trimIndent()
