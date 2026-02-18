@@ -477,24 +477,40 @@ Your response must be EXACTLY this JSON format (and nothing else):
     "requestedFiles": ["path/to/file.kt"],
     "modifications": [
         {
-            "type": "CREATE_FILE",
-            "path": "src/main/kotlin/com/example/File.kt",
-            "content": "full file content"
+            "type": "REPLACE_ELEMENT",
+            "path": "file:src/main/kotlin/com/example/User.kt/class[User]/function[validate]",
+            "content": "fun validate(): Boolean {\n    return name.isNotBlank()\n}",
+            "elementKind": "FUNCTION"
         }
     ]
 }
 
-ALL FIELDS ARE OPTIONAL except "message" which is always recommended:
-- "message" — your explanation or discussion. Always include this.
-- "requestedFiles" — if you need to see more files before you can code. Will trigger file gathering.
-- "modifications" — code changes to apply. Types: CREATE_FILE, REPLACE_FILE, DELETE_FILE.
-  - "content" must be complete, compilable code with package/imports.
+ALL FIELDS ARE OPTIONAL except "message" which is always recommended.
 
-IMPORTANT:
-- You can combine any fields: discuss + request files, discuss + modify code, or all three.
-- If no coding needed (planning, discussion, questions), just use "message" with empty arrays.
-- Previously gathered files are listed by path — you already saw their content in earlier messages.
-- To request a file you saw before again, include it in "requestedFiles" and it will be re-sent.
+## Modification types (prefer element-level for existing files!)
+
+| type | When | path | content | extra fields |
+|------|------|------|---------|-------------|
+| REPLACE_ELEMENT | Change a function/class/property | file:path/File.kt/class[X]/function[Y] | Complete element | elementKind |
+| CREATE_ELEMENT | Add new element to parent | file:path/File.kt/class[X] | New element | elementKind, position |
+| DELETE_ELEMENT | Remove an element | file:path/File.kt/class[X]/function[Y] | (empty) | |
+| ADD_IMPORT | Add import | file:path/File.kt | (empty) | importPath: "com.example.Foo" |
+| REMOVE_IMPORT | Remove import | file:path/File.kt | (empty) | importPath: "com.example.Bar" |
+| CREATE_FILE | New file | src/main/kotlin/.../File.kt | Full file | |
+| REPLACE_FILE | Rewrite entire file (sparingly!) | src/main/kotlin/.../File.kt | Full file | |
+
+## Element path format
+file:src/main/kotlin/com/example/User.kt/class[User]/function[validate]
+Segments: class[Name], interface[Name], object[Name], function[Name], property[Name], companion_object, init
+
+## Rules
+- PREFER REPLACE_ELEMENT/CREATE_ELEMENT over REPLACE_FILE — saves tokens!
+- Only use REPLACE_FILE when the majority of the file changes
+- For REPLACE_ELEMENT: content = complete element (annotations, modifiers, signature, body)
+- For CREATE_ELEMENT: set elementKind (FUNCTION, CLASS, PROPERTY) and position (LAST_CHILD, FIRST_CHILD)
+- Use ADD_IMPORT/REMOVE_IMPORT for imports — don't manually edit imports
+- "content" must be complete, compilable Kotlin code
+- Previously gathered files are listed by path — you already saw them in earlier messages
 - DO NOT wrap the JSON in markdown code blocks. Just output raw JSON.
 - ALL code MUST go in modifications[].content — never use tools or file creation."""
     }
@@ -516,7 +532,6 @@ IMPORTANT:
     }
 
     private fun log(message: String) {
-        // Verbose logging — будет видно в IDE и в нотификациях
         println("[MaxVibes Clipboard] $message")
     }
 
@@ -538,6 +553,16 @@ IMPORTANT:
             "CREATE_ELEMENT" -> Modification.CreateElement(targetPath = elementPath, elementKind = elementKind, content = mod.content, position = position)
             "REPLACE_ELEMENT" -> Modification.ReplaceElement(targetPath = elementPath, newContent = mod.content)
             "DELETE_ELEMENT" -> Modification.DeleteElement(targetPath = elementPath)
+            "ADD_IMPORT" -> {
+                val importFqName = mod.importPath.ifBlank { mod.content.removePrefix("import ").trim() }
+                if (importFqName.isBlank()) null
+                else Modification.AddImport(targetPath = elementPath, importPath = importFqName)
+            }
+            "REMOVE_IMPORT" -> {
+                val importFqName = mod.importPath.ifBlank { mod.content.removePrefix("import ").trim() }
+                if (importFqName.isBlank()) null
+                else Modification.RemoveImport(targetPath = elementPath, importPath = importFqName)
+            }
             else -> null
         }
     }

@@ -68,7 +68,6 @@ class ClipboardAdapter : ClipboardPort {
 
         if (jsonText == null) {
             // Attempt 5: Весь текст — это просто сообщение (без JSON)
-            // Это валидный случай для чистого диалога
             if (text.isNotBlank() && !text.contains("{")) {
                 println("[MaxVibes Clipboard] No JSON found, treating as plain message")
                 return ClipboardResponse(message = text)
@@ -96,7 +95,6 @@ class ClipboardAdapter : ClipboardPort {
             try {
                 embedded?.let { parseUnifiedResponse(it) }
             } catch (_: Exception) {
-                // Последняя попытка — весь текст как message
                 if (surroundingText.isNotBlank()) {
                     ClipboardResponse(message = surroundingText)
                 } else null
@@ -127,7 +125,6 @@ class ClipboardAdapter : ClipboardPort {
 
     private fun serializeRequest(request: ClipboardRequest): String {
         val obj = buildJsonObject {
-            // Protocol marker — helps LLM recognize this is a structured protocol
             put("_protocol", "MaxVibes IDE Plugin — respond with JSON only, do NOT use tools/artifacts/computer")
             put("_responseFormat", "Respond with ONLY a raw JSON object: {\"message\": \"...\", \"requestedFiles\": [...], \"modifications\": [...]}")
 
@@ -138,12 +135,10 @@ class ClipboardAdapter : ClipboardPort {
             put("task", request.task)
             put("projectName", request.projectName)
 
-            // File tree — always included
             if (request.fileTree.isNotBlank()) {
                 put("fileTree", truncate(request.fileTree, 8000))
             }
 
-            // Fresh files — full content of just-requested files
             if (request.freshFiles.isNotEmpty()) {
                 putJsonObject("files") {
                     request.freshFiles.forEach { (path, content) ->
@@ -152,14 +147,12 @@ class ClipboardAdapter : ClipboardPort {
                 }
             }
 
-            // Previously gathered paths — just paths, no content
             if (request.previouslyGatheredPaths.isNotEmpty()) {
                 putJsonArray("previouslyGatheredFiles") {
                     request.previouslyGatheredPaths.forEach { add(it) }
                 }
             }
 
-            // Chat history
             if (request.chatHistory.isNotEmpty()) {
                 putJsonArray("chatHistory") {
                     request.chatHistory.forEach { entry ->
@@ -171,7 +164,6 @@ class ClipboardAdapter : ClipboardPort {
                 }
             }
 
-            // Attached context (errors, traces)
             val trace = request.attachedContext
             if (!trace.isNullOrBlank()) {
                 put("errorTrace", truncate(trace, 4000))
@@ -213,7 +205,8 @@ class ClipboardAdapter : ClipboardPort {
             path = path,
             content = obj["content"]?.jsonPrimitive?.contentOrNull ?: "",
             elementKind = obj["elementKind"]?.jsonPrimitive?.contentOrNull ?: "FILE",
-            position = obj["position"]?.jsonPrimitive?.contentOrNull ?: "LAST_CHILD"
+            position = obj["position"]?.jsonPrimitive?.contentOrNull ?: "LAST_CHILD",
+            importPath = obj["importPath"]?.jsonPrimitive?.contentOrNull ?: ""
         )
     }
 

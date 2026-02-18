@@ -61,9 +61,11 @@ data class ClipboardResponse(
  * Модификация в clipboard-формате.
  */
 data class ClipboardModification(
-    val type: String,       // CREATE_FILE, REPLACE_FILE, etc.
+    val type: String,       // CREATE_FILE, REPLACE_FILE, REPLACE_ELEMENT, CREATE_ELEMENT, DELETE_ELEMENT, ADD_IMPORT, REMOVE_IMPORT
     val path: String,
     val content: String = "",
     val elementKind: String = "FILE",
-    val position: String = "LAST_CHILD"
+    val position: String = "LAST_CHILD",
+    /** For ADD_IMPORT/REMOVE_IMPORT: fully qualified import path, e.g. "com.example.dto.UserDTO" */
+    val importPath: String = ""
 )
