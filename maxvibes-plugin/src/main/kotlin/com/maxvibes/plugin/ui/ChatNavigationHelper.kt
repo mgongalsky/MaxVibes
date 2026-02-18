@@ -27,10 +27,16 @@ object ChatNavigationHelper {
      * Determines what was clicked: an element path or a file path.
      * Priority: element paths first (they contain file paths), then plain file paths.
      */
+    /**
+     * Determines what was clicked: an element path or a file path.
+     * Priority: element paths first (they contain file paths), then plain file paths.
+     * @param verbose if true, prints debug logs (use only for mouseClicked, not mouseMoved)
+     */
     fun getClickTargetAtPosition(
         chatArea: JBTextArea,
         point: Point,
-        elementNavRegistry: Map<String, String>
+        elementNavRegistry: Map<String, String>,
+        verbose: Boolean = false
     ): ClickTarget? {
         val offset = chatArea.viewToModel2D(point)
         if (offset < 0 || offset >= chatArea.document.length) return null
@@ -47,12 +53,15 @@ object ChatNavigationHelper {
             val group = match.groups[1] ?: continue
             if (posInLine >= group.range.first && posInLine <= group.range.last + 1) {
                 val displayText = group.value
+                // Try registry first
                 val fullPath = elementNavRegistry[displayText]
-                return if (fullPath != null) {
-                    ClickTarget.Element(fullPath)
-                } else {
-                    ClickTarget.File(displayText.substringBefore('/'))
+                if (fullPath != null) {
+                    if (verbose) println("[NavHelper] Element via registry: $fullPath")
+                    return ClickTarget.Element(fullPath)
                 }
+                // Fallback: resolve from display text directly
+                if (verbose) println("[NavHelper] Registry miss for '$displayText', resolving directly")
+                return ClickTarget.ElementByDisplayText(displayText)
             }
         }
 
@@ -73,9 +82,11 @@ object ChatNavigationHelper {
      * @return Status text for the status bar.
      */
     fun navigateToElement(project: Project, fullPathValue: String): String {
+        println("[NavHelper] navigateToElement: $fullPathValue")
         val elementPath = ElementPath(fullPathValue)
         val filePath = elementPath.filePath
         val basePath = project.basePath ?: return "No project base path"
+        println("[NavHelper]   filePath='$filePath', segments=${elementPath.segments.map { it.toPathString() }}")
 
         val virtualFile = LocalFileSystem.getInstance().findFileByPath("$basePath/$filePath")
             ?: findFileRecursively(File(basePath), filePath.substringAfterLast('/'))?.let {
@@ -92,7 +103,9 @@ object ChatNavigationHelper {
         return try {
             val navigator = PsiNavigator(project)
             val offset = runReadAction {
-                navigator.findElement(elementPath)?.textOffset
+                val element = navigator.findElement(elementPath)
+                println("[NavHelper]   PSI element found: ${element != null}, type=${element?.javaClass?.simpleName}, offset=${element?.textOffset}")
+                element?.textOffset
             }
             if (offset != null) {
                 OpenFileDescriptor(project, virtualFile, offset).navigate(true)
@@ -131,6 +144,57 @@ object ChatNavigationHelper {
         return "File not found: $relativePath"
     }
 
+    /**
+     * Navigate to element by display text like "LinesGame.kt/class[LinesGame]/function[drawBall]".
+     * Finds the file in the project, builds a full ElementPath, and navigates via PSI.
+     * @return Status text for the status bar.
+     */
+    fun navigateByDisplayText(project: Project, displayText: String): String {
+        val basePath = project.basePath ?: return "No project base path"
+        val fileName = displayText.substringBefore('/')
+        val segmentsPart = displayText.substringAfter('/', "")
+
+        println("[NavHelper] navigateByDisplayText: file='$fileName', segments='$segmentsPart'")
+
+        // Find the actual file
+        val ioFile = findFileRecursively(File(basePath), fileName)
+        if (ioFile == null) return "File not found: $fileName"
+
+        val relativePath = ioFile.toRelativeString(File(basePath)).replace('\\', '/')
+        val virtualFile = LocalFileSystem.getInstance().findFileByIoFile(ioFile)
+            ?: return "Cannot open: $fileName"
+
+        if (segmentsPart.isBlank()) {
+            FileEditorManager.getInstance(project).openFile(virtualFile, true)
+            return "Opened: $fileName"
+        }
+
+        // Build full element path: file:relative/path/File.kt/segments
+        val fullPathValue = "file:$relativePath/$segmentsPart"
+        println("[NavHelper]   resolved fullPath: $fullPathValue")
+
+        return try {
+            val elementPath = ElementPath(fullPathValue)
+            val navigator = PsiNavigator(project)
+            val offset = runReadAction {
+                val element = navigator.findElement(elementPath)
+                println("[NavHelper]   PSI element: ${element?.javaClass?.simpleName}, offset=${element?.textOffset}")
+                element?.textOffset
+            }
+            if (offset != null) {
+                OpenFileDescriptor(project, virtualFile, offset).navigate(true)
+                "Navigated to: $segmentsPart"
+            } else {
+                FileEditorManager.getInstance(project).openFile(virtualFile, true)
+                "Element not found, opened file"
+            }
+        } catch (e: Exception) {
+            println("[NavHelper]   error: ${e.message}")
+            FileEditorManager.getInstance(project).openFile(virtualFile, true)
+            "Opened: $fileName"
+        }
+    }
+
     fun findFileRecursively(dir: File, name: String): File? {
         if (!dir.isDirectory) return null
         for (child in dir.listFiles() ?: return null) {
@@ -166,9 +230,12 @@ object ChatNavigationHelper {
         modifications: List<ModificationResult>,
         registry: MutableMap<String, String>
     ) {
-        modifications.filterIsInstance<ModificationResult.Success>().forEach { result ->
+        val successes = modifications.filterIsInstance<ModificationResult.Success>()
+        println("[NavHelper] registerElementPaths: ${successes.size} success / ${modifications.size} total")
+        successes.forEach { result ->
             val display = formatElementPath(result.affectedPath)
             registry[display] = result.affectedPath.value
+            println("[NavHelper]   registered: '$display' → '${result.affectedPath.value}'")
         }
     }
 }
@@ -176,6 +243,10 @@ object ChatNavigationHelper {
 // ==================== Click Target ====================
 
 sealed class ClickTarget {
+    /** Navigate via full ElementPath from registry */
     data class Element(val fullPath: String) : ClickTarget()
+    /** Navigate via display text like "File.kt/class[X]/function[Y]" — resolves file at click time */
+    data class ElementByDisplayText(val displayText: String) : ClickTarget()
+    /** Open a file by relative path */
     data class File(val relativePath: String) : ClickTarget()
 }

@@ -386,9 +386,10 @@ class ChatPanel(
     private fun setupClickableLinks() {
         chatArea.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
-                val target = ChatNavigationHelper.getClickTargetAtPosition(chatArea, e.point, elementNavRegistry) ?: return
+                val target = ChatNavigationHelper.getClickTargetAtPosition(chatArea, e.point, elementNavRegistry, verbose = true) ?: return
                 statusLabel.text = when (target) {
                     is ClickTarget.Element -> ChatNavigationHelper.navigateToElement(project, target.fullPath)
+                    is ClickTarget.ElementByDisplayText -> ChatNavigationHelper.navigateByDisplayText(project, target.displayText)
                     is ClickTarget.File -> ChatNavigationHelper.openFileInEditor(project, target.relativePath)
                 }
             }
