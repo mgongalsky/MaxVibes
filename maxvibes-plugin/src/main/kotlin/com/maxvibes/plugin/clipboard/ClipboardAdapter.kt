@@ -136,13 +136,13 @@ class ClipboardAdapter : ClipboardPort {
             put("projectName", request.projectName)
 
             if (request.fileTree.isNotBlank()) {
-                put("fileTree", truncate(request.fileTree, 8000))
+                put("fileTree", request.fileTree)
             }
 
             if (request.freshFiles.isNotEmpty()) {
                 putJsonObject("files") {
                     request.freshFiles.forEach { (path, content) ->
-                        put(path, truncate(content, 12000))
+                        put(path, content)
                     }
                 }
             }
@@ -158,7 +158,7 @@ class ClipboardAdapter : ClipboardPort {
                     request.chatHistory.forEach { entry ->
                         addJsonObject {
                             put("role", entry.role)
-                            put("content", truncate(entry.content, 4000))
+                            put("content", entry.content)
                         }
                     }
                 }
@@ -166,17 +166,11 @@ class ClipboardAdapter : ClipboardPort {
 
             val trace = request.attachedContext
             if (!trace.isNullOrBlank()) {
-                put("errorTrace", truncate(trace, 4000))
+                put("errorTrace", trace)
             }
         }
 
         return json.encodeToString(JsonObject.serializer(), obj)
-    }
-
-    private fun truncate(text: String, maxLength: Int): String {
-        return if (text.length > maxLength) {
-            text.take(maxLength) + "\n... [truncated, ${text.length - maxLength} chars omitted]"
-        } else text
     }
 
     // ==================== Parsing ====================
