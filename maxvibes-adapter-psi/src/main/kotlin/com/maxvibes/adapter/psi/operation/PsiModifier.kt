@@ -95,6 +95,26 @@ class PsiModifier(
             return null
         }
 
+        // ← НОВОЕ: проверяем нет ли уже элемента с таким именем
+        val newName = elementFactory.getElementName(newElement)
+        if (newName != null && parent is KtClassOrObject) {
+            val existing = parent.declarations.firstOrNull {
+                elementFactory.getElementName(it) == newName
+            }
+            if (existing != null) {
+                println("[PsiModifier] Element '$newName' already exists, replacing instead of adding")
+                return doReplace(existing, newElement)
+            }
+        } else if (newName != null && parent is KtFile) {
+            val existing = parent.declarations.firstOrNull {
+                elementFactory.getElementName(it) == newName
+            }
+            if (existing != null) {
+                println("[PsiModifier] Element '$newName' already exists in file, replacing instead of adding")
+                return doReplace(existing, newElement)
+            }
+        }
+
         val added = when (position) {
             InsertPosition.FIRST_CHILD -> addAsFirstChild(parent, newElement)
             InsertPosition.LAST_CHILD -> addAsLastChild(parent, newElement)

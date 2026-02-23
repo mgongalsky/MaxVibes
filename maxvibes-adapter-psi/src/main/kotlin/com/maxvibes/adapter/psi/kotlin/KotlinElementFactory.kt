@@ -99,4 +99,14 @@ class KotlinElementFactory(private val project: Project) {
     fun createNewLine(count: Int): PsiElement = psiFactory.createNewLine(count)
 
     fun createWhiteSpace(text: String = " ") = psiFactory.createWhiteSpace(text)
+
+    /**
+     * Получить имя элемента для дедупликации в addElement.
+     */
+    fun getElementName(element: PsiElement): String? {
+        return when (element) {
+            is org.jetbrains.kotlin.psi.KtNamedDeclaration -> element.name
+            else -> null
+        }
+    }
 }
