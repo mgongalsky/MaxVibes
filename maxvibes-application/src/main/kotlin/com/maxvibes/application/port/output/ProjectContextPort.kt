@@ -36,16 +36,10 @@ interface ProjectContextPort {
 
     companion object {
         val DEFAULT_EXCLUDES = listOf(
-            ".git",
-            ".idea",
-            ".gradle",
-            "build",
-            "out",
-            "target",
-            "node_modules",
-            "*.class",
-            "*.jar",
-            "*.log"
+            ".git", ".idea", ".gradle", ".kotlin", ".run",
+            "build", "out", "target", "node_modules",
+            "test",
+            "*.class", "*.jar", "*.log"
         )
     }
 }

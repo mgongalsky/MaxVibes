@@ -17,11 +17,15 @@ import java.nio.charset.Charset
 class PsiProjectContextProvider(private val project: Project) : ProjectContextPort {
 
     override suspend fun getProjectContext(): Result<ProjectContext, ContextError> {
-        return runReadAction {
-            val projectDir = project.guessProjectDir()
-                ?: return@runReadAction Result.Failure(ContextError.ProjectNotFound())
+        // Refresh BEFORE runReadAction
+        val projectDir = com.intellij.openapi.application.ApplicationManager.getApplication()
+            .runReadAction<VirtualFile?> { project.guessProjectDir() }
+            ?: return Result.Failure(ContextError.ProjectNotFound())
 
-            val fileTreeResult = buildFileTree(projectDir, 5, ProjectContextPort.DEFAULT_EXCLUDES)
+        VfsUtil.markDirtyAndRefresh(false, true, true, projectDir)
+
+        return runReadAction {
+            val fileTreeResult = buildFileTree(projectDir, Int.MAX_VALUE, ProjectContextPort.DEFAULT_EXCLUDES)
             if (fileTreeResult is Result.Failure) {
                 return@runReadAction fileTreeResult as Result.Failure
             }
@@ -120,18 +124,28 @@ class PsiProjectContextProvider(private val project: Project) : ProjectContextPo
         var totalFiles = 0
         var totalDirs = 0
 
-        fun buildNode(file: VirtualFile, depth: Int): FileNode? {
-            if (shouldExclude(file.name, excludePatterns)) return null
+        log("[FileTree] Starting buildFileTree from: ${root.path}")
+        log("[FileTree] maxDepth: $maxDepth")
+        log("[FileTree] excludePatterns: $excludePatterns")
+
+        fun buildNode(file: java.io.File, depth: Int): FileNode? {
+            val excluded = shouldExclude(file.name, excludePatterns)
+            if (excluded) {
+                log("[FileTree] EXCLUDED: ${file.path}")
+                return null
+            }
 
             return if (file.isDirectory) {
                 totalDirs++
-                val children = if (depth < maxDepth) {
-                    file.children
-                        .mapNotNull { buildNode(it, depth + 1) }
-                        .sortedWith(compareBy({ !it.isDirectory }, { it.name }))
-                } else {
-                    emptyList()
-                }
+                val allChildren = file.listFiles()
+                log("[FileTree] DIR depth=$depth: ${file.path} | children count: ${allChildren?.size ?: -1}")
+                allChildren?.forEach { log("[FileTree]   child: ${it.name} isDir=${it.isDirectory}") }
+
+                val children = allChildren
+                    ?.mapNotNull { buildNode(it, depth + 1) }
+                    ?.sortedWith(compareBy({ !it.isDirectory }, { it.name }))
+                    ?: emptyList()
+
                 FileNode(
                     name = file.name,
                     path = file.path,
@@ -140,18 +154,23 @@ class PsiProjectContextProvider(private val project: Project) : ProjectContextPo
                 )
             } else {
                 totalFiles++
+                log("[FileTree] FILE depth=$depth: ${file.path}")
                 FileNode(
                     name = file.name,
                     path = file.path,
                     isDirectory = false,
-                    size = file.length
+                    size = file.length()
                 )
             }
         }
 
-        val rootNode = buildNode(root, 0)
+        val rootFile = java.io.File(root.path)
+        log("[FileTree] rootFile exists: ${rootFile.exists()}, isDir: ${rootFile.isDirectory}")
+
+        val rootNode = buildNode(rootFile, 0)
             ?: return Result.Failure(ContextError.ProjectNotFound())
 
+        log("[FileTree] Done: totalFiles=$totalFiles, totalDirs=$totalDirs")
         return Result.Success(
             FileTree(
                 root = rootNode,
@@ -159,6 +178,13 @@ class PsiProjectContextProvider(private val project: Project) : ProjectContextPo
                 totalDirectories = totalDirs
             )
         )
+    }
+
+    private fun log(message: String) {
+        val writer = java.io.OutputStreamWriter(System.out, Charsets.UTF_8)
+        writer.write(message)
+        writer.write("\n")
+        writer.flush()
     }
 
     private fun shouldExclude(name: String, patterns: List<String>): Boolean {

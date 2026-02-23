@@ -22,7 +22,12 @@ intellij {
 }
 
 tasks {
+    buildSearchableOptions {
+        enabled = false
+    }
+
     patchPluginXml {
+        version.set("1.0.1")
         sinceBuild.set("231")
         untilBuild.set("253.*")
     }

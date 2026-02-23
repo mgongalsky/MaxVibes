@@ -386,7 +386,7 @@ class LangChainLLMService(
                         architectureBlock = projectContext.architecture?.let {
                             "=== ARCHITECTURE ===\n${it.take(3000)}"
                         } ?: "",
-                        fileTree = projectContext.fileTree.toCompactString(maxDepth = 4)
+                        fileTree = projectContext.fileTree.toCompactString()
                     )
                 }
             } catch (e: Throwable) {
@@ -648,7 +648,7 @@ class LangChainLLMService(
         appendLine()
         projectContext.description?.let { appendLine("=== PROJECT DESCRIPTION ===\n${it.take(2000)}\n") }
         projectContext.architecture?.let { appendLine("=== ARCHITECTURE ===\n${it.take(3000)}\n") }
-        appendLine("=== FILE TREE ===\n${projectContext.fileTree.toCompactString(maxDepth = 4)}\n")
+        appendLine("=== FILE TREE ===\n${projectContext.fileTree.toCompactString()}\n")
         appendLine("Based on the task and project structure, which files do I need to see?")
     }
 
