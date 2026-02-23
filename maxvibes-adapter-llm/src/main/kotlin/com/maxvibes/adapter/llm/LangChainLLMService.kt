@@ -340,7 +340,7 @@ class LangChainLLMService(
             appendLine("=== CURRENT CODE CONTEXT (${gatheredFiles.size} files) ===")
             gatheredFiles.forEach { (path, content) ->
                 appendLine("--- $path ---")
-                appendLine(content.take(5000))
+                appendLine(content)
                 appendLine()
             }
         }
@@ -834,7 +834,10 @@ class LangChainLLMService(
             - Only use REPLACE_FILE when the majority of the file changes
             - Only use CREATE_FILE for genuinely new files
             - For REPLACE_ELEMENT: content must be the COMPLETE element (annotations, modifiers, signature, body)
-            - For CREATE_ELEMENT: elementKind must match the content (FUNCTION, CLASS, PROPERTY, etc.)
+            - For CREATE_ELEMENT with position AFTER/BEFORE: path must point to the SIBLING element, NOT the parent
+            - NEVER use "anchor" field — it does not exist and will be silently ignored
+            - To insert after property[X]: path = "file:.../class[Y]/property[X]", position = "AFTER"
+            - To add to end of class: path = "file:.../class[Y]", position = "LAST_CHILD"
             - Use ADD_IMPORT/REMOVE_IMPORT for import changes — never manually edit the import block
             - Write clean, idiomatic Kotlin following existing project patterns
             - If the user just asks a question, respond normally without JSON
