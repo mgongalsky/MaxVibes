@@ -108,17 +108,16 @@ class ClipboardInteractionService(
         )
     }
 
-    /**
-     * Обрабатывает вставленный ответ от LLM.
-     * Единый обработчик — сам определяет что делать по содержимому ответа.
-     */
     suspend fun handlePastedResponse(rawText: String): ClipboardStepResult {
         val state = sessionState
             ?: return error("No active clipboard session. Start a new task first.")
 
         log("Parsing pasted response (${rawText.length} chars)...")
 
-        waitingForPaste = false  // Response received, no longer waiting
+        waitingForPaste = false
+
+        val outputTokens = rawText.length / 4
+        val inputTokens = state.lastInputTokens
 
         val response = clipboardPort.parseResponse(rawText)
         if (response == null) {
@@ -135,17 +134,18 @@ class ClipboardInteractionService(
             )
         }
 
-        log("Parsed: message=${response.message.take(50)}..., " +
-                "requestedFiles=${response.requestedFiles.size}, " +
-                "modifications=${response.modifications.size}, " +
-                "reasoning=${response.reasoning?.take(40) ?: "none"}")
+        log(
+            "Parsed: message=${response.message.take(50)}..., " +
+                    "requestedFiles=${response.requestedFiles.size}, " +
+                    "modifications=${response.modifications.size}, " +
+                    "reasoning=${response.reasoning?.take(40) ?: "none"}"
+        )
 
-        // Добавляем ответ ассистента в историю (только message, без кода)
         if (response.message.isNotBlank()) {
             addToHistory(ChatRole.ASSISTANT, response.message)
         }
 
-        return processUnifiedResponse(response)
+        return processUnifiedResponse(response, inputTokens, outputTokens)
     }
 
     fun isWaitingForResponse(): Boolean = waitingForPaste
@@ -162,10 +162,11 @@ class ClipboardInteractionService(
 
     // ==================== Core Logic ====================
 
-    /**
-     * Обрабатывает единый ответ — определяет действия по содержимому.
-     */
-    private suspend fun processUnifiedResponse(response: ClipboardResponse): ClipboardStepResult {
+    private suspend fun processUnifiedResponse(
+        response: ClipboardResponse,
+        inputTokens: Int = 0,
+        outputTokens: Int = 0
+    ): ClipboardStepResult {
         val state = sessionState ?: return error("No active session")
 
         val hasFiles = response.requestedFiles.isNotEmpty()
@@ -174,28 +175,26 @@ class ClipboardInteractionService(
 
         log("Processing: hasFiles=$hasFiles, hasMods=$hasMods, hasMessage=$hasMessage")
 
-        // --- Шаг 1: Применяем модификации (если есть) ---
         val modResults = if (hasMods) {
             applyModifications(response.modifications)
         } else {
             emptyList()
         }
 
-        // --- Шаг 2: Собираем запрошенные файлы (если есть) ---
         if (hasFiles) {
             val freshFiles = gatherRequestedFiles(response.requestedFiles)
             if (freshFiles == null) {
-                // Ошибка сбора — но всё равно показываем message и mods
-                return buildCompletedResult(response, modResults,
-                    extraMessage = "\n\n⚠️ Failed to gather some requested files.")
+                return buildCompletedResult(
+                    response, modResults,
+                    extraMessage = "\n\n⚠️ Failed to gather some requested files.",
+                    inputTokens = inputTokens, outputTokens = outputTokens
+                )
             }
 
-            // Если были и моды и файлы — показываем результат модов + новый JSON
             val modSummary = if (modResults.isNotEmpty()) {
                 buildModSummary(modResults) + "\n\n"
             } else ""
 
-            // Генерируем следующий JSON с новыми файлами
             return generateAndCopyJson(
                 freshFiles = freshFiles,
                 isFirstMessage = false,
@@ -203,14 +202,9 @@ class ClipboardInteractionService(
             )
         }
 
-        // --- Шаг 3: Только message и/или mods — показываем результат ---
-        // Сессия остаётся активной для продолжения диалога!
-        return buildCompletedResult(response, modResults)
+        return buildCompletedResult(response, modResults, inputTokens = inputTokens, outputTokens = outputTokens)
     }
 
-    /**
-     * Генерирует JSON-запрос и копирует в буфер.
-     */
     private fun generateAndCopyJson(
         freshFiles: Map<String, String>,
         isFirstMessage: Boolean,
@@ -220,8 +214,10 @@ class ClipboardInteractionService(
 
         val previousPaths = state.allGatheredFiles.keys.toList()
 
-        log("Generating JSON: freshFiles=${freshFiles.size}, previousPaths=${previousPaths.size}, " +
-                "historySize=${state.dialogHistory.size}")
+        log(
+            "Generating JSON: freshFiles=${freshFiles.size}, previousPaths=${previousPaths.size}, " +
+                    "historySize=${state.dialogHistory.size}"
+        )
 
         val request = ClipboardRequest(
             phase = if (state.allGatheredFiles.isEmpty() && freshFiles.isEmpty())
@@ -249,6 +245,7 @@ class ClipboardInteractionService(
         val copyStatus = if (copied) "copied to clipboard ✓" else "generated (copy manually)"
 
         val totalTokens = estimateTokens(request)
+        state.lastInputTokens = totalTokens
         val phase = request.phase.name.lowercase()
 
         val userMessage = buildString {
@@ -281,7 +278,8 @@ class ClipboardInteractionService(
         return ClipboardStepResult.WaitingForResponse(
             phase = request.phase,
             userMessage = userMessage,
-            jsonRequest = request
+            jsonRequest = request,
+            estimatedInputTokens = totalTokens
         )
     }
 
@@ -357,7 +355,9 @@ class ClipboardInteractionService(
     private fun buildCompletedResult(
         response: ClipboardResponse,
         modResults: List<ModificationResult>,
-        extraMessage: String = ""
+        extraMessage: String = "",
+        inputTokens: Int = 0,
+        outputTokens: Int = 0
     ): ClipboardStepResult {
         val successCount = modResults.count { it is ModificationResult.Success }
         val failCount = modResults.size - successCount
@@ -378,7 +378,6 @@ class ClipboardInteractionService(
             }
         }
 
-        // Сессия НЕ сбрасывается — пользователь может продолжить диалог!
         if (modResults.isNotEmpty()) {
             notificationPort.showSuccess("Done. Session active — you can continue the dialog.")
         }
@@ -388,7 +387,9 @@ class ClipboardInteractionService(
         return ClipboardStepResult.Completed(
             message = message,
             modifications = modResults,
-            success = failCount == 0
+            success = failCount == 0,
+            inputTokens = inputTokens,
+            outputTokens = outputTokens
         )
     }
 
@@ -588,13 +589,16 @@ sealed class ClipboardStepResult {
     data class WaitingForResponse(
         val phase: ClipboardPhase,
         val userMessage: String,
-        val jsonRequest: ClipboardRequest
+        val jsonRequest: ClipboardRequest,
+        val estimatedInputTokens: Int = 0
     ) : ClipboardStepResult()
 
     data class Completed(
         val message: String,
         val modifications: List<ModificationResult>,
-        val success: Boolean
+        val success: Boolean,
+        val inputTokens: Int = 0,
+        val outputTokens: Int = 0
     ) : ClipboardStepResult()
 
     data class Error(val message: String) : ClipboardStepResult()
@@ -607,7 +611,7 @@ private data class ClipboardSessionState(
     val projectContext: ProjectContext,
     val dialogHistory: MutableList<ChatMessageDTO>,
     val prompts: PromptTemplates,
-    /** Все когда-либо собранные файлы за эту сессию (path → content) */
     val allGatheredFiles: MutableMap<String, String>,
-    val attachedContext: String? = null
+    val attachedContext: String? = null,
+    var lastInputTokens: Int = 0
 )

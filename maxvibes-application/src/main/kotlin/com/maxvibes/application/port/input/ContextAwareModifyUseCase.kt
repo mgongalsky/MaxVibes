@@ -39,5 +39,9 @@ data class ContextAwareResult(
     val requestedFiles: List<String>,
     val gatheredFiles: List<String>,
     val modifications: List<ModificationResult>,
-    val error: String? = null
+    val error: String? = null,
+    val planningInputTokens: Int = 0,
+    val planningOutputTokens: Int = 0,
+    val chatInputTokens: Int = 0,
+    val chatOutputTokens: Int = 0
 )

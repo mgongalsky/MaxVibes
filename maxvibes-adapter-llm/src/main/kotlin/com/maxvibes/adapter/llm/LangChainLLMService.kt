@@ -31,6 +31,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 import java.time.Duration
+import java.util.concurrent.atomic.AtomicReference
+import dev.langchain4j.model.chat.listener.ChatModelListener
+import dev.langchain4j.model.chat.listener.ChatModelResponseContext
 
 /**
  * LLM Service implementation using LangChain4j 1.11.0 with AiServices.
@@ -91,6 +94,7 @@ class LangChainLLMService(
     }
 
     private val chatModel: ChatModel by lazy { createChatModel() }
+    private val lastTokenUsagePair = AtomicReference<Pair<Int, Int>?>(null)
 
     // AiService proxy for planning - created lazily
     private val planningService: PlanningAiService by lazy {
@@ -108,12 +112,13 @@ class LangChainLLMService(
     // ==================== Model Creation ====================
 
     private fun createChatModel(): ChatModel {
+        val listener = createTokenListener()
         return when (config.providerType) {
             LLMProviderType.OPENAI -> {
                 val isReasoningModel = config.modelId.contains("gpt-5") ||
                         config.modelId.contains("o1") ||
                         config.modelId.contains("o3")
-                val maxTokens = if (isReasoningModel) 32768   else config.maxTokens
+                val maxTokens = if (isReasoningModel) 32768 else config.maxTokens
 
                 OpenAiChatModel.builder()
                     .apiKey(config.apiKey)
@@ -121,6 +126,7 @@ class LangChainLLMService(
                     .temperature(config.temperature)
                     .maxCompletionTokens(maxTokens)
                     .timeout(Duration.ofSeconds(if (isReasoningModel) 300 else 120))
+                    .listeners(listOf(listener))
                     .build()
             }
 
@@ -128,8 +134,9 @@ class LangChainLLMService(
                 .apiKey(config.apiKey)
                 .modelName(resolveAnthropicModel(config.modelId))
                 .temperature(config.temperature)
-                .maxTokens(config.maxTokens.coerceAtLeast(32768  ))
+                .maxTokens(config.maxTokens.coerceAtLeast(32768))
                 .timeout(Duration.ofSeconds(180))
+                .listeners(listOf(listener))
                 .build()
 
             LLMProviderType.OLLAMA -> OllamaChatModel.builder()
@@ -137,6 +144,7 @@ class LangChainLLMService(
                 .modelName(config.modelId)
                 .temperature(config.temperature)
                 .timeout(Duration.ofSeconds(300))
+                .listeners(listOf(listener))
                 .build()
 
             LLMProviderType.DEEPSEEK -> OpenAiChatModel.builder()
@@ -146,7 +154,17 @@ class LangChainLLMService(
                 .temperature(config.temperature)
                 .maxCompletionTokens(config.maxTokens)
                 .timeout(Duration.ofSeconds(120))
+                .listeners(listOf(listener))
                 .build()
+        }
+    }
+
+    private fun createTokenListener() = object : ChatModelListener {
+        override fun onResponse(responseContext: ChatModelResponseContext) {
+            val tu = responseContext.chatResponse()?.tokenUsage()
+            if (tu != null) {
+                lastTokenUsagePair.set(Pair(tu.inputTokenCount() ?: 0, tu.outputTokenCount() ?: 0))
+            }
         }
     }
 
@@ -251,18 +269,16 @@ class LangChainLLMService(
             log("[LangChainLLMService] History: ${history.size} messages")
             log("[LangChainLLMService] Context files: ${context.gatheredFiles.size}")
 
-            // Build dynamic parts
+            lastTokenUsagePair.set(null)
+
             val systemPrompt = buildChatSystemPrompt(context)
             val contextBlock = buildContextBlock(context.gatheredFiles)
 
-            // Try AiServices first (structured output via tool calling)
             val chatResponse = try {
                 withPluginClassLoader {
                     val chatService = createChatService(systemPrompt, history, contextBlock)
                     val dto: ChatResponseDTO = chatService.chat(message)
-
                     log("[LangChainLLMService] AiServices OK: ${dto.modifications.size} modifications")
-
                     ChatResponse(
                         message = dto.message,
                         modifications = dto.modifications.mapNotNull { convertModification(it) },
@@ -272,13 +288,17 @@ class LangChainLLMService(
             } catch (e: Throwable) {
                 log("[LangChainLLMService] AiServices failed: ${e.message}")
                 log("[LangChainLLMService] Falling back to raw ChatModel + regex parsing")
-
-                // Fallback: raw ChatModel with regex parsing
                 chatViaRawModel(message, history, systemPrompt, contextBlock)
             }
 
-            log("[LangChainLLMService] Final result: ${chatResponse.modifications.size} modifications")
-            Result.Success(chatResponse)
+            val tu = lastTokenUsagePair.getAndSet(null)
+            val finalResponse = if (tu != null) {
+                log("[LangChainLLMService] Chat tokens: in=${tu.first}, out=${tu.second}")
+                chatResponse.copy(tokenUsage = TokenUsage(tu.first, tu.second))
+            } else chatResponse
+
+            log("[LangChainLLMService] Final result: ${finalResponse.modifications.size} modifications")
+            Result.Success(finalResponse)
 
         } catch (e: Exception) {
             log("[LangChainLLMService] Chat error: ${e.message}")
@@ -370,8 +390,10 @@ class LangChainLLMService(
             log("[LangChainLLMService] Planning phase via AiServices")
             log("[LangChainLLMService] Task: $task")
 
-            val result: PlanningResultDTO = try {
-                withPluginClassLoader {
+            lastTokenUsagePair.set(null)
+
+            val contextRequest = try {
+                val result = withPluginClassLoader {
                     planningService.planContext(
                         task = task,
                         projectName = projectContext.name,
@@ -389,20 +411,23 @@ class LangChainLLMService(
                         fileTree = projectContext.fileTree.toCompactString()
                     )
                 }
-            } catch (e: Throwable) {
-                log("[LangChainLLMService] AiServices planning failed: ${e.message}")
-                log("[LangChainLLMService] Falling back to raw planning")
-                return@withContext planContextRaw(task, projectContext, prompts)
-            }
-
-            log("[LangChainLLMService] Planning OK: ${result.requestedFiles.size} files")
-
-            Result.Success(
+                val tu = lastTokenUsagePair.getAndSet(null)
+                if (tu != null) log("[LangChainLLMService] Planning tokens: in=${tu.first}, out=${tu.second}")
+                log("[LangChainLLMService] Planning OK: ${result.requestedFiles.size} files")
                 ContextRequest(
                     requestedFiles = result.requestedFiles,
                     reasoning = result.reasoning
                 )
-            )
+            } catch (e: Throwable) {
+                log("[LangChainLLMService] AiServices planning failed: ${e.message}")
+                log("[LangChainLLMService] Falling back to raw planning")
+                lastTokenUsagePair.set(null)
+                val rawResult = planContextRaw(task, projectContext, prompts)
+                if (rawResult is Result.Failure) return@withContext rawResult
+                (rawResult as Result.Success).value
+            }
+
+            Result.Success(contextRequest)
         } catch (e: Exception) {
             log("[LangChainLLMService] Planning error: ${e.message}")
             e.printStackTrace()

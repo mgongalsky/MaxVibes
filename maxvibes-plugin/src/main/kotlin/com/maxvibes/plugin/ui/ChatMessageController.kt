@@ -13,11 +13,8 @@ import com.maxvibes.plugin.chat.ChatSession
 import com.maxvibes.plugin.chat.MessageRole
 import com.maxvibes.plugin.service.MaxVibesService
 import kotlinx.coroutines.runBlocking
+import com.maxvibes.plugin.service.TokenUsageAccumulator
 
-/**
- * Callback interface for ChatMessageController → ChatPanel communication.
- * Allows the controller to update the UI without direct field access.
- */
 interface ChatPanelCallbacks {
     fun appendToChat(text: String)
     fun appendAssistantMessage(text: String)
@@ -27,6 +24,7 @@ interface ChatPanelCallbacks {
     fun updateBreadcrumb()
     fun registerElementPaths(modifications: List<ModificationResult>)
     fun formatMarkdown(text: String): String
+    fun updateTokenDisplay()
 }
 
 /**
@@ -148,6 +146,11 @@ class ChatMessageController(
     private fun handleApiResult(result: ContextAwareResult, session: ChatSession) {
         callbacks.registerElementPaths(result.modifications)
 
+        val accumulator = TokenUsageAccumulator.getInstance(project)
+        accumulator.addPlanning(result.planningInputTokens, result.planningOutputTokens)
+        accumulator.addChat(result.chatInputTokens, result.chatOutputTokens)
+        callbacks.updateTokenDisplay()
+
         val text = buildResultText(result)
         session.addMessage(MessageRole.ASSISTANT, text)
         callbacks.appendAssistantMessage(text)
@@ -157,14 +160,13 @@ class ChatMessageController(
         callbacks.updateBreadcrumb()
     }
 
-    /**
-     * Handle clipboard result.
-     * NOTE: result.message from ClipboardInteractionService already includes modification summary,
-     * so we do NOT add a second summary here.
-     */
     private fun handleClipboardResult(result: ClipboardStepResult, session: ChatSession) {
         when (result) {
             is ClipboardStepResult.WaitingForResponse -> {
+                val accumulator = TokenUsageAccumulator.getInstance(project)
+                accumulator.addChat(result.estimatedInputTokens, 0)
+                callbacks.updateTokenDisplay()
+
                 session.addMessage(MessageRole.ASSISTANT, result.userMessage)
                 callbacks.appendToChat("\n\uD83D\uDCCB MaxVibes:\n${callbacks.formatMarkdown(result.userMessage)}\n")
                 callbacks.appendToChat("\u2500".repeat(50) + "\n")
@@ -175,6 +177,10 @@ class ChatMessageController(
 
             is ClipboardStepResult.Completed -> {
                 callbacks.registerElementPaths(result.modifications)
+
+                val accumulator = TokenUsageAccumulator.getInstance(project)
+                accumulator.addChat(0, result.outputTokens)
+                callbacks.updateTokenDisplay()
 
                 val text = result.message.ifBlank { "Done." }
                 session.addMessage(MessageRole.ASSISTANT, text)

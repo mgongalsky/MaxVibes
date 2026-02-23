@@ -19,6 +19,7 @@ import java.awt.event.KeyEvent
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.*
+import com.maxvibes.plugin.service.TokenUsageAccumulator
 
 /**
  * Main chat panel: UI fields, layout, mode switching, breadcrumb,
@@ -66,6 +67,11 @@ class ChatPanel(
     }
 
     private val statusLabel = JBLabel("Ready").apply { foreground = JBColor.GRAY }
+    private val tokenLabel = JBLabel("").apply {
+        foreground = JBColor.GRAY
+        font = font.deriveFont(10f)
+        horizontalAlignment = javax.swing.SwingConstants.CENTER
+    }
     private val modeIndicator = JBLabel("").apply {
         foreground = JBColor(Color(0x2196F3), Color(0x64B5F6)); font = font.deriveFont(Font.BOLD, 11f); isVisible = false
     }
@@ -246,10 +252,10 @@ class ChatPanel(
     private fun setupUI() {
         border = JBUI.Borders.empty(); background = JBColor.background()
 
-        // Header
         val headerPanel = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS); background = JBColor.background()
-            border = JBUI.Borders.compound(JBUI.Borders.empty(4, 8), JBUI.Borders.customLine(JBColor.border(), 0, 0, 1, 0))
+            border =
+                JBUI.Borders.compound(JBUI.Borders.empty(4, 8), JBUI.Borders.customLine(JBColor.border(), 0, 0, 1, 0))
 
             val controlRow = JPanel(BorderLayout()).apply {
                 background = JBColor.background(); maximumSize = Dimension(Int.MAX_VALUE, 30)
@@ -311,12 +317,17 @@ class ChatPanel(
             }, BorderLayout.SOUTH)
         }
 
-        val statusBar = JPanel(BorderLayout()).apply {
-            border = JBUI.Borders.empty(2, 10); background = JBColor.background()
-            add(statusLabel, BorderLayout.WEST)
-            add(JBLabel("<html><small>Ctrl+Enter send | Click file paths to open</small></html>").apply {
-                foreground = JBColor.GRAY
-            }, BorderLayout.EAST)
+        val statusBar = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            border = JBUI.Borders.empty(2, 10, 2, 10); background = JBColor.background()
+            add(JPanel(BorderLayout()).apply {
+                background = JBColor.background()
+                add(statusLabel, BorderLayout.WEST)
+            })
+            add(JPanel(BorderLayout()).apply {
+                background = JBColor.background()
+                add(tokenLabel.apply { horizontalAlignment = javax.swing.SwingConstants.LEFT }, BorderLayout.WEST)
+            })
         }
 
         add(headerPanel, BorderLayout.NORTH)
@@ -599,5 +610,9 @@ class ChatPanel(
         val ctxCount = chatHistory.getGlobalContextFiles().size
         val ctxHint = if (ctxCount > 0) "\n  \uD83D\uDCCE $ctxCount global context file(s) active" else ""
         appendToChat("  MaxVibes  \u2022  $mode$branchHint$ctxHint\n\n  Type your task, or use Sessions to browse dialogs.\n  Ctrl+Enter send | Click file paths to open\n\n")
+    }
+    override fun updateTokenDisplay() {
+        val acc = TokenUsageAccumulator.getInstance(project)
+        tokenLabel.text = if (acc.totalTokens > 0) acc.formatDisplay() else ""
     }
 }

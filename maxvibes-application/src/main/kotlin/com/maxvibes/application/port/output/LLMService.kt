@@ -78,13 +78,16 @@ data class ChatContext(
     val planOnly: Boolean = false
 )
 
-/**
- * Ответ от LLM: текст + опциональные модификации
- */
 data class ChatResponse(
     val message: String,
     val modifications: List<Modification> = emptyList(),
-    val requestedFiles: List<String> = emptyList()
+    val requestedFiles: List<String> = emptyList(),
+    val tokenUsage: TokenUsage? = null
+)
+
+data class TokenUsage(
+    val inputTokens: Int,
+    val outputTokens: Int
 )
 
 // ==================== Legacy DTOs ====================
