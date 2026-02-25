@@ -195,10 +195,14 @@ class ClipboardInteractionService(
                 buildModSummary(modResults) + "\n\n"
             } else ""
 
+            // prefixMessage теперь только для истории/лога, reasoning передаём отдельно
+            val prefixForHistory = modSummary + buildFileGatherMessage(response, freshFiles)
+
             return generateAndCopyJson(
                 freshFiles = freshFiles,
                 isFirstMessage = false,
-                prefixMessage = modSummary + buildFileGatherMessage(response, freshFiles)
+                prefixMessage = prefixForHistory.takeIf { it.isNotBlank() },
+                llmReasoning = response.reasoning?.takeIf { it.isNotBlank() }
             )
         }
 
@@ -208,7 +212,8 @@ class ClipboardInteractionService(
     private fun generateAndCopyJson(
         freshFiles: Map<String, String>,
         isFirstMessage: Boolean,
-        prefixMessage: String? = null
+        prefixMessage: String? = null,
+        llmReasoning: String? = null
     ): ClipboardStepResult {
         val state = sessionState ?: return error("No active session")
 
@@ -246,30 +251,9 @@ class ClipboardInteractionService(
 
         val totalTokens = estimateTokens(request)
         state.lastInputTokens = totalTokens
-        val phase = request.phase.name.lowercase()
 
-        val userMessage = buildString {
-            if (!prefixMessage.isNullOrBlank()) {
-                appendLine(prefixMessage)
-                appendLine()
-            }
-
-            appendLine("📋 JSON $copyStatus")
-            appendLine("   Phase: $phase | History: ${state.dialogHistory.size} msgs | ~$totalTokens tokens")
-
-            if (freshFiles.isNotEmpty()) {
-                appendLine("   📁 Fresh files (${freshFiles.size}):")
-                freshFiles.keys.forEach { path ->
-                    appendLine("      • ${path.substringAfterLast('/')}")
-                }
-            }
-            if (previousPaths.isNotEmpty()) {
-                appendLine("   📂 Previously gathered: ${previousPaths.size} file(s)")
-            }
-
-            appendLine()
-            append("Paste this into Claude/ChatGPT, then paste the response back here.")
-        }
+        // userMessage — минимальный текст, отображаемый как основное содержимое пузыря
+        val userMessage = "📋 JSON $copyStatus\nPaste into Claude/ChatGPT, then paste the response back here."
 
         log("JSON ready: $copyStatus, ~$totalTokens tokens")
 
@@ -279,7 +263,10 @@ class ClipboardInteractionService(
             phase = request.phase,
             userMessage = userMessage,
             jsonRequest = request,
-            estimatedInputTokens = totalTokens
+            estimatedInputTokens = totalTokens,
+            llmReasoning = llmReasoning,
+            freshFileNames = freshFiles.keys.map { it.substringAfterLast('/') },
+            previouslyGatheredCount = previousPaths.size
         )
     }
 
@@ -590,7 +577,10 @@ sealed class ClipboardStepResult {
         val phase: ClipboardPhase,
         val userMessage: String,
         val jsonRequest: ClipboardRequest,
-        val estimatedInputTokens: Int = 0
+        val estimatedInputTokens: Int = 0,
+        val llmReasoning: String? = null,
+        val freshFileNames: List<String> = emptyList(),
+        val previouslyGatheredCount: Int = 0
     ) : ClipboardStepResult()
 
     data class Completed(

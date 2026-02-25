@@ -24,6 +24,14 @@ interface ChatPanelCallbacks {
     fun registerElementPaths(modifications: List<ModificationResult>)
     fun formatMarkdown(text: String): String
     fun updateTokenDisplay()
+    fun addUserMessageBubble(text: String)
+    fun addAssistantMessageBubble(
+        text: String,
+        tokenInfo: String?,
+        modifications: List<ModificationResult>,
+        metaFiles: List<String> = emptyList()
+    )
+    fun clearChatDisplay()
 }
 
 /**
@@ -57,16 +65,14 @@ class ChatMessageController(
                         planOnly = isPlanOnly, globalContextFiles = globalContextFiles
                     )
                     val result = service.contextAwareModifyUseCase.execute(req)
-                    ApplicationManager.getApplication().invokeLater {
-                        handleApiResult(result, session)
-                    }
+                    ApplicationManager.getApplication().invokeLater { handleApiResult(result, session) }
                 }
             }
 
             override fun onCancel() {
                 ApplicationManager.getApplication().invokeLater {
                     session.addMessage(MessageRole.SYSTEM, "Cancelled")
-                    callbacks.appendToChat("\n\u26A0\uFE0F Cancelled\n")
+                    callbacks.appendToChat("\u26A0\uFE0F Cancelled")
                     callbacks.setInputEnabled(true)
                     callbacks.setStatus("Cancelled")
                 }
@@ -84,31 +90,30 @@ class ChatMessageController(
         isPlanOnly: Boolean,
         globalContextFiles: List<String>
     ) {
-        ProgressManager.getInstance().run(object : Task.Backgroundable(project, "MaxVibes: Processing (budget)...", true) {
-            override fun run(indicator: ProgressIndicator) {
-                service.notificationService.setProgressIndicator(indicator)
-                runBlocking {
-                    val req = ContextAwareRequest(
-                        task = task, history = history, dryRun = isDryRun,
-                        planOnly = isPlanOnly, globalContextFiles = globalContextFiles
-                    )
-                    val uc = service.cheapContextAwareModifyUseCase ?: service.contextAwareModifyUseCase
-                    val result = uc.execute(req)
-                    ApplicationManager.getApplication().invokeLater {
-                        handleApiResult(result, session)
+        ProgressManager.getInstance()
+            .run(object : Task.Backgroundable(project, "MaxVibes: Processing (budget)...", true) {
+                override fun run(indicator: ProgressIndicator) {
+                    service.notificationService.setProgressIndicator(indicator)
+                    runBlocking {
+                        val req = ContextAwareRequest(
+                            task = task, history = history, dryRun = isDryRun,
+                            planOnly = isPlanOnly, globalContextFiles = globalContextFiles
+                        )
+                        val uc = service.cheapContextAwareModifyUseCase ?: service.contextAwareModifyUseCase
+                        val result = uc.execute(req)
+                        ApplicationManager.getApplication().invokeLater { handleApiResult(result, session) }
                     }
                 }
-            }
 
-            override fun onCancel() {
-                ApplicationManager.getApplication().invokeLater {
-                    session.addMessage(MessageRole.SYSTEM, "Cancelled")
-                    callbacks.appendToChat("\n\u26A0\uFE0F Cancelled\n")
-                    callbacks.setInputEnabled(true)
-                    callbacks.setStatus("Cancelled")
+                override fun onCancel() {
+                    ApplicationManager.getApplication().invokeLater {
+                        session.addMessage(MessageRole.SYSTEM, "Cancelled")
+                        callbacks.appendToChat("\u26A0\uFE0F Cancelled")
+                        callbacks.setInputEnabled(true)
+                        callbacks.setStatus("Cancelled")
+                    }
                 }
-            }
-        })
+            })
     }
 
     // ==================== Clipboard Mode ====================
@@ -123,16 +128,14 @@ class ChatMessageController(
                 service.notificationService.setProgressIndicator(indicator)
                 runBlocking {
                     val result = action()
-                    ApplicationManager.getApplication().invokeLater {
-                        handleClipboardResult(result, session)
-                    }
+                    ApplicationManager.getApplication().invokeLater { handleClipboardResult(result, session) }
                 }
             }
 
             override fun onCancel() {
                 ApplicationManager.getApplication().invokeLater {
                     service.clipboardService.reset()
-                    callbacks.appendToChat("\n\u26A0\uFE0F Cancelled\n")
+                    callbacks.appendToChat("\u26A0\uFE0F Cancelled")
                     callbacks.setInputEnabled(true)
                     callbacks.updateModeIndicator()
                 }
@@ -144,15 +147,22 @@ class ChatMessageController(
 
     private fun handleApiResult(result: ContextAwareResult, session: ChatSession) {
         callbacks.registerElementPaths(result.modifications)
-
         session.addPlanningTokens(result.planningInputTokens, result.planningOutputTokens)
         session.addChatTokens(result.chatInputTokens, result.chatOutputTokens)
         callbacks.updateTokenDisplay()
 
-        val text = buildResultText(result)
-        session.addMessage(MessageRole.ASSISTANT, text)
-        callbacks.appendAssistantMessage(text)
-        callbacks.appendToChat("\u2500".repeat(50) + "\n")
+        val mainText = result.message
+        session.addMessage(MessageRole.ASSISTANT, mainText)
+
+        val tokenInfo = buildTokenInfo(
+            result.planningInputTokens, result.planningOutputTokens,
+            result.chatInputTokens, result.chatOutputTokens
+        )
+        callbacks.addAssistantMessageBubble(
+            callbacks.formatMarkdown(mainText),
+            tokenInfo,
+            result.modifications
+        )
         callbacks.setInputEnabled(true)
         callbacks.setStatus(if (result.success) "Ready" else "Errors")
         callbacks.updateBreadcrumb()
@@ -165,8 +175,24 @@ class ChatMessageController(
                 callbacks.updateTokenDisplay()
 
                 session.addMessage(MessageRole.ASSISTANT, result.userMessage)
-                callbacks.appendToChat("\n\uD83D\uDCCB MaxVibes:\n${callbacks.formatMarkdown(result.userMessage)}\n")
-                callbacks.appendToChat("\u2500".repeat(50) + "\n")
+
+                val reasoning = result.llmReasoning
+                val bubbleText = if (!reasoning.isNullOrBlank()) {
+                    callbacks.formatMarkdown(reasoning)
+                } else {
+                    result.userMessage
+                }
+
+                val tokenSummaryParts = mutableListOf<String>()
+                if (result.estimatedInputTokens > 0) tokenSummaryParts += "~${fmt(result.estimatedInputTokens)} tokens"
+                if (result.freshFileNames.isNotEmpty()) tokenSummaryParts += "${result.freshFileNames.size} files"
+                if (result.previouslyGatheredCount > 0) tokenSummaryParts += "prev: ${result.previouslyGatheredCount}"
+                tokenSummaryParts += result.phase.name.lowercase()
+                val tokenInfo = tokenSummaryParts.joinToString("  \u00B7  ")
+
+                callbacks.addAssistantMessageBubble(
+                    bubbleText, tokenInfo, emptyList(), result.freshFileNames
+                )
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
                 callbacks.setStatus("Waiting for LLM response...")
@@ -174,14 +200,15 @@ class ChatMessageController(
 
             is ClipboardStepResult.Completed -> {
                 callbacks.registerElementPaths(result.modifications)
-
                 session.addChatTokens(0, result.outputTokens)
                 callbacks.updateTokenDisplay()
 
                 val text = result.message.ifBlank { "Done." }
                 session.addMessage(MessageRole.ASSISTANT, text)
-                callbacks.appendAssistantMessage(text)
-                callbacks.appendToChat("\u2500".repeat(50) + "\n")
+                val tokenInfo = if (result.outputTokens > 0) "\u2193${fmt(result.outputTokens)}" else null
+                callbacks.addAssistantMessageBubble(
+                    callbacks.formatMarkdown(text), tokenInfo, result.modifications
+                )
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
                 val hint = if (service.clipboardService.hasActiveSession()) " \u2022 Session active" else ""
@@ -191,7 +218,7 @@ class ChatMessageController(
 
             is ClipboardStepResult.Error -> {
                 session.addMessage(MessageRole.SYSTEM, "Error: ${result.message}")
-                callbacks.appendToChat("\n\u274C ${result.message}\n")
+                callbacks.appendToChat("\u274C ${result.message}")
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
                 callbacks.setStatus("Error")
@@ -201,22 +228,17 @@ class ChatMessageController(
 
     // ==================== Helpers ====================
 
-    private fun buildResultText(result: ContextAwareResult): String = buildString {
-        append(result.message)
-        if (result.modifications.isNotEmpty()) {
-            appendLine("\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500")
-            val ok = result.modifications.filterIsInstance<ModificationResult.Success>()
-            val fail = result.modifications.filterIsInstance<ModificationResult.Failure>()
-            if (ok.isNotEmpty()) {
-                appendLine("\u2705 ${ok.size} applied:")
-                ok.forEach { appendLine("   \u2022 ${ChatNavigationHelper.formatElementPath(it.affectedPath)}") }
-            }
-            if (fail.isNotEmpty()) {
-                appendLine("\u274C ${fail.size} failed:")
-                fail.forEach { appendLine("   \u2022 ${it.error.message}") }
-            }
-        }
+    private fun buildTokenInfo(planIn: Int, planOut: Int, chatIn: Int, chatOut: Int): String? {
+        if (planIn + planOut + chatIn + chatOut == 0) return null
+        val parts = mutableListOf<String>()
+        if (planIn + planOut > 0) parts += "plan \u2191${fmt(planIn)} \u2193${fmt(planOut)}"
+        if (chatIn + chatOut > 0) parts += "chat \u2191${fmt(chatIn)} \u2193${fmt(chatOut)}"
+        val cost = (planIn + chatIn) / 1_000_000.0 * 3.0 + (planOut + chatOut) / 1_000_000.0 * 15.0
+        parts += "~\$${String.format("%.3f", cost)}"
+        return parts.joinToString("  \u00B7  ")
     }
+
+    private fun fmt(n: Int) = if (n >= 1000) "${n / 1000}k" else n.toString()
 
     companion object {
         fun buildTaskWithTrace(task: String, trace: String?): String {
