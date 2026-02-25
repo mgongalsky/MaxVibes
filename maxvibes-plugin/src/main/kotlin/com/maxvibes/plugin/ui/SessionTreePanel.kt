@@ -186,7 +186,8 @@ class SessionTreePanel(
             updatedAt = node.session.updatedAt,
             messageCount = node.session.messages.size,
             childCount = node.children.size,
-            depth = node.depth
+            depth = node.depth,
+            totalTokens = node.session.totalTokens
         )
         val swingNode = DefaultMutableTreeNode(data)
         for (child in node.children) {
@@ -225,16 +226,14 @@ class SessionTreePanel(
 
 // ==================== Tree Data & Renderers ====================
 
-/**
- * Node data for JTree display.
- */
 data class TreeNodeData(
     val sessionId: String,
     val title: String,
     val updatedAt: Long,
     val messageCount: Int,
     val childCount: Int,
-    val depth: Int
+    val depth: Int,
+    val totalTokens: Int = 0
 ) {
     override fun toString(): String = title
 }
@@ -260,7 +259,6 @@ class SessionCellRenderer(
         tree: JTree, value: Any?, sel: Boolean, expanded: Boolean,
         leaf: Boolean, row: Int, hasFocus: Boolean
     ): Component {
-        // Let default handle selection colors
         super.getTreeCellRendererComponent(tree, value, sel, expanded, leaf, row, hasFocus)
 
         val node = (value as? DefaultMutableTreeNode)?.userObject as? TreeNodeData
@@ -270,17 +268,19 @@ class SessionCellRenderer(
         }
 
         val icon = when {
-            node.childCount > 0 -> "\uD83D\uDCC2"  // 📂
-            node.messageCount == 0 -> "\uD83D\uDCC4" // 📄
-            else -> "\uD83D\uDCAC"                    // 💬
+            node.childCount > 0 -> "\uD83D\uDCC2"
+            node.messageCount == 0 -> "\uD83D\uDCC4"
+            else -> "\uD83D\uDCAC"
         }
 
         val title = escapeHtml(node.title)
         val date = dateFormat.format(Date(node.updatedAt))
+        val tokenStr = if (node.totalTokens > 0) " \u2022 ${formatTok(node.totalTokens)} tok" else ""
         val meta = buildString {
             append(date)
             append(" \u2022 ${node.messageCount} msg")
             if (node.childCount > 0) append(" \u2022 ${node.childCount} branch")
+            append(tokenStr)
         }
 
         val gray = if (JBColor.isBright()) "#888888" else "#999999"
@@ -297,4 +297,9 @@ class SessionCellRenderer(
 
     private fun escapeHtml(text: String): String =
         text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    private fun formatTok(n: Int): String = when {
+        n >= 1_000_000 -> "${n / 1_000_000}.${(n % 1_000_000) / 100_000}M"
+        n >= 1_000 -> "${n / 1_000}k"
+        else -> n.toString()
+    }
 }

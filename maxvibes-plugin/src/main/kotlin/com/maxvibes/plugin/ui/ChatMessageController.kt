@@ -13,7 +13,6 @@ import com.maxvibes.plugin.chat.ChatSession
 import com.maxvibes.plugin.chat.MessageRole
 import com.maxvibes.plugin.service.MaxVibesService
 import kotlinx.coroutines.runBlocking
-import com.maxvibes.plugin.service.TokenUsageAccumulator
 
 interface ChatPanelCallbacks {
     fun appendToChat(text: String)
@@ -146,9 +145,8 @@ class ChatMessageController(
     private fun handleApiResult(result: ContextAwareResult, session: ChatSession) {
         callbacks.registerElementPaths(result.modifications)
 
-        val accumulator = TokenUsageAccumulator.getInstance(project)
-        accumulator.addPlanning(result.planningInputTokens, result.planningOutputTokens)
-        accumulator.addChat(result.chatInputTokens, result.chatOutputTokens)
+        session.addPlanningTokens(result.planningInputTokens, result.planningOutputTokens)
+        session.addChatTokens(result.chatInputTokens, result.chatOutputTokens)
         callbacks.updateTokenDisplay()
 
         val text = buildResultText(result)
@@ -163,8 +161,7 @@ class ChatMessageController(
     private fun handleClipboardResult(result: ClipboardStepResult, session: ChatSession) {
         when (result) {
             is ClipboardStepResult.WaitingForResponse -> {
-                val accumulator = TokenUsageAccumulator.getInstance(project)
-                accumulator.addChat(result.estimatedInputTokens, 0)
+                session.addChatTokens(result.estimatedInputTokens, 0)
                 callbacks.updateTokenDisplay()
 
                 session.addMessage(MessageRole.ASSISTANT, result.userMessage)
@@ -178,8 +175,7 @@ class ChatMessageController(
             is ClipboardStepResult.Completed -> {
                 callbacks.registerElementPaths(result.modifications)
 
-                val accumulator = TokenUsageAccumulator.getInstance(project)
-                accumulator.addChat(0, result.outputTokens)
+                session.addChatTokens(0, result.outputTokens)
                 callbacks.updateTokenDisplay()
 
                 val text = result.message.ifBlank { "Done." }

@@ -19,7 +19,6 @@ import java.awt.event.KeyEvent
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.*
-import com.maxvibes.plugin.service.TokenUsageAccumulator
 
 /**
  * Main chat panel: UI fields, layout, mode switching, breadcrumb,
@@ -225,7 +224,7 @@ class ChatPanel(
     fun loadCurrentSession() {
         val session = chatHistory.getActiveSession()
         chatArea.text = ""; elementNavRegistry.clear()
-        updateBreadcrumb(); updateModeIndicator(); updateContextIndicator()
+        updateBreadcrumb(); updateModeIndicator(); updateContextIndicator(); updateTokenDisplay()
 
         if (session.messages.isEmpty()) {
             showWelcome()
@@ -611,8 +610,9 @@ class ChatPanel(
         val ctxHint = if (ctxCount > 0) "\n  \uD83D\uDCCE $ctxCount global context file(s) active" else ""
         appendToChat("  MaxVibes  \u2022  $mode$branchHint$ctxHint\n\n  Type your task, or use Sessions to browse dialogs.\n  Ctrl+Enter send | Click file paths to open\n\n")
     }
+
     override fun updateTokenDisplay() {
-        val acc = TokenUsageAccumulator.getInstance(project)
-        tokenLabel.text = if (acc.totalTokens > 0) acc.formatDisplay() else ""
+        val session = chatHistory.getActiveSession()
+        tokenLabel.text = session.formatTokenDisplay()
     }
 }

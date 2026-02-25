@@ -71,6 +71,18 @@ class ChatSession {
     @Attribute("updatedAt")
     var updatedAt: Long = Instant.now().toEpochMilli()
 
+    @Attribute("planningInputTokens")
+    var planningInputTokens: Int = 0
+
+    @Attribute("planningOutputTokens")
+    var planningOutputTokens: Int = 0
+
+    @Attribute("chatInputTokens")
+    var chatInputTokens: Int = 0
+
+    @Attribute("chatOutputTokens")
+    var chatOutputTokens: Int = 0
+
     constructor()
 
     constructor(
@@ -112,6 +124,40 @@ class ChatSession {
     fun clear() {
         messages.clear()
         updatedAt = Instant.now().toEpochMilli()
+    }
+    val totalInputTokens: Int get() = planningInputTokens + chatInputTokens
+    val totalOutputTokens: Int get() = planningOutputTokens + chatOutputTokens
+    val totalTokens: Int get() = totalInputTokens + totalOutputTokens
+    fun addPlanningTokens(input: Int, output: Int) {
+        planningInputTokens += input
+        planningOutputTokens += output
+    }
+    fun addChatTokens(input: Int, output: Int) {
+        chatInputTokens += input
+        chatOutputTokens += output
+    }
+    fun formatTokenDisplay(
+        inputCostPerMillion: Double = 3.0,
+        outputCostPerMillion: Double = 15.0
+    ): String {
+        if (totalTokens == 0) return ""
+        val parts = mutableListOf<String>()
+        val planTokens = planningInputTokens + planningOutputTokens
+        val chatToks = chatInputTokens + chatOutputTokens
+        if (planTokens > 0)
+            parts += "Plan: in ${formatTok(planningInputTokens)} / out ${formatTok(planningOutputTokens)}"
+        if (chatToks > 0)
+            parts += "Chat: in ${formatTok(chatInputTokens)} / out ${formatTok(chatOutputTokens)}"
+        val cost = totalInputTokens / 1_000_000.0 * inputCostPerMillion +
+                totalOutputTokens / 1_000_000.0 * outputCostPerMillion
+        val costStr = String.format("%.3f", cost)
+        parts += "~\$$costStr"
+        return parts.joinToString("  |  ")
+    }
+    private fun formatTok(n: Int): String = when {
+        n >= 1_000_000 -> "${n / 1_000_000}.${(n % 1_000_000) / 100_000}M"
+        n >= 1_000 -> "${n / 1_000}k"
+        else -> n.toString()
     }
 }
 
