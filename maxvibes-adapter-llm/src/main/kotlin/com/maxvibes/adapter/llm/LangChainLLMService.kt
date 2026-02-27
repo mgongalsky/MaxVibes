@@ -368,7 +368,26 @@ class LangChainLLMService(
 
     private fun buildChatSystemPrompt(context: ChatContext): String {
         val template = context.prompts.chatSystem.ifBlank { DEFAULT_CHAT_SYSTEM_PROMPT }
-        return applyPromptVariables(template, context.projectContext)
+        val base = applyPromptVariables(template, context.projectContext)
+        if (!context.planOnly) return base
+        val planOnlyInstruction = """
+
+## ⚠️ PLAN-ONLY MODE — DISCUSSION REQUIRED
+
+Do NOT generate any JSON with code modifications.
+Your goal is to DISCUSS the plan with the user before any code is written.
+
+Instead of code, you must:
+1. Briefly explain what you understand from the task
+2. List which files you plan to touch and what changes you'll make in each
+3. Mention any architectural decisions or trade-offs
+4. Ask the user to confirm or suggest corrections
+
+End your response with exactly this line:
+> ✅ Ready to implement. Reply to confirm or describe what to change.
+
+Never include JSON, code blocks with modifications, or any ```json blocks.""".trimIndent()
+        return base + planOnlyInstruction
     }
 
     private fun applyPromptVariables(template: String, projectContext: ProjectContext): String {

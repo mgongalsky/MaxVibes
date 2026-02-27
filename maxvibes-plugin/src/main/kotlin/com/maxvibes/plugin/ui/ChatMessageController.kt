@@ -34,6 +34,7 @@ interface ChatPanelCallbacks {
 
     fun appendIconToLastBubble(icon: String)
     fun clearChatDisplay()
+    fun setPlanOnlyMode(enabled: Boolean)
 }
 
 /**
@@ -67,7 +68,7 @@ class ChatMessageController(
                         planOnly = isPlanOnly, globalContextFiles = globalContextFiles
                     )
                     val result = service.contextAwareModifyUseCase.execute(req)
-                    ApplicationManager.getApplication().invokeLater { handleApiResult(result, session) }
+                    ApplicationManager.getApplication().invokeLater { handleApiResult(result, session, isPlanOnly) }
                 }
             }
 
@@ -103,7 +104,7 @@ class ChatMessageController(
                         )
                         val uc = service.cheapContextAwareModifyUseCase ?: service.contextAwareModifyUseCase
                         val result = uc.execute(req)
-                        ApplicationManager.getApplication().invokeLater { handleApiResult(result, session) }
+                        ApplicationManager.getApplication().invokeLater { handleApiResult(result, session, isPlanOnly) }
                     }
                 }
 
@@ -147,7 +148,7 @@ class ChatMessageController(
 
     // ==================== Result Handlers ====================
 
-    private fun handleApiResult(result: ContextAwareResult, session: ChatSession) {
+    private fun handleApiResult(result: ContextAwareResult, session: ChatSession, wasPlanOnly: Boolean = false) {
         callbacks.registerElementPaths(result.modifications)
         session.addPlanningTokens(result.planningInputTokens, result.planningOutputTokens)
         session.addChatTokens(result.chatInputTokens, result.chatOutputTokens)
@@ -165,6 +166,12 @@ class ChatMessageController(
             tokenInfo,
             result.modifications
         )
+
+        // Auto-uncheck Plan after receiving the plan response so next message implements it
+        if (wasPlanOnly) {
+            callbacks.setPlanOnlyMode(false)
+        }
+
         callbacks.setInputEnabled(true)
         callbacks.setStatus(if (result.success) "Ready" else "Errors")
         callbacks.updateBreadcrumb()

@@ -270,6 +270,10 @@ class ChatPanel(
         tokenLabel.text = session.formatTokenDisplay()
     }
 
+    override fun setPlanOnlyMode(enabled: Boolean) {
+        planOnlyCheckbox.isSelected = enabled
+    }
+
     // ==================== Public API ====================
 
     fun refreshHeader() {
