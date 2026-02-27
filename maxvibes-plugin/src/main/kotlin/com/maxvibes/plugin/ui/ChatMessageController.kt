@@ -203,7 +203,9 @@ class ChatMessageController(
                 session.addChatTokens(0, result.outputTokens)
                 callbacks.updateTokenDisplay()
 
-                val text = result.message.ifBlank { "Done." }
+                // Strip the "Applied X changes" footer — it's shown in the collapsible details
+                val rawText = result.message.ifBlank { "Done." }
+                val text = rawText.substringBefore("\u2500\u2500\u2500\u2500\u2500").trim().ifBlank { "Done." }
                 session.addMessage(MessageRole.ASSISTANT, text)
                 val tokenInfo = if (result.outputTokens > 0) "\u2193${fmt(result.outputTokens)}" else null
                 callbacks.addAssistantMessageBubble(

@@ -127,35 +127,49 @@ class ConversationPanel(
         bg: Color,
         metaFiles: List<String> = emptyList()
     ): JPanel {
-        val summaryParts = mutableListOf<String>()
-        if (!tokenInfo.isNullOrBlank()) summaryParts += tokenInfo
-        if (ok.isNotEmpty()) summaryParts += "\u2705 ${ok.size}"
-        if (fail.isNotEmpty()) summaryParts += "\u274C ${fail.size}"
-        if (metaFiles.isNotEmpty()) summaryParts += "\uD83D\uDCC1 ${metaFiles.size} files"
-        val summary = summaryParts.joinToString("  \u00B7  ")
+        val summaryHtml = buildSummaryHtml("&#9658;", tokenInfo, ok, fail, metaFiles)
+        val expandedHtml = buildSummaryHtml("&#9660;", tokenInfo, ok, fail, metaFiles)
 
         val details = detailsPanel(tokenInfo, ok, fail, bg, metaFiles).also { it.isVisible = false }
 
-        val btn = JButton("\u25B6 $summary").apply {
-            font = font.deriveFont(9f); isFocusPainted = false
-            isContentAreaFilled = false; isBorderPainted = false
-            foreground = JBColor.GRAY
+        val btn = JButton(summaryHtml).apply {
+            font = font.deriveFont(Font.PLAIN, 12f)
+            isFocusPainted = false
+            isContentAreaFilled = false
+            isBorderPainted = false
             cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
             horizontalAlignment = SwingConstants.LEFT
-            border = JBUI.Borders.empty(3, 0, 0, 0)
+            border = JBUI.Borders.empty(5, 0, 2, 0)
         }
         btn.addActionListener {
             details.isVisible = !details.isVisible
-            btn.text = "${if (details.isVisible) "\u25BC" else "\u25B6"} $summary"
+            btn.text = if (details.isVisible) expandedHtml else summaryHtml
             messagesPanel.revalidate(); messagesPanel.repaint()
             SwingUtilities.invokeLater { scrollPane.verticalScrollBar.value = scrollPane.verticalScrollBar.maximum }
         }
 
         return JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS); background = bg
+            border = JBUI.Borders.empty(4, 0, 0, 0)
             add(btn.also { it.alignmentX = Component.LEFT_ALIGNMENT })
             add(details.also { it.alignmentX = Component.LEFT_ALIGNMENT })
         }
+    }
+
+    private fun buildSummaryHtml(
+        arrow: String,
+        tokenInfo: String?,
+        ok: List<ModificationResult.Success>,
+        fail: List<ModificationResult.Failure>,
+        metaFiles: List<String>
+    ): String {
+        val parts = mutableListOf<String>()
+        if (!tokenInfo.isNullOrBlank()) parts += "<font color='#D4821A'>&#128290; $tokenInfo</font>"
+        if (metaFiles.isNotEmpty()) parts += "<font color='#2980B9'>&#128193; ${metaFiles.size} files</font>"
+        if (ok.isNotEmpty()) parts += "<font color='#1E8449'>&#9989; ${ok.size} applied</font>"
+        if (fail.isNotEmpty()) parts += "<font color='#C0392B'>&#10060; ${fail.size} failed</font>"
+        val body = parts.joinToString("  &middot;  ")
+        return "<html><font color='#7D3C98'>$arrow</font>&nbsp;&nbsp;$body</html>"
     }
 
     private fun detailsPanel(
