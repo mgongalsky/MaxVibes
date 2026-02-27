@@ -11,11 +11,6 @@ import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.*
 
-/**
- * Scrollable conversation view — каждое сообщение рендерится как карточка-«пузырь».
- * Пользователь — синяя полоска, MaxVibes — зелёная.
- * В ответах MaxVibes токены и изменённые файлы скрыты под кнопку-кат.
- */
 class ConversationPanel(
     private val onNavigateToPath: (String) -> Unit
 ) : JPanel(BorderLayout()) {
@@ -32,13 +27,16 @@ class ConversationPanel(
         horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
     }
 
+    private var lastContentArea: JBTextArea? = null
+
     init {
         background = JBColor.background()
         add(scrollPane, BorderLayout.CENTER)
     }
 
     fun clearMessages() {
-        messagesPanel.removeAll(); messagesPanel.revalidate(); messagesPanel.repaint()
+        messagesPanel.removeAll(); lastContentArea = null
+        messagesPanel.revalidate(); messagesPanel.repaint()
     }
 
     fun addUserBubble(text: String) = addComp(userBubble(text))
@@ -54,6 +52,15 @@ class ConversationPanel(
         if (text.isNotBlank()) addComp(systemBubble(text))
     }
 
+    fun appendIconToLastBubble(icon: String) {
+        val area = lastContentArea ?: return
+        SwingUtilities.invokeLater {
+            val current = area.text.trimEnd()
+            area.text = "$current  $icon"
+            messagesPanel.revalidate(); messagesPanel.repaint()
+        }
+    }
+
     private fun addComp(c: JComponent) {
         c.alignmentX = Component.LEFT_ALIGNMENT
         messagesPanel.add(c)
@@ -63,13 +70,13 @@ class ConversationPanel(
         SwingUtilities.invokeLater { scrollPane.verticalScrollBar.value = scrollPane.verticalScrollBar.maximum }
     }
 
-    // ── Bubble builders ───────────────────────────────────────────────
-
     private fun userBubble(text: String): JPanel {
         val bg = JBColor(Color(0xEBF5FB), Color(0x1B2A3B))
+        val area = contentArea(text, bg)
+        lastContentArea = area
         return bubble(bg, JBColor(Color(0x2E86C1), Color(0x5DADE2))).also { p ->
             p.add(roleLabel("\uD83D\uDC64 You", JBColor(Color(0x1A5276), Color(0x85C1E9))), BorderLayout.NORTH)
-            p.add(contentArea(text, bg), BorderLayout.CENTER)
+            p.add(area, BorderLayout.CENTER)
         }
     }
 
@@ -83,9 +90,11 @@ class ConversationPanel(
         val ok = mods.filterIsInstance<ModificationResult.Success>()
         val fail = mods.filterIsInstance<ModificationResult.Failure>()
         val hasDetails = !tokenInfo.isNullOrBlank() || ok.isNotEmpty() || fail.isNotEmpty() || metaFiles.isNotEmpty()
+        val area = contentArea(text, bg)
+        lastContentArea = area
         return bubble(bg, JBColor(Color(0x239B56), Color(0x58D68D))).also { p ->
             p.add(roleLabel("\uD83E\uDD16 MaxVibes", JBColor(Color(0x1D6A39), Color(0x82E0AA))), BorderLayout.NORTH)
-            p.add(contentArea(text, bg), BorderLayout.CENTER)
+            p.add(area, BorderLayout.CENTER)
             if (hasDetails) p.add(collapsibleFooter(tokenInfo, ok, fail, bg, metaFiles), BorderLayout.SOUTH)
         }
     }
@@ -118,8 +127,6 @@ class ConversationPanel(
         })
     }
 
-    // ── Collapsible footer ────────────────────────────────────────────
-
     private fun collapsibleFooter(
         tokenInfo: String?,
         ok: List<ModificationResult.Success>,
@@ -129,14 +136,10 @@ class ConversationPanel(
     ): JPanel {
         val summaryHtml = buildSummaryHtml("&#9658;", tokenInfo, ok, fail, metaFiles)
         val expandedHtml = buildSummaryHtml("&#9660;", tokenInfo, ok, fail, metaFiles)
-
         val details = detailsPanel(tokenInfo, ok, fail, bg, metaFiles).also { it.isVisible = false }
-
         val btn = JButton(summaryHtml).apply {
             font = font.deriveFont(Font.PLAIN, 12f)
-            isFocusPainted = false
-            isContentAreaFilled = false
-            isBorderPainted = false
+            isFocusPainted = false; isContentAreaFilled = false; isBorderPainted = false
             cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
             horizontalAlignment = SwingConstants.LEFT
             border = JBUI.Borders.empty(5, 0, 2, 0)
@@ -147,7 +150,6 @@ class ConversationPanel(
             messagesPanel.revalidate(); messagesPanel.repaint()
             SwingUtilities.invokeLater { scrollPane.verticalScrollBar.value = scrollPane.verticalScrollBar.maximum }
         }
-
         return JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS); background = bg
             border = JBUI.Borders.empty(4, 0, 0, 0)
@@ -182,7 +184,6 @@ class ConversationPanel(
         layout = BoxLayout(this, BoxLayout.Y_AXIS); background = bg
         border = JBUI.Borders.empty(2, 8, 2, 0)
         maximumSize = Dimension(Int.MAX_VALUE, Int.MAX_VALUE)
-
         if (!tokenInfo.isNullOrBlank()) {
             add(JBLabel(tokenInfo).apply {
                 font = font.deriveFont(9f); foreground = JBColor.GRAY
@@ -190,7 +191,6 @@ class ConversationPanel(
                 border = JBUI.Borders.empty(0, 0, 4, 0)
             })
         }
-
         if (metaFiles.isNotEmpty()) {
             add(JBLabel("\uD83D\uDCC1 Gathered files:").apply {
                 font = font.deriveFont(Font.BOLD, 9f); foreground = JBColor.GRAY
@@ -205,7 +205,6 @@ class ConversationPanel(
                 })
             }
         }
-
         ok.forEach { mod ->
             val labelText = "  \u2022 ${ChatNavigationHelper.formatElementPath(mod.affectedPath)}"
             val pathStr = mod.affectedPath.toString()

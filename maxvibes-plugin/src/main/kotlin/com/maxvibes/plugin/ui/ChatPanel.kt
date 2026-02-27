@@ -111,8 +111,8 @@ class ChatPanel(
     override fun appendToChat(text: String) {
         val t = text.trim()
         if (t.isBlank()) return
-        // Skip pure separator lines
         if (t.all { it == '\u2500' || it == '\u2550' || it == '\u2501' || it == '-' }) return
+        if (t.contains("Paste this into") || t.contains("JSON copied") || t.startsWith("\uD83D\uDCCB")) return
         conversationPanel.addSystemBubble(t)
     }
 
@@ -137,6 +137,10 @@ class ChatPanel(
     override fun clearChatDisplay() {
         conversationPanel.clearMessages()
         elementNavRegistry.clear()
+    }
+
+    override fun appendIconToLastBubble(icon: String) {
+        conversationPanel.appendIconToLastBubble(icon)
     }
 
     override fun setInputEnabled(enabled: Boolean) {
@@ -485,12 +489,11 @@ class ChatPanel(
         when {
             cs.isWaitingForResponse() -> {
                 session.addMessage(MessageRole.USER, "[Pasted LLM response]")
-                conversationPanel.addUserBubble("[Pasted LLM response]")
+                conversationPanel.appendIconToLastBubble("\uD83D\uDCE5")
                 setInputEnabled(false); statusLabel.text = "Processing..."
-                messageController.runClipboardBg(
-                    "Processing response...",
-                    session
-                ) { cs.handlePastedResponse(userInput) }
+                messageController.runClipboardBg("Processing response...", session) {
+                    cs.handlePastedResponse(userInput)
+                }
             }
 
             cs.hasActiveSession() -> {
@@ -502,10 +505,7 @@ class ChatPanel(
                 session.addMessage(MessageRole.USER, userInput)
                 setInputEnabled(false); statusLabel.text = "Continuing..."
                 messageController.runClipboardBg("Generating follow-up...", session) {
-                    cs.continueDialog(
-                        userInput,
-                        trace
-                    )
+                    cs.continueDialog(userInput, trace)
                 }
             }
 

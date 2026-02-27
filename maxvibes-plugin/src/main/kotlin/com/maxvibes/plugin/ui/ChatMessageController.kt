@@ -31,6 +31,8 @@ interface ChatPanelCallbacks {
         modifications: List<ModificationResult>,
         metaFiles: List<String> = emptyList()
     )
+
+    fun appendIconToLastBubble(icon: String)
     fun clearChatDisplay()
 }
 
@@ -173,26 +175,21 @@ class ChatMessageController(
             is ClipboardStepResult.WaitingForResponse -> {
                 session.addChatTokens(result.estimatedInputTokens, 0)
                 callbacks.updateTokenDisplay()
-
                 session.addMessage(MessageRole.ASSISTANT, result.userMessage)
-
                 val reasoning = result.llmReasoning
-                val bubbleText = if (!reasoning.isNullOrBlank()) {
-                    callbacks.formatMarkdown(reasoning)
+                if (!reasoning.isNullOrBlank()) {
+                    val tokenSummaryParts = mutableListOf<String>()
+                    if (result.estimatedInputTokens > 0) tokenSummaryParts += "~${fmt(result.estimatedInputTokens)} tokens"
+                    if (result.freshFileNames.isNotEmpty()) tokenSummaryParts += "${result.freshFileNames.size} files"
+                    if (result.previouslyGatheredCount > 0) tokenSummaryParts += "prev: ${result.previouslyGatheredCount}"
+                    tokenSummaryParts += result.phase.name.lowercase()
+                    val tokenInfo = tokenSummaryParts.joinToString("  \u00B7  ")
+                    callbacks.addAssistantMessageBubble(
+                        callbacks.formatMarkdown(reasoning), tokenInfo, emptyList(), result.freshFileNames
+                    )
                 } else {
-                    result.userMessage
+                    callbacks.appendIconToLastBubble("\uD83D\uDCCB")
                 }
-
-                val tokenSummaryParts = mutableListOf<String>()
-                if (result.estimatedInputTokens > 0) tokenSummaryParts += "~${fmt(result.estimatedInputTokens)} tokens"
-                if (result.freshFileNames.isNotEmpty()) tokenSummaryParts += "${result.freshFileNames.size} files"
-                if (result.previouslyGatheredCount > 0) tokenSummaryParts += "prev: ${result.previouslyGatheredCount}"
-                tokenSummaryParts += result.phase.name.lowercase()
-                val tokenInfo = tokenSummaryParts.joinToString("  \u00B7  ")
-
-                callbacks.addAssistantMessageBubble(
-                    bubbleText, tokenInfo, emptyList(), result.freshFileNames
-                )
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
                 callbacks.setStatus("Waiting for LLM response...")
@@ -202,8 +199,6 @@ class ChatMessageController(
                 callbacks.registerElementPaths(result.modifications)
                 session.addChatTokens(0, result.outputTokens)
                 callbacks.updateTokenDisplay()
-
-                // Strip the "Applied X changes" footer — it's shown in the collapsible details
                 val rawText = result.message.ifBlank { "Done." }
                 val text = rawText.substringBefore("\u2500\u2500\u2500\u2500\u2500").trim().ifBlank { "Done." }
                 session.addMessage(MessageRole.ASSISTANT, text)
