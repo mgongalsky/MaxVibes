@@ -137,7 +137,8 @@ class ClipboardInteractionService(
         log(
             "Parsed: message=${response.message.take(50)}..., " +
                     "requestedFiles=${response.requestedFiles.size}, " +
-                    "modifications=${response.modifications.size}"
+                    "modifications=${response.modifications.size}, " +
+                    "reasoning=${response.reasoning?.take(40) ?: "none"}"
         )
 
         if (response.message.isNotBlank()) {
@@ -190,17 +191,15 @@ class ClipboardInteractionService(
                 )
             }
 
-            val modSummary = if (modResults.isNotEmpty()) {
-                buildModSummary(modResults) + "\n\n"
-            } else ""
-
-            val prefixForHistory = modSummary + buildFileGatherMessage(freshFiles)
+            // Передаем только чистый текст сообщения ассистента.
+            // Вся вспомогательная информация (reasoning, список файлов) уйдет в метаданные WaitingForResponse.
+            val assistantDisplayMessage = response.message.trim()
 
             return generateAndCopyJson(
                 freshFiles = freshFiles,
                 isFirstMessage = false,
-                prefixMessage = prefixForHistory.takeIf { it.isNotBlank() },
-                llmMessage = response.message.takeIf { it.isNotBlank() }
+                assistantMessage = assistantDisplayMessage.takeIf { it.isNotBlank() },
+                llmReasoning = response.reasoning?.takeIf { it.isNotBlank() }
             )
         }
 
@@ -210,8 +209,8 @@ class ClipboardInteractionService(
     private fun generateAndCopyJson(
         freshFiles: Map<String, String>,
         isFirstMessage: Boolean,
-        prefixMessage: String? = null,
-        llmMessage: String? = null
+        assistantMessage: String? = null,
+        llmReasoning: String? = null
     ): ClipboardStepResult {
         val state = sessionState ?: return error("No active session")
 
@@ -250,7 +249,8 @@ class ClipboardInteractionService(
         val totalTokens = estimateTokens(request)
         state.lastInputTokens = totalTokens
 
-        val userMessage = "📋 JSON $copyStatus\nPaste into Claude/ChatGPT, then paste the response back here."
+        // statusMessage — техническое уведомление, НЕ для истории чата
+        val statusMessage = "📋 JSON $copyStatus\nPaste into Claude/ChatGPT, then paste the response back here."
 
         log("JSON ready: $copyStatus, ~$totalTokens tokens")
 
@@ -258,10 +258,11 @@ class ClipboardInteractionService(
 
         return ClipboardStepResult.WaitingForResponse(
             phase = request.phase,
-            userMessage = userMessage,
+            statusMessage = statusMessage,
+            assistantMessage = assistantMessage,
             jsonRequest = request,
             estimatedInputTokens = totalTokens,
-            llmMessage = llmMessage,
+            llmReasoning = llmReasoning,
             freshFileNames = freshFiles.keys.map { it.substringAfterLast('/') },
             previouslyGatheredCount = previousPaths.size
         )
@@ -346,19 +347,18 @@ class ClipboardInteractionService(
         val successCount = modResults.count { it is ModificationResult.Success }
         val failCount = modResults.size - successCount
 
+        // В основном теле сообщения оставляем только текст ответа и критические ошибки.
+        // Reasoning и список изменений UI отрисует сам из метаданных.
         val message = buildString {
             if (response.message.isNotBlank()) {
                 append(response.message)
             }
-            if (modResults.isNotEmpty()) {
-                if (isNotBlank()) appendLine()
-                append(buildModSummary(modResults))
-            }
             if (extraMessage.isNotBlank()) {
+                if (isNotBlank()) appendLine().appendLine()
                 append(extraMessage)
             }
             if (isBlank()) {
-                append("Done (no message from LLM).")
+                append("Done.")
             }
         }
 
@@ -366,14 +366,15 @@ class ClipboardInteractionService(
             notificationPort.showSuccess("Done. Session active — you can continue the dialog.")
         }
 
-        log("Completed: message=${response.message.take(40)}..., mods=$successCount ok/$failCount fail. Session stays active.")
+        log("Completed: message=${response.message.take(40)}..., mods=$successCount ok/$failCount fail.")
 
         return ClipboardStepResult.Completed(
-            message = message,
+            message = message.trim(),
             modifications = modResults,
             success = failCount == 0,
             inputTokens = inputTokens,
-            outputTokens = outputTokens
+            outputTokens = outputTokens,
+            llmReasoning = response.reasoning?.takeIf { it.isNotBlank() }
         )
     }
 
@@ -406,8 +407,13 @@ class ClipboardInteractionService(
     }
 
     private fun buildFileGatherMessage(
+        response: ClipboardResponse,
         freshFiles: Map<String, String>
     ): String = buildString {
+        if (response.reasoning?.isNotBlank() == true) {
+            appendLine("💭 ${response.reasoning}")
+            appendLine()
+        }
         appendLine("📁 Gathered ${freshFiles.size} file(s):")
         freshFiles.keys.forEach { path ->
             appendLine("   • ${path.substringAfterLast('/')}")
@@ -436,15 +442,11 @@ DO NOT write code to disk. Your ENTIRE response must be a single JSON object —
 
 You are an expert software architect assistant in a clipboard-based dialog through MaxVibes IDE plugin.
 
-TASK: Analyze the task and project file tree, then decide which files you need to see.
-
-⛔ ABSOLUTELY FORBIDDEN in this phase:
-- "modifications" field — NEVER include modifications, code changes, or implementations
-- Any code in any form — your job here is ONLY to decide which files to read
+TASK: Analyze the task and project file tree, then decide what you need.
 
 Your response must be EXACTLY this JSON format (and nothing else):
 {
-    "message": "Your thoughts about the task and why you need these files",
+    "message": "Your thoughts, questions, or discussion about the task",
     "requestedFiles": ["path/to/file.kt", ...],
     "reasoning": "Why you need these specific files"
 }
@@ -452,7 +454,6 @@ Your response must be EXACTLY this JSON format (and nothing else):
 Rules:
 - "message" is REQUIRED — always explain your thinking
 - "requestedFiles" — list files you need to see. Leave empty [] if you just want to discuss.
-- "modifications" MUST NOT be present in your response at all
 - If the task is just a question/discussion (no coding needed), set "requestedFiles": [] and put your answer in "message"
 - DO NOT wrap the JSON in markdown code blocks. Just output raw JSON.
 - Project: ${state.projectContext.name}, Language: ${state.projectContext.techStack.language}"""
@@ -572,10 +573,11 @@ Segments: class[Name], interface[Name], object[Name], function[Name], property[N
 sealed class ClipboardStepResult {
     data class WaitingForResponse(
         val phase: ClipboardPhase,
-        val userMessage: String,
+        val statusMessage: String,
+        val assistantMessage: String? = null,
         val jsonRequest: ClipboardRequest,
         val estimatedInputTokens: Int = 0,
-        val llmMessage: String? = null,
+        val llmReasoning: String? = null,
         val freshFileNames: List<String> = emptyList(),
         val previouslyGatheredCount: Int = 0
     ) : ClipboardStepResult()
@@ -585,7 +587,8 @@ sealed class ClipboardStepResult {
         val modifications: List<ModificationResult>,
         val success: Boolean,
         val inputTokens: Int = 0,
-        val outputTokens: Int = 0
+        val outputTokens: Int = 0,
+        val llmReasoning: String? = null
     ) : ClipboardStepResult()
 
     data class Error(val message: String) : ClipboardStepResult()

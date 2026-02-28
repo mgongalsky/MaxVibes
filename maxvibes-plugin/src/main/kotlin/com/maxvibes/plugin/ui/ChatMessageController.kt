@@ -30,7 +30,7 @@ interface ChatPanelCallbacks {
         tokenInfo: String?,
         modifications: List<ModificationResult>,
         metaFiles: List<String> = emptyList(),
-        reasoningText: String? = null
+        reasoning: String? = null
     )
 
     fun appendIconToLastBubble(icon: String)
@@ -165,10 +165,11 @@ class ChatMessageController(
         callbacks.addAssistantMessageBubble(
             callbacks.formatMarkdown(mainText),
             tokenInfo,
-            result.modifications
+            result.modifications,
+            emptyList(),
+            null // TODO: API mode should also return reasoning in future
         )
 
-        // Auto-uncheck Plan after receiving the plan response so next message implements it
         if (wasPlanOnly) {
             callbacks.setPlanOnlyMode(false)
         }
@@ -183,25 +184,31 @@ class ChatMessageController(
             is ClipboardStepResult.WaitingForResponse -> {
                 session.addChatTokens(result.estimatedInputTokens, 0)
                 callbacks.updateTokenDisplay()
-                session.addMessage(MessageRole.ASSISTANT, result.userMessage)
 
-                val llmMessage = result.llmMessage
-                if (!llmMessage.isNullOrBlank()) {
+                val assistantText = result.assistantMessage
+                if (!assistantText.isNullOrBlank()) {
+                    // Сохраняем в историю ТОЛЬКО текст сообщения ассистента
+                    session.addMessage(MessageRole.ASSISTANT, assistantText)
                     val tokenSummaryParts = mutableListOf<String>()
                     if (result.estimatedInputTokens > 0) tokenSummaryParts += "~${fmt(result.estimatedInputTokens)} tokens"
                     if (result.freshFileNames.isNotEmpty()) tokenSummaryParts += "${result.freshFileNames.size} files"
-                    if (result.previouslyGatheredCount > 0) tokenSummaryParts += "prev: ${result.previouslyGatheredCount}"
                     tokenSummaryParts += result.phase.name.lowercase()
                     val tokenInfo = tokenSummaryParts.joinToString("  \u00B7  ")
+
                     callbacks.addAssistantMessageBubble(
-                        callbacks.formatMarkdown(llmMessage),
+                        callbacks.formatMarkdown(assistantText),
                         tokenInfo,
                         emptyList(),
-                        result.freshFileNames
+                        result.freshFileNames,
+                        result.llmReasoning
                     )
                 } else {
-                    callbacks.appendIconToLastBubble("\uD83D\uDCCB")
+                    // Если сообщения нет, просто показываем иконку протокола
+                    callbacks.appendIconToLastBubble("📋")
                 }
+
+                // Технический статус показываем в чате без сохранения в историю (appendToChat, а не addMessage)
+                callbacks.appendToChat(result.statusMessage)
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
                 callbacks.setStatus("Waiting for LLM response...")
@@ -215,7 +222,7 @@ class ChatMessageController(
                 session.addMessage(MessageRole.ASSISTANT, text)
                 val tokenInfo = if (result.outputTokens > 0) "\u2193${fmt(result.outputTokens)}" else null
                 callbacks.addAssistantMessageBubble(
-                    callbacks.formatMarkdown(text), tokenInfo, result.modifications
+                    callbacks.formatMarkdown(text), tokenInfo, result.modifications, emptyList(), result.llmReasoning
                 )
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()

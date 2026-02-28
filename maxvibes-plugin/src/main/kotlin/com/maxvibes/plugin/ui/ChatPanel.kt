@@ -128,9 +128,9 @@ class ChatPanel(
         tokenInfo: String?,
         modifications: List<ModificationResult>,
         metaFiles: List<String>,
-        reasoningText: String?
+        reasoning: String?
     ) {
-        conversationPanel.addAssistantBubble(text, tokenInfo, modifications, metaFiles, reasoningText)
+        conversationPanel.addAssistantBubble(text, tokenInfo, modifications, metaFiles, reasoning)
         registerElementPaths(modifications)
     }
 
