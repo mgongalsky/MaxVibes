@@ -29,7 +29,8 @@ interface ChatPanelCallbacks {
         text: String,
         tokenInfo: String?,
         modifications: List<ModificationResult>,
-        metaFiles: List<String> = emptyList()
+        metaFiles: List<String> = emptyList(),
+        reasoningText: String? = null
     )
 
     fun appendIconToLastBubble(icon: String)
@@ -183,6 +184,7 @@ class ChatMessageController(
                 session.addChatTokens(result.estimatedInputTokens, 0)
                 callbacks.updateTokenDisplay()
                 session.addMessage(MessageRole.ASSISTANT, result.userMessage)
+
                 val llmMessage = result.llmMessage
                 if (!llmMessage.isNullOrBlank()) {
                     val tokenSummaryParts = mutableListOf<String>()
@@ -192,7 +194,10 @@ class ChatMessageController(
                     tokenSummaryParts += result.phase.name.lowercase()
                     val tokenInfo = tokenSummaryParts.joinToString("  \u00B7  ")
                     callbacks.addAssistantMessageBubble(
-                        callbacks.formatMarkdown(llmMessage), tokenInfo, emptyList(), result.freshFileNames
+                        callbacks.formatMarkdown(llmMessage),
+                        tokenInfo,
+                        emptyList(),
+                        result.freshFileNames
                     )
                 } else {
                     callbacks.appendIconToLastBubble("\uD83D\uDCCB")

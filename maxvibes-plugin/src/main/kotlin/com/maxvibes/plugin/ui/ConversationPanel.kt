@@ -57,8 +57,9 @@ class ConversationPanel(
         text: String,
         tokenInfo: String? = null,
         modifications: List<ModificationResult> = emptyList(),
-        metaFiles: List<String> = emptyList()
-    ) = addComp(assistantBubble(text, tokenInfo, modifications, metaFiles))
+        metaFiles: List<String> = emptyList(),
+        reasoningText: String? = null
+    ) = addComp(assistantBubble(text, tokenInfo, modifications, metaFiles, reasoningText))
 
     fun addSystemBubble(text: String) {
         if (text.isNotBlank()) addComp(systemBubble(text))
@@ -144,25 +145,25 @@ class ConversationPanel(
         text: String,
         tokenInfo: String?,
         mods: List<ModificationResult>,
-        metaFiles: List<String> = emptyList()
+        metaFiles: List<String> = emptyList(),
+        reasoningText: String? = null
     ): JPanel {
         val bg = JBColor(Color(0xEAF7EA), Color(0x1B2B1E))
         val ok = mods.filterIsInstance<ModificationResult.Success>()
         val fail = mods.filterIsInstance<ModificationResult.Failure>()
-        val hasDetails = !tokenInfo.isNullOrBlank() || ok.isNotEmpty() || fail.isNotEmpty() || metaFiles.isNotEmpty()
+        val hasDetails = !tokenInfo.isNullOrBlank() || ok.isNotEmpty() || fail.isNotEmpty()
+                || metaFiles.isNotEmpty() || !reasoningText.isNullOrBlank()
 
         val segments = parseSegments(text)
         val contentPanel = buildSegmentsPanel(segments, bg)
 
-        // keep lastContentArea pointing at first text area for appendIconToLastBubble
-        segments.filterIsInstance<MessageSegment.Text>().firstOrNull()?.let {
-            // it's already set inside buildSegmentsPanel
-        }
-
         return bubble(bg, JBColor(Color(0x239B56), Color(0x58D68D))).also { p ->
             p.add(roleLabel("\uD83E\uDD16 MaxVibes", JBColor(Color(0x1D6A39), Color(0x82E0AA))), BorderLayout.NORTH)
             p.add(contentPanel, BorderLayout.CENTER)
-            if (hasDetails) p.add(collapsibleFooter(tokenInfo, ok, fail, bg, metaFiles), BorderLayout.SOUTH)
+            if (hasDetails) p.add(
+                collapsibleFooter(tokenInfo, ok, fail, bg, metaFiles, reasoningText),
+                BorderLayout.SOUTH
+            )
         }
     }
 
@@ -322,11 +323,12 @@ class ConversationPanel(
         ok: List<ModificationResult.Success>,
         fail: List<ModificationResult.Failure>,
         bg: Color,
-        metaFiles: List<String> = emptyList()
+        metaFiles: List<String> = emptyList(),
+        reasoningText: String? = null
     ): JPanel {
-        val summaryHtml = buildSummaryHtml("&#9658;", tokenInfo, ok, fail, metaFiles)
-        val expandedHtml = buildSummaryHtml("&#9660;", tokenInfo, ok, fail, metaFiles)
-        val details = detailsPanel(tokenInfo, ok, fail, bg, metaFiles).also { it.isVisible = false }
+        val summaryHtml = buildSummaryHtml("&#9658;", tokenInfo, ok, fail, metaFiles, reasoningText)
+        val expandedHtml = buildSummaryHtml("&#9660;", tokenInfo, ok, fail, metaFiles, reasoningText)
+        val details = detailsPanel(tokenInfo, ok, fail, bg, metaFiles, reasoningText).also { it.isVisible = false }
         val btn = JButton(summaryHtml).apply {
             font = font.deriveFont(Font.PLAIN, 12f)
             isFocusPainted = false; isContentAreaFilled = false; isBorderPainted = false
@@ -353,11 +355,13 @@ class ConversationPanel(
         tokenInfo: String?,
         ok: List<ModificationResult.Success>,
         fail: List<ModificationResult.Failure>,
-        metaFiles: List<String>
+        metaFiles: List<String>,
+        reasoningText: String? = null
     ): String {
         val parts = mutableListOf<String>()
         if (!tokenInfo.isNullOrBlank()) parts += "<font color='#D4821A'>&#128290; $tokenInfo</font>"
         if (metaFiles.isNotEmpty()) parts += "<font color='#2980B9'>&#128193; ${metaFiles.size} files</font>"
+        if (!reasoningText.isNullOrBlank()) parts += "<font color='#7D3C98'>&#128172; reasoning</font>"
         if (ok.isNotEmpty()) parts += "<font color='#1E8449'>&#9989; ${ok.size} applied</font>"
         if (fail.isNotEmpty()) parts += "<font color='#C0392B'>&#10060; ${fail.size} failed</font>"
         val body = parts.joinToString("  &middot;  ")
@@ -369,7 +373,8 @@ class ConversationPanel(
         ok: List<ModificationResult.Success>,
         fail: List<ModificationResult.Failure>,
         bg: Color,
-        metaFiles: List<String> = emptyList()
+        metaFiles: List<String> = emptyList(),
+        reasoningText: String? = null
     ) = JPanel().apply {
         layout = BoxLayout(this, BoxLayout.Y_AXIS); background = bg
         border = JBUI.Borders.empty(2, 8, 2, 0)
@@ -379,6 +384,21 @@ class ConversationPanel(
                 font = font.deriveFont(9f); foreground = JBColor.GRAY
                 alignmentX = Component.LEFT_ALIGNMENT
                 border = JBUI.Borders.empty(0, 0, 4, 0)
+            })
+        }
+        if (!reasoningText.isNullOrBlank()) {
+            add(JBLabel("\uD83D\uDCAD Why these files:").apply {
+                font = font.deriveFont(Font.BOLD, 9f); foreground = JBColor(Color(0x7D3C98), Color(0xBB8FCE))
+                alignmentX = Component.LEFT_ALIGNMENT
+                border = JBUI.Borders.empty(2, 0, 2, 0)
+            })
+            add(JBTextArea(reasoningText).apply {
+                isEditable = false; lineWrap = true; wrapStyleWord = true
+                font = Font(Font.MONOSPACED, Font.PLAIN, 10)
+                foreground = JBColor(Color(0x555555), Color(0xAAAAAA))
+                background = bg; border = JBUI.Borders.empty(0, 0, 4, 0)
+                alignmentX = Component.LEFT_ALIGNMENT
+                maximumSize = Dimension(Int.MAX_VALUE, Int.MAX_VALUE)
             })
         }
         if (metaFiles.isNotEmpty()) {
