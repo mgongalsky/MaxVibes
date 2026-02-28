@@ -51,13 +51,14 @@ Supported segments: class[Name], interface[Name], object[Name], function[Name], 
 
 /**
  * DTO for planning phase response.
+ * Now uses same message field as chat, no separate reasoning.
  */
 class PlanningResultDTO {
+    @Description("Your thoughts and explanation about what files you need and why")
+    var message: String = ""
+
     @Description("List of file paths that need to be read for this task")
     var requestedFiles: List<String> = emptyList()
 
-    @Description("Brief explanation of why these files are needed")
-    var reasoning: String? = null
-
-    override fun toString(): String = "PlanningResultDTO(files=${requestedFiles.size}, reasoning=${reasoning?.take(50)})"
+    override fun toString(): String = "PlanningResultDTO(files=${requestedFiles.size}, message=${message.take(50)})"
 }

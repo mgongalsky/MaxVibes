@@ -183,8 +183,8 @@ class ChatMessageController(
                 session.addChatTokens(result.estimatedInputTokens, 0)
                 callbacks.updateTokenDisplay()
                 session.addMessage(MessageRole.ASSISTANT, result.userMessage)
-                val reasoning = result.llmReasoning
-                if (!reasoning.isNullOrBlank()) {
+                val llmMessage = result.llmMessage
+                if (!llmMessage.isNullOrBlank()) {
                     val tokenSummaryParts = mutableListOf<String>()
                     if (result.estimatedInputTokens > 0) tokenSummaryParts += "~${fmt(result.estimatedInputTokens)} tokens"
                     if (result.freshFileNames.isNotEmpty()) tokenSummaryParts += "${result.freshFileNames.size} files"
@@ -192,7 +192,7 @@ class ChatMessageController(
                     tokenSummaryParts += result.phase.name.lowercase()
                     val tokenInfo = tokenSummaryParts.joinToString("  \u00B7  ")
                     callbacks.addAssistantMessageBubble(
-                        callbacks.formatMarkdown(reasoning), tokenInfo, emptyList(), result.freshFileNames
+                        callbacks.formatMarkdown(llmMessage), tokenInfo, emptyList(), result.freshFileNames
                     )
                 } else {
                     callbacks.appendIconToLastBubble("\uD83D\uDCCB")

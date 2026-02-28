@@ -37,22 +37,11 @@ data class ClipboardHistoryEntry(
     val content: String
 )
 
-/**
- * Единый ответ от LLM. Все поля опциональны.
- *
- * Claude может комбинировать любые поля в одном ответе:
- * - message only → чистый диалог (обсуждение, планы)
- * - message + requestedFiles → нужны ещё файлы
- * - message + modifications → код + объяснение
- * - message + requestedFiles + modifications → всё сразу
- */
 data class ClipboardResponse(
     /** Текстовое сообщение пользователю (обязательно рекомендуется) */
     val message: String = "",
     /** Запрошенные файлы для следующего шага */
     val requestedFiles: List<String> = emptyList(),
-    /** Объяснение выбора файлов / рассуждение */
-    val reasoning: String? = null,
     /** Модификации кода */
     val modifications: List<ClipboardModification> = emptyList()
 )

@@ -137,8 +137,7 @@ class ClipboardInteractionService(
         log(
             "Parsed: message=${response.message.take(50)}..., " +
                     "requestedFiles=${response.requestedFiles.size}, " +
-                    "modifications=${response.modifications.size}, " +
-                    "reasoning=${response.reasoning?.take(40) ?: "none"}"
+                    "modifications=${response.modifications.size}"
         )
 
         if (response.message.isNotBlank()) {
@@ -195,14 +194,13 @@ class ClipboardInteractionService(
                 buildModSummary(modResults) + "\n\n"
             } else ""
 
-            // prefixMessage теперь только для истории/лога, reasoning передаём отдельно
-            val prefixForHistory = modSummary + buildFileGatherMessage(response, freshFiles)
+            val prefixForHistory = modSummary + buildFileGatherMessage(freshFiles)
 
             return generateAndCopyJson(
                 freshFiles = freshFiles,
                 isFirstMessage = false,
                 prefixMessage = prefixForHistory.takeIf { it.isNotBlank() },
-                llmReasoning = response.reasoning?.takeIf { it.isNotBlank() }
+                llmMessage = response.message.takeIf { it.isNotBlank() }
             )
         }
 
@@ -213,7 +211,7 @@ class ClipboardInteractionService(
         freshFiles: Map<String, String>,
         isFirstMessage: Boolean,
         prefixMessage: String? = null,
-        llmReasoning: String? = null
+        llmMessage: String? = null
     ): ClipboardStepResult {
         val state = sessionState ?: return error("No active session")
 
@@ -252,7 +250,6 @@ class ClipboardInteractionService(
         val totalTokens = estimateTokens(request)
         state.lastInputTokens = totalTokens
 
-        // userMessage — минимальный текст, отображаемый как основное содержимое пузыря
         val userMessage = "📋 JSON $copyStatus\nPaste into Claude/ChatGPT, then paste the response back here."
 
         log("JSON ready: $copyStatus, ~$totalTokens tokens")
@@ -264,7 +261,7 @@ class ClipboardInteractionService(
             userMessage = userMessage,
             jsonRequest = request,
             estimatedInputTokens = totalTokens,
-            llmReasoning = llmReasoning,
+            llmMessage = llmMessage,
             freshFileNames = freshFiles.keys.map { it.substringAfterLast('/') },
             previouslyGatheredCount = previousPaths.size
         )
@@ -409,13 +406,8 @@ class ClipboardInteractionService(
     }
 
     private fun buildFileGatherMessage(
-        response: ClipboardResponse,
         freshFiles: Map<String, String>
     ): String = buildString {
-        if (response.reasoning?.isNotBlank() == true) {
-            appendLine("💭 ${response.reasoning}")
-            appendLine()
-        }
         appendLine("📁 Gathered ${freshFiles.size} file(s):")
         freshFiles.keys.forEach { path ->
             appendLine("   • ${path.substringAfterLast('/')}")
@@ -448,13 +440,12 @@ TASK: Analyze the task and project file tree, then decide what you need.
 
 Your response must be EXACTLY this JSON format (and nothing else):
 {
-    "message": "Your thoughts, questions, or discussion about the task",
-    "requestedFiles": ["path/to/file.kt", ...],
-    "reasoning": "Why you need these specific files"
+    "message": "Your thoughts, questions, or discussion about the task and why you need certain files",
+    "requestedFiles": ["path/to/file.kt", ...]
 }
 
 Rules:
-- "message" is REQUIRED — always explain your thinking
+- "message" is REQUIRED — always explain your thinking and why you need the files
 - "requestedFiles" — list files you need to see. Leave empty [] if you just want to discuss.
 - If the task is just a question/discussion (no coding needed), set "requestedFiles": [] and put your answer in "message"
 - DO NOT wrap the JSON in markdown code blocks. Just output raw JSON.
@@ -578,7 +569,7 @@ sealed class ClipboardStepResult {
         val userMessage: String,
         val jsonRequest: ClipboardRequest,
         val estimatedInputTokens: Int = 0,
-        val llmReasoning: String? = null,
+        val llmMessage: String? = null,
         val freshFileNames: List<String> = emptyList(),
         val previouslyGatheredCount: Int = 0
     ) : ClipboardStepResult()

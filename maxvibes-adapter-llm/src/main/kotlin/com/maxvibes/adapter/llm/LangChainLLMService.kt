@@ -435,7 +435,7 @@ Never include JSON, code blocks with modifications, or any ```json blocks.""".tr
                 log("[LangChainLLMService] Planning OK: ${result.requestedFiles.size} files")
                 ContextRequest(
                     requestedFiles = result.requestedFiles,
-                    reasoning = result.reasoning
+                    reasoning = result.message.takeIf { it.isNotBlank() }
                 )
             } catch (e: Throwable) {
                 log("[LangChainLLMService] AiServices planning failed: ${e.message}")
@@ -799,10 +799,17 @@ Never include JSON, code blocks with modifications, or any ```json blocks.""".tr
         return try {
             val jsonContent = extractJson(response)
             val jsonObject = Json.parseToJsonElement(jsonContent).jsonObject
-            val files = jsonObject["requestedFiles"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
-            ContextRequest(requestedFiles = files, reasoning = jsonObject["reasoning"]?.jsonPrimitive?.contentOrNull)
+            val files =
+                jsonObject["requestedFiles"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
+            // Support both old "reasoning" key and new "message" key for backwards compatibility
+            val message = jsonObject["message"]?.jsonPrimitive?.contentOrNull
+                ?: jsonObject["reasoning"]?.jsonPrimitive?.contentOrNull
+            ContextRequest(requestedFiles = files, reasoning = message)
         } catch (e: Exception) {
-            ContextRequest(requestedFiles = Regex("""[\w/]+\.kt""").findAll(response).map { it.value }.distinct().toList(), reasoning = null)
+            ContextRequest(
+                requestedFiles = Regex("""[\w/]+\.kt""").findAll(response).map { it.value }.distinct().toList(),
+                reasoning = null
+            )
         }
     }
 

@@ -5,15 +5,14 @@ Your job is to look at the project structure and determine which files the devel
 CRITICAL: Respond ONLY with a valid JSON object. No markdown, no explanations, just JSON.
 
 ## Response format
-```json
+
 {
-    "requestedFiles": [
-        "path/to/file1.kt",
-        "path/to/file2.kt"
-    ],
-    "reasoning": "Brief explanation of why these files are needed"
+"message": "Brief explanation of why these files are needed and your analysis of the task",
+"requestedFiles": [
+"path/to/file1.kt",
+"path/to/file2.kt"
+]
 }
-```
 
 ## Guidelines
 
@@ -24,3 +23,4 @@ CRITICAL: Respond ONLY with a valid JSON object. No markdown, no explanations, j
 5. Don't request more than 10-15 files unless absolutely necessary
 6. Prefer .kt files for Kotlin projects
 7. Don't request build files, configs, or test files unless specifically needed
+8. Always put your reasoning in "message" — explain what you see and why you need these files
