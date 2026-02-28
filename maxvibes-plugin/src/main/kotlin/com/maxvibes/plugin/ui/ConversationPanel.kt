@@ -1,5 +1,11 @@
 package com.maxvibes.plugin.ui
 
+import com.intellij.openapi.editor.colors.EditorColorsManager
+import com.intellij.openapi.fileTypes.FileType
+import com.intellij.openapi.fileTypes.FileTypeManager
+import com.intellij.openapi.fileTypes.PlainTextFileType
+import com.intellij.openapi.project.Project
+import com.intellij.ui.EditorTextField
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
@@ -11,7 +17,13 @@ import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.*
 
+sealed class MessageSegment {
+    data class Text(val content: String) : MessageSegment()
+    data class Code(val lang: String, val code: String) : MessageSegment()
+}
+
 class ConversationPanel(
+    private val project: Project,
     private val onNavigateToPath: (String) -> Unit
 ) : JPanel(BorderLayout()) {
 
@@ -70,6 +82,54 @@ class ConversationPanel(
         SwingUtilities.invokeLater { scrollPane.verticalScrollBar.value = scrollPane.verticalScrollBar.maximum }
     }
 
+    // ==================== Segment Parser ====================
+
+    private fun parseSegments(text: String): List<MessageSegment> {
+        val segments = mutableListOf<MessageSegment>()
+        val lines = text.lines()
+        var inCode = false
+        var lang = ""
+        val codeLines = mutableListOf<String>()
+        val textLines = mutableListOf<String>()
+
+        fun flushText() {
+            val t = textLines.joinToString("\n").trim()
+            if (t.isNotBlank()) segments += MessageSegment.Text(t)
+            textLines.clear()
+        }
+
+        fun flushCode() {
+            val c = codeLines.joinToString("\n")
+            segments += MessageSegment.Code(lang, c)
+            codeLines.clear()
+        }
+
+        for (line in lines) {
+            if (!inCode) {
+                val m = Regex("^```(\\S*)").find(line.trim())
+                if (m != null) {
+                    flushText()
+                    inCode = true
+                    lang = m.groupValues[1]
+                } else {
+                    textLines += line
+                }
+            } else {
+                if (line.trim() == "```") {
+                    flushCode()
+                    inCode = false
+                    lang = ""
+                } else {
+                    codeLines += line
+                }
+            }
+        }
+        if (inCode) flushCode() else flushText()
+        return segments
+    }
+
+    // ==================== Bubble builders ====================
+
     private fun userBubble(text: String): JPanel {
         val bg = JBColor(Color(0xEBF5FB), Color(0x1B2A3B))
         val area = contentArea(text, bg)
@@ -90,14 +150,144 @@ class ConversationPanel(
         val ok = mods.filterIsInstance<ModificationResult.Success>()
         val fail = mods.filterIsInstance<ModificationResult.Failure>()
         val hasDetails = !tokenInfo.isNullOrBlank() || ok.isNotEmpty() || fail.isNotEmpty() || metaFiles.isNotEmpty()
-        val area = contentArea(text, bg)
-        lastContentArea = area
+
+        val segments = parseSegments(text)
+        val contentPanel = buildSegmentsPanel(segments, bg)
+
+        // keep lastContentArea pointing at first text area for appendIconToLastBubble
+        segments.filterIsInstance<MessageSegment.Text>().firstOrNull()?.let {
+            // it's already set inside buildSegmentsPanel
+        }
+
         return bubble(bg, JBColor(Color(0x239B56), Color(0x58D68D))).also { p ->
             p.add(roleLabel("\uD83E\uDD16 MaxVibes", JBColor(Color(0x1D6A39), Color(0x82E0AA))), BorderLayout.NORTH)
-            p.add(area, BorderLayout.CENTER)
+            p.add(contentPanel, BorderLayout.CENTER)
             if (hasDetails) p.add(collapsibleFooter(tokenInfo, ok, fail, bg, metaFiles), BorderLayout.SOUTH)
         }
     }
+
+    private fun buildSegmentsPanel(segments: List<MessageSegment>, bg: Color): JPanel {
+        val panel = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            background = bg
+            alignmentX = Component.LEFT_ALIGNMENT
+        }
+        for (seg in segments) {
+            when (seg) {
+                is MessageSegment.Text -> {
+                    val formatted = formatTextSegment(seg.content)
+                    if (formatted.isNotBlank()) {
+                        val area = contentArea(formatted, bg)
+                        lastContentArea = area
+                        area.alignmentX = Component.LEFT_ALIGNMENT
+                        panel.add(area)
+                        panel.add(Box.createVerticalStrut(4))
+                    }
+                }
+
+                is MessageSegment.Code -> {
+                    val block = collapsibleCodeBlock(seg.lang, seg.code)
+                    block.alignmentX = Component.LEFT_ALIGNMENT
+                    panel.add(block)
+                    panel.add(Box.createVerticalStrut(6))
+                }
+            }
+        }
+        return panel
+    }
+
+    private fun formatTextSegment(text: String): String {
+        return text.lines().joinToString("\n") { line ->
+            var l = line
+            val h3 = Regex("^###\\s+(.+)").find(l)
+            if (h3 != null) return@joinToString "  \u2500\u2500\u2500 ${h3.groupValues[1].trim()} \u2500\u2500\u2500"
+            val h2 = Regex("^##\\s+(.+)").find(l)
+            if (h2 != null) return@joinToString "\u2550\u2550 ${h2.groupValues[1].trim().uppercase()} \u2550\u2550"
+            val h1 = Regex("^#\\s+(.+)").find(l)
+            if (h1 != null) return@joinToString "\u2550\u2550\u2550 ${
+                h1.groupValues[1].trim().uppercase()
+            } \u2550\u2550\u2550"
+            if (l.trim().matches(Regex("^[-*_]{3,}$"))) return@joinToString "\u2500".repeat(40)
+            l = l.replace(Regex("^(\\s*)[-*]\\s+"), "$1\u2022 ")
+            l = l.replace(Regex("\\*{3}(.+?)\\*{3}")) { it.groupValues[1].uppercase() }
+            l = l.replace(Regex("\\*{2}(.+?)\\*{2}")) { it.groupValues[1].uppercase() }
+            l = l.replace(Regex("(?<![*])\\*([^*]+?)\\*(?![*])")) { it.groupValues[1] }
+            l = l.replace(Regex("`([^`]+?)`")) { "[${it.groupValues[1]}]" }
+            l
+        }
+    }
+
+    private fun collapsibleCodeBlock(lang: String, code: String): JPanel {
+        val editorBg = EditorColorsManager.getInstance().globalScheme.defaultBackground
+        val borderColor = JBColor(Color(0x3A3A3A), Color(0x4A4A4A))
+        val lineCount = code.lines().size
+        val langLabel = if (lang.isNotBlank()) lang else "code"
+
+        val fileType: FileType = when (lang.lowercase()) {
+            "kotlin", "kt" -> FileTypeManager.getInstance().getFileTypeByExtension("kt")
+            "java" -> FileTypeManager.getInstance().getFileTypeByExtension("java")
+            "json" -> FileTypeManager.getInstance().getFileTypeByExtension("json")
+            "xml" -> FileTypeManager.getInstance().getFileTypeByExtension("xml")
+            "yaml", "yml" -> FileTypeManager.getInstance().getFileTypeByExtension("yaml")
+            "gradle", "kts" -> FileTypeManager.getInstance().getFileTypeByExtension("kts")
+            "sql" -> FileTypeManager.getInstance().getFileTypeByExtension("sql")
+            "bash", "sh" -> FileTypeManager.getInstance().getFileTypeByExtension("sh")
+            else -> PlainTextFileType.INSTANCE
+        }.let { ft ->
+            if (ft.name == "UNKNOWN" || ft == FileTypeManager.getInstance()
+                    .getFileTypeByExtension("__x")
+            ) PlainTextFileType.INSTANCE else ft
+        }
+
+        val document = com.intellij.openapi.editor.EditorFactory.getInstance().createDocument(code)
+        val editor = EditorTextField(document, project, fileType, true, false).apply {
+            background = editorBg
+            border = JBUI.Borders.empty(6, 8)
+            maximumSize = Dimension(Int.MAX_VALUE, Int.MAX_VALUE)
+            alignmentX = Component.LEFT_ALIGNMENT
+        }
+
+        var expanded = true
+        val toggleBtn = JButton().apply {
+            text = "\u25BC $langLabel  ($lineCount lines)"
+            font = Font(Font.MONOSPACED, Font.PLAIN, 10)
+            foreground = JBColor(Color(0xAAAAAA), Color(0xAAAAAA))
+            background = JBColor(Color(0x2D2D2D), Color(0x2D2D2D))
+            isOpaque = true
+            isFocusPainted = false
+            isContentAreaFilled = true
+            isBorderPainted = false
+            horizontalAlignment = SwingConstants.LEFT
+            border = JBUI.Borders.empty(3, 8, 3, 8)
+            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)
+        }
+
+        val container = JPanel(BorderLayout()).apply {
+            background = editorBg
+            border = JBUI.Borders.compound(
+                JBUI.Borders.customLine(borderColor, 1),
+                JBUI.Borders.empty(0)
+            )
+            maximumSize = Dimension(Int.MAX_VALUE, Int.MAX_VALUE)
+            add(toggleBtn, BorderLayout.NORTH)
+            add(editor, BorderLayout.CENTER)
+        }
+
+        toggleBtn.addActionListener {
+            expanded = !expanded
+            editor.isVisible = expanded
+            toggleBtn.text =
+                if (expanded) "\u25BC $langLabel  ($lineCount lines)" else "\u25BA $langLabel  ($lineCount lines)"
+            container.revalidate(); container.repaint()
+            messagesPanel.revalidate(); messagesPanel.repaint()
+        }
+
+        return container
+    }
+
+    @Suppress("unused")
+    private fun codeBlock(lang: String, code: String): JPanel = collapsibleCodeBlock(lang, code)
 
     private fun bubble(bg: Color, accent: Color) = JPanel(BorderLayout(0, 3)).apply {
         background = bg

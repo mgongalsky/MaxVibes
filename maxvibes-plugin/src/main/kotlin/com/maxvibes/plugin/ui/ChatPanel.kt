@@ -33,8 +33,7 @@ class ChatPanel(
     private val onShowSessions: () -> Unit
 ) : JPanel(BorderLayout()), ChatPanelCallbacks {
 
-    // --- UI Components ---
-    private val conversationPanel = ConversationPanel { path ->
+    private val conversationPanel = ConversationPanel(project) { path ->
         statusLabel.text = ChatNavigationHelper.navigateToElement(project, path)
     }
 
@@ -244,25 +243,9 @@ class ChatPanel(
     }
 
     override fun formatMarkdown(text: String): String {
-        return text.lines().joinToString("\n") { line ->
-            var l = line
-            Regex("^###\\s+(.+)").find(l)
-                ?.let { return@joinToString "  \u2500\u2500\u2500 ${it.groupValues[1].trim()} \u2500\u2500\u2500" }
-            Regex("^##\\s+(.+)").find(l)
-                ?.let { return@joinToString "\u2550\u2550 ${it.groupValues[1].trim().uppercase()} \u2550\u2550" }
-            Regex("^#\\s+(.+)").find(l)?.let {
-                return@joinToString "\u2550\u2550\u2550 ${
-                    it.groupValues[1].trim().uppercase()
-                } \u2550\u2550\u2550"
-            }
-            if (l.trim().matches(Regex("^[-*_]{3,}$"))) return@joinToString "\u2500".repeat(40)
-            l = l.replace(Regex("^(\\s*)[-*]\\s+"), "$1\u2022 ")
-            l = l.replace(Regex("\\*{3}(.+?)\\*{3}")) { it.groupValues[1].uppercase() }
-            l = l.replace(Regex("\\*{2}(.+?)\\*{2}")) { it.groupValues[1].uppercase() }
-            l = l.replace(Regex("(?<![*])\\*([^*]+?)\\*(?![*])")) { it.groupValues[1] }
-            l = l.replace(Regex("`([^`]+?)`")) { "[${it.groupValues[1]}]" }
-            l
-        }
+        // Text formatting is now handled inside ConversationPanel.formatTextSegment.
+        // This function is kept for backward-compat but just returns text as-is.
+        return text
     }
 
     override fun updateTokenDisplay() {

@@ -206,8 +206,7 @@ class ChatMessageController(
                 callbacks.registerElementPaths(result.modifications)
                 session.addChatTokens(0, result.outputTokens)
                 callbacks.updateTokenDisplay()
-                val rawText = result.message.ifBlank { "Done." }
-                val text = rawText.substringBefore("\u2500\u2500\u2500\u2500\u2500").trim().ifBlank { "Done." }
+                val text = result.message.trim().ifBlank { "Done." }
                 session.addMessage(MessageRole.ASSISTANT, text)
                 val tokenInfo = if (result.outputTokens > 0) "\u2193${fmt(result.outputTokens)}" else null
                 callbacks.addAssistantMessageBubble(
