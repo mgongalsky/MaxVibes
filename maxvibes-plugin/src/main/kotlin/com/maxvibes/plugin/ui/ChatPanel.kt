@@ -444,40 +444,45 @@ class ChatPanel(
         val userInput = inputArea.text.trim()
         if (userInput.isBlank()) return
         val trace = attachedTrace; clearAttachedTrace()
+        val isPlanOnly = planOnlyCheckbox.isSelected
         when (currentMode) {
             InteractionMode.API -> sendApiMessage(userInput, trace)
-            InteractionMode.CLIPBOARD -> sendClipboardMessage(userInput, trace)
+            InteractionMode.CLIPBOARD -> sendClipboardMessage(userInput, trace, isPlanOnly)
             InteractionMode.CHEAP_API -> sendCheapApiMessage(userInput, trace)
         }
     }
 
     private fun sendApiMessage(msg: String, trace: String?) {
         val session = chatHistory.getActiveSession()
-        val userDisplay = buildString {
+        val isPlanOnly = planOnlyCheckbox.isSelected
+
+        conversationPanel.addUserBubble(msg)
+
+        val fullTask = buildString {
             append(msg)
-            if (!trace.isNullOrBlank()) append("\n\uD83D\uDCCE [trace: ${trace.lines().size} lines]")
-            if (planOnlyCheckbox.isSelected) append("\n\uD83D\uDCAC [plan-only]")
+            if (!trace.isNullOrBlank()) append("\n[trace: ${trace.lines().size} lines]")
+            if (isPlanOnly) append("\n[plan-only]")
         }
-        conversationPanel.addUserBubble(userDisplay)
-        val fullTask = ChatMessageController.buildTaskWithTrace(msg, trace)
         session.addMessage(MessageRole.USER, fullTask)
+
         inputArea.text = ""; setInputEnabled(false)
-        statusLabel.text = if (planOnlyCheckbox.isSelected) "Planning..." else "Thinking..."
+        statusLabel.text = if (isPlanOnly) "Planning..." else "Thinking..."
+
         val history = session.messages.dropLast(1).map { it.toChatMessageDTO() }
         messageController.sendApiMessage(
             fullTask, session, history, dryRunCheckbox.isSelected,
-            planOnlyCheckbox.isSelected, chatHistory.getGlobalContextFiles()
+            isPlanOnly, chatHistory.getGlobalContextFiles()
         )
     }
 
-    private fun sendClipboardMessage(userInput: String, trace: String?) {
+    private fun sendClipboardMessage(userInput: String, trace: String?, isPlanOnly: Boolean) {
         val cs = service.clipboardService
         val session = chatHistory.getActiveSession()
         inputArea.text = ""
         when {
             cs.isWaitingForResponse() -> {
                 session.addMessage(MessageRole.USER, "[Pasted LLM response]")
-                conversationPanel.appendIconToLastBubble("\uD83D\uDCE5")
+                conversationPanel.appendIconToLastBubble("📥")
                 setInputEnabled(false); statusLabel.text = "Processing..."
                 messageController.runClipboardBg("Processing response...", session) {
                     cs.handlePastedResponse(userInput)
@@ -485,29 +490,35 @@ class ChatPanel(
             }
 
             cs.hasActiveSession() -> {
-                val userDisplay = buildString {
+                conversationPanel.addUserBubble(userInput)
+
+                val fullMsg = buildString {
                     append(userInput)
-                    if (!trace.isNullOrBlank()) append("\n\uD83D\uDCCE [trace: ${trace.lines().size} lines]")
+                    if (!trace.isNullOrBlank()) append("\n[trace: ${trace.lines().size} lines]")
+                    if (isPlanOnly) append("\n[plan-only]")
                 }
-                conversationPanel.addUserBubble(userDisplay)
-                session.addMessage(MessageRole.USER, userInput)
+                session.addMessage(MessageRole.USER, fullMsg)
+
                 setInputEnabled(false); statusLabel.text = "Continuing..."
-                messageController.runClipboardBg("Generating follow-up...", session) {
-                    cs.continueDialog(userInput, trace)
+                messageController.runClipboardBg("Continuing...", session) {
+                    cs.continueDialog(userInput, trace, isPlanOnly)
                 }
             }
 
             else -> {
-                val userDisplay = buildString {
+                conversationPanel.addUserBubble(userInput)
+
+                val fullMsg = buildString {
                     append(userInput)
-                    if (!trace.isNullOrBlank()) append("\n\uD83D\uDCCE [trace: ${trace.lines().size} lines]")
+                    if (!trace.isNullOrBlank()) append("\n[trace: ${trace.lines().size} lines]")
+                    if (isPlanOnly) append("\n[plan-only]")
                 }
-                conversationPanel.addUserBubble(userDisplay)
-                session.addMessage(MessageRole.USER, userInput)
+                session.addMessage(MessageRole.USER, fullMsg)
+
                 setInputEnabled(false); statusLabel.text = "Generating JSON..."
                 messageController.runClipboardBg("Generating request...", session) {
                     val dtos = session.messages.dropLast(1).map { it.toChatMessageDTO() }
-                    cs.startTask(userInput, dtos, trace)
+                    cs.startTask(userInput, dtos, trace, isPlanOnly)
                 }
             }
         }
@@ -515,20 +526,19 @@ class ChatPanel(
 
     private fun sendCheapApiMessage(msg: String, trace: String?) {
         val session = chatHistory.getActiveSession()
-        val userDisplay = buildString {
-            append(msg)
-            if (!trace.isNullOrBlank()) append("\n\uD83D\uDCCE [trace: ${trace.lines().size} lines]")
-            if (planOnlyCheckbox.isSelected) append("\n\uD83D\uDCAC [plan-only]")
-        }
-        conversationPanel.addUserBubble(userDisplay)
+        val isPlanOnly = planOnlyCheckbox.isSelected
+
+        conversationPanel.addUserBubble(msg)
+
         val fullTask = ChatMessageController.buildTaskWithTrace(msg, trace)
         session.addMessage(MessageRole.USER, fullTask)
+
         inputArea.text = ""; setInputEnabled(false); statusLabel.text = "Thinking (cheap)..."
         val history = session.messages.dropLast(1).map { it.toChatMessageDTO() }
         service.ensureCheapLLMService()
         messageController.sendCheapApiMessage(
             fullTask, session, history, dryRunCheckbox.isSelected,
-            planOnlyCheckbox.isSelected, chatHistory.getGlobalContextFiles()
+            isPlanOnly, chatHistory.getGlobalContextFiles()
         )
     }
 

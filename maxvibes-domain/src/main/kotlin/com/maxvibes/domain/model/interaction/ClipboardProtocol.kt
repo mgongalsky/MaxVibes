@@ -10,10 +10,6 @@ enum class ClipboardPhase {
     CHAT
 }
 
-/**
- * Запрос для копирования в чат LLM.
- * Генерируется MaxVibes, копируется пользователем.
- */
 data class ClipboardRequest(
     val phase: ClipboardPhase,
     val task: String,
@@ -29,7 +25,9 @@ data class ClipboardRequest(
     /** История чата (полная) */
     val chatHistory: List<ClipboardHistoryEntry> = emptyList(),
     /** Дополнительный контекст (ошибки, трейсы) */
-    val attachedContext: String? = null
+    val attachedContext: String? = null,
+    /** Plan-only mode: discussion without code modifications */
+    val planOnly: Boolean = false
 )
 
 data class ClipboardHistoryEntry(
@@ -40,6 +38,8 @@ data class ClipboardHistoryEntry(
 data class ClipboardResponse(
     /** Текстовое сообщение пользователю (обязательно рекомендуется) */
     val message: String = "",
+    /** Обоснование или пояснение от LLM */
+    val reasoning: String? = null,
     /** Запрошенные файлы для следующего шага */
     val requestedFiles: List<String> = emptyList(),
     /** Модификации кода */

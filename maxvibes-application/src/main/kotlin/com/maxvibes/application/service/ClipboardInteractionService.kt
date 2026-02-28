@@ -50,9 +50,10 @@ class ClipboardInteractionService(
     suspend fun startTask(
         task: String,
         history: List<ChatMessageDTO> = emptyList(),
-        attachedContext: String? = null
+        attachedContext: String? = null,
+        planOnly: Boolean = false
     ): ClipboardStepResult {
-        log("Starting new clipboard task: \"${task.take(60)}...\"")
+        log("Starting new clipboard task: \"${task.take(60)}...\" (planOnly=$planOnly)")
 
         notificationPort.showProgress("Gathering project context...", 0.1)
         val projectContextResult = contextProvider.getProjectContext()
@@ -70,7 +71,8 @@ class ClipboardInteractionService(
             dialogHistory = history.toMutableList(),
             prompts = prompts,
             allGatheredFiles = mutableMapOf(),
-            attachedContext = attachedContext
+            attachedContext = attachedContext,
+            planOnly = planOnly
         )
 
         // Добавляем user message в историю
@@ -88,17 +90,19 @@ class ClipboardInteractionService(
      */
     suspend fun continueDialog(
         message: String,
-        attachedContext: String? = null
+        attachedContext: String? = null,
+        planOnly: Boolean? = null
     ): ClipboardStepResult {
         val state = sessionState
             ?: return error("No active clipboard session. Start a new task first.")
 
-        log("Continuing dialog: \"${message.take(60)}...\"")
+        log("Continuing dialog: \"${message.take(60)}...\" (new planOnly=$planOnly)")
 
-        // Обновляем attached context если есть
-        if (!attachedContext.isNullOrBlank()) {
-            sessionState = state.copy(attachedContext = attachedContext)
-        }
+        // Обновляем состояние сессии
+        sessionState = state.copy(
+            attachedContext = attachedContext ?: state.attachedContext,
+            planOnly = planOnly ?: state.planOnly
+        )
 
         addToHistory(ChatRole.USER, message)
 
@@ -178,32 +182,38 @@ class ClipboardInteractionService(
         val modResults = if (hasMods) {
             applyModifications(response.modifications)
         } else {
-            emptyList()
+            emptyList<ModificationResult>()
         }
 
         if (hasFiles) {
-            val freshFiles = gatherRequestedFiles(response.requestedFiles)
-            if (freshFiles == null) {
+            val gatheredFilesMap = gatherRequestedFiles(response.requestedFiles)
+            if (gatheredFilesMap == null) {
                 return buildCompletedResult(
-                    response, modResults,
+                    response = response,
+                    modResults = modResults,
                     extraMessage = "\n\n⚠️ Failed to gather some requested files.",
-                    inputTokens = inputTokens, outputTokens = outputTokens
+                    inputTokens = inputTokens,
+                    outputTokens = outputTokens
                 )
             }
 
-            // Передаем только чистый текст сообщения ассистента.
-            // Вся вспомогательная информация (reasoning, список файлов) уйдет в метаданные WaitingForResponse.
             val assistantDisplayMessage = response.message.trim()
+            val reasoningStr: String? = response.reasoning?.takeIf { it.isNotBlank() }
 
             return generateAndCopyJson(
-                freshFiles = freshFiles,
+                freshFiles = gatheredFilesMap,
                 isFirstMessage = false,
-                assistantMessage = assistantDisplayMessage.takeIf { it.isNotBlank() },
-                llmReasoning = response.reasoning?.takeIf { it.isNotBlank() }
+                assistantMessage = if (assistantDisplayMessage.isNotBlank()) assistantDisplayMessage else null,
+                llmReasoning = reasoningStr
             )
         }
 
-        return buildCompletedResult(response, modResults, inputTokens = inputTokens, outputTokens = outputTokens)
+        return buildCompletedResult(
+            response = response,
+            modResults = modResults,
+            inputTokens = inputTokens,
+            outputTokens = outputTokens
+        )
     }
 
     private fun generateAndCopyJson(
@@ -218,7 +228,7 @@ class ClipboardInteractionService(
 
         log(
             "Generating JSON: freshFiles=${freshFiles.size}, previousPaths=${previousPaths.size}, " +
-                    "historySize=${state.dialogHistory.size}"
+                    "historySize=${state.dialogHistory.size}, planOnly=${state.planOnly}"
         )
 
         val request = ClipboardRequest(
@@ -240,7 +250,8 @@ class ClipboardInteractionService(
                     content = msg.content
                 )
             },
-            attachedContext = state.attachedContext
+            attachedContext = state.attachedContext,
+            planOnly = state.planOnly
         )
 
         val copied = clipboardPort.copyRequestToClipboard(request)
@@ -347,17 +358,15 @@ class ClipboardInteractionService(
         val successCount = modResults.count { it is ModificationResult.Success }
         val failCount = modResults.size - successCount
 
-        // В основном теле сообщения оставляем только текст ответа и критические ошибки.
-        // Reasoning и список изменений UI отрисует сам из метаданных.
-        val message = buildString {
+        val messageText = buildString {
             if (response.message.isNotBlank()) {
                 append(response.message)
             }
             if (extraMessage.isNotBlank()) {
-                if (isNotBlank()) appendLine().appendLine()
+                if (isNotEmpty()) append("\n\n")
                 append(extraMessage)
             }
-            if (isBlank()) {
+            if (isEmpty()) {
                 append("Done.")
             }
         }
@@ -368,13 +377,15 @@ class ClipboardInteractionService(
 
         log("Completed: message=${response.message.take(40)}..., mods=$successCount ok/$failCount fail.")
 
+        val reasoningStr: String? = response.reasoning?.takeIf { it.isNotBlank() }
+
         return ClipboardStepResult.Completed(
-            message = message.trim(),
+            message = messageText.trim(),
             modifications = modResults,
             success = failCount == 0,
             inputTokens = inputTokens,
             outputTokens = outputTokens,
-            llmReasoning = response.reasoning?.takeIf { it.isNotBlank() }
+            llmReasoning = reasoningStr
         )
     }
 
@@ -461,9 +472,8 @@ Rules:
 
     private fun buildChatInstruction(state: ClipboardSessionState): String {
         val custom = state.prompts.chatSystem
-        if (custom.isNotBlank()) return custom
-
-        return """⚠️ CRITICAL: This is a MaxVibes clipboard protocol message. You MUST respond with ONLY a JSON object as plain text in the chat.
+        val basePrompt =
+            if (custom.isNotBlank()) custom else """⚠️ CRITICAL: This is a MaxVibes clipboard protocol message. You MUST respond with ONLY a JSON object as plain text in the chat.
 DO NOT use computer tools. DO NOT create files. DO NOT use bash. DO NOT use artifacts.
 DO NOT write code to disk. ALL code goes into the "modifications" array inside the JSON.
 Your ENTIRE response must be a single JSON object — nothing else.
@@ -479,40 +489,31 @@ Your response must be EXACTLY this JSON format (and nothing else):
         {
             "type": "REPLACE_ELEMENT",
             "path": "file:src/main/kotlin/com/example/User.kt/class[User]/function[validate]",
-            "content": "fun validate(): Boolean {\n    return name.isNotBlank()\n}",
+            "content": "fun validate(): Boolean {\\n    return name.isNotBlank()\\n}",
             "elementKind": "FUNCTION"
         }
     ]
 }
 
-ALL FIELDS ARE OPTIONAL except "message" which is always recommended.
+ALL FIELDS ARE OPTIONAL except "message" which is always recommended."""
 
-## Modification types (prefer element-level for existing files!)
+        if (!state.planOnly) return basePrompt
 
-| type | When | path | content | extra fields |
-|------|------|------|---------|-------------|
-| REPLACE_ELEMENT | Change a function/class/property | file:path/File.kt/class[X]/function[Y] | Complete element | elementKind |
-| CREATE_ELEMENT | Add new element to parent | file:path/File.kt/class[X] | New element | elementKind, position |
-| DELETE_ELEMENT | Remove an element | file:path/File.kt/class[X]/function[Y] | (empty) | |
-| ADD_IMPORT | Add import | file:path/File.kt | (empty) | importPath: "com.example.Foo" |
-| REMOVE_IMPORT | Remove import | file:path/File.kt | (empty) | importPath: "com.example.Bar" |
-| CREATE_FILE | New file | src/main/kotlin/.../File.kt | Full file | |
-| REPLACE_FILE | Rewrite entire file (sparingly!) | src/main/kotlin/.../File.kt | Full file | |
+        return basePrompt + """
 
-## Element path format
-file:src/main/kotlin/com/example/User.kt/class[User]/function[validate]
-Segments: class[Name], interface[Name], object[Name], function[Name], property[Name], companion_object, init
+## ⚠️ PLAN-ONLY MODE — DISCUSSION REQUIRED
 
-## Rules
-- PREFER REPLACE_ELEMENT/CREATE_ELEMENT over REPLACE_FILE — saves tokens!
-- Only use REPLACE_FILE when the majority of the file changes
-- For REPLACE_ELEMENT: content = complete element (annotations, modifiers, signature, body)
-- For CREATE_ELEMENT: set elementKind (FUNCTION, CLASS, PROPERTY) and position (LAST_CHILD, FIRST_CHILD)
-- Use ADD_IMPORT/REMOVE_IMPORT for imports — don't manually edit imports
-- "content" must be complete, compilable Kotlin code
-- Previously gathered files are listed by path — you already saw them in earlier messages
-- DO NOT wrap the JSON in markdown code blocks. Just output raw JSON.
-- ALL code MUST go in modifications[].content — never use tools or file creation."""
+DO NOT generate any code changes in the "modifications" array. 
+Keep "modifications": [] empty.
+Your goal is to DISCUSS the plan with the user before any code is written.
+
+Instead of code, you must:
+1. Briefly explain what you understand from the task
+2. List which files you plan to touch and what changes you'll make in each
+3. Mention any architectural decisions or trade-offs
+4. Ask the user to confirm or suggest corrections
+
+Always output the JSON with "modifications": [] and put your discussion in "message"."""
     }
 
     // ==================== Helpers ====================
@@ -603,5 +604,6 @@ private data class ClipboardSessionState(
     val prompts: PromptTemplates,
     val allGatheredFiles: MutableMap<String, String>,
     val attachedContext: String? = null,
-    var lastInputTokens: Int = 0
+    var lastInputTokens: Int = 0,
+    val planOnly: Boolean = false
 )

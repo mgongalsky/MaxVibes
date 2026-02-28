@@ -277,12 +277,13 @@ class LangChainLLMService(
             val chatResponse = try {
                 withPluginClassLoader {
                     val chatService = createChatService(systemPrompt, history, contextBlock)
-                    val dto: ChatResponseDTO = chatService.chat(message)
+                    val dto: com.maxvibes.adapter.llm.dto.ChatResponseDTO = chatService.chat(message)
                     log("[LangChainLLMService] AiServices OK: ${dto.modifications.size} modifications")
                     ChatResponse(
                         message = dto.message,
                         modifications = dto.modifications.mapNotNull { convertModification(it) },
-                        requestedFiles = extractFileRequests(dto.message)
+                        requestedFiles = extractFileRequests(dto.message),
+                        reasoning = dto.reasoning
                     )
                 }
             } catch (e: Throwable) {
@@ -374,7 +375,9 @@ class LangChainLLMService(
 
 ## ⚠️ PLAN-ONLY MODE — DISCUSSION REQUIRED
 
-Do NOT generate any JSON with code modifications.
+DO NOT generate any code modifications.
+You MUST keep the "modifications" list EMPTY: [].
+
 Your goal is to DISCUSS the plan with the user before any code is written.
 
 Instead of code, you must:
@@ -386,7 +389,7 @@ Instead of code, you must:
 End your response with exactly this line:
 > ✅ Ready to implement. Reply to confirm or describe what to change.
 
-Never include JSON, code blocks with modifications, or any ```json blocks.""".trimIndent()
+Never include code blocks with proposed changes in your message body if you are using structured output. Just fill the 'message' field with your analysis and keep 'modifications' as an empty list.""".trimIndent()
         return base + planOnlyInstruction
     }
 
@@ -510,10 +513,6 @@ Never include JSON, code blocks with modifications, or any ```json blocks.""".tr
 
     // ==================== Fallback Response Parsing (improved) ====================
 
-    /**
-     * Improved parseChatResponse with multiple extraction patterns.
-     * Used as fallback when AiServices doesn't work.
-     */
     private fun parseChatResponse(response: String): ChatResponse {
         // Pattern 1: ```json ... ``` blocks
         val jsonBlockPattern = Regex("```json\\s*\\n([\\s\\S]*?)\\n\\s*```")
@@ -528,6 +527,7 @@ Never include JSON, code blocks with modifications, or any ```json blocks.""".tr
 
         val message: String
         val modifications: List<Modification>
+        var reasoning: String? = null
 
         if (jsonMatch != null) {
             val beforeJson = response.substring(0, jsonMatch.range.first).trim()
@@ -537,6 +537,7 @@ Never include JSON, code blocks with modifications, or any ```json blocks.""".tr
             modifications = try {
                 val jsonContent = jsonMatch.groupValues[1]
                 val jsonObject = Json.parseToJsonElement(jsonContent).jsonObject
+                reasoning = jsonObject["reasoning"]?.jsonPrimitive?.contentOrNull
                 val modificationsArray = jsonObject["modifications"]?.jsonArray ?: emptyList()
                 modificationsArray.mapNotNull { parseModificationElement(it.jsonObject) }
             } catch (e: Throwable) {
@@ -555,6 +556,7 @@ Never include JSON, code blocks with modifications, or any ```json blocks.""".tr
                     val end = findMatchingBrace(jsonContent)
                     val jsonStr = jsonContent.substring(0, end + 1)
                     val jsonObject = Json.parseToJsonElement(jsonStr).jsonObject
+                    reasoning = jsonObject["reasoning"]?.jsonPrimitive?.contentOrNull
                     val modificationsArray = jsonObject["modifications"]?.jsonArray ?: emptyList()
                     modificationsArray.mapNotNull { parseModificationElement(it.jsonObject) }
                 } catch (e: Throwable) {
@@ -579,7 +581,8 @@ Never include JSON, code blocks with modifications, or any ```json blocks.""".tr
         return ChatResponse(
             message = finalMessage,
             modifications = modifications,
-            requestedFiles = extractFileRequests(finalMessage)
+            requestedFiles = extractFileRequests(finalMessage),
+            reasoning = reasoning
         )
     }
 

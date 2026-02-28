@@ -3,16 +3,12 @@ package com.maxvibes.adapter.llm.dto
 
 import dev.langchain4j.model.output.structured.Description
 
-/**
- * DTO for structured chat response from LLM via AiServices tool calling.
- * LangChain4j converts this to JSON Schema automatically.
- *
- * IMPORTANT: Use regular classes with mutable fields (not Kotlin data classes)
- * for best compatibility with LangChain4j's JSON schema generation.
- */
 class ChatResponseDTO {
     @Description("Your response message to the user explaining what you did or answering their question")
     var message: String = ""
+
+    @Description("Optional reasoning or step-by-step thoughts")
+    var reasoning: String? = null
 
     @Description("List of code modifications to apply. Empty list if no code changes needed")
     var modifications: List<ModificationDTO> = emptyList()

@@ -126,7 +126,10 @@ class ClipboardAdapter : ClipboardPort {
     private fun serializeRequest(request: ClipboardRequest): String {
         val obj = buildJsonObject {
             put("_protocol", "MaxVibes IDE Plugin — respond with JSON only, do NOT use tools/artifacts/computer")
-            put("_responseFormat", "Respond with ONLY a raw JSON object: {\"message\": \"...\", \"requestedFiles\": [...], \"modifications\": [...]}")
+            put(
+                "_responseFormat",
+                "Respond with ONLY a raw JSON object: {\"message\": \"...\", \"requestedFiles\": [...], \"modifications\": [...]}"
+            )
 
             if (request.systemInstruction.isNotBlank()) {
                 put("systemInstruction", request.systemInstruction)
@@ -134,6 +137,10 @@ class ClipboardAdapter : ClipboardPort {
 
             put("task", request.task)
             put("projectName", request.projectName)
+
+            if (request.planOnly) {
+                put("planOnly", true)
+            }
 
             if (request.fileTree.isNotBlank()) {
                 put("fileTree", request.fileTree)
@@ -175,14 +182,12 @@ class ClipboardAdapter : ClipboardPort {
 
     // ==================== Parsing ====================
 
-    /**
-     * Парсит единый формат ответа. Все поля опциональны.
-     */
     private fun parseUnifiedResponse(jsonText: String): ClipboardResponse {
         val obj = lenientJson.parseToJsonElement(jsonText).jsonObject
 
         return ClipboardResponse(
             message = obj["message"]?.jsonPrimitive?.contentOrNull ?: "",
+            reasoning = obj["reasoning"]?.jsonPrimitive?.contentOrNull,
             requestedFiles = obj["requestedFiles"]?.jsonArray
                 ?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList(),
             modifications = obj["modifications"]?.jsonArray
