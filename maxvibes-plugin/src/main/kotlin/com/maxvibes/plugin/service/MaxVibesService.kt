@@ -35,13 +35,15 @@ import com.maxvibes.adapter.psi.context.IntellijIdeErrorsAdapter
 @Service(Service.Level.PROJECT)
 class MaxVibesService(private val project: Project) {
 
-    private val LOG = Logger.getInstance(MaxVibesService::class.java)
+    private val LOG: Logger = Logger.getInstance(MaxVibesService::class.java)
 
     init {
         println("[MaxVibesService] init block running for project: ${project.name}")
+        val basePath = project.basePath ?: System.getProperty("user.home")
+        println("[MaxVibesService] Calling MaxVibesLogger.configure(basePath=$basePath)")
+        MaxVibesLogger.configure(basePath)
         MaxVibesLogger.info("MaxVibesService", "Plugin service initialized", mapOf("project" to project.name))
-        println("[MaxVibesService] MaxVibesLogger.info() called. Log file should be at: ${System.getProperty("user.home")}/.maxvibes/maxvibes.log")
-        LOG.info("[MaxVibes] MaxVibesLogger initialized")
+        LOG.info("[MaxVibes] MaxVibesLogger configured, log: $basePath/.maxvibes/logs/maxvibes.log")
     }
 
     // ========== Ports ==========
@@ -269,7 +271,7 @@ class MaxVibesService(private val project: Project) {
 private class NotConfiguredLLMService : LLMService {
 
     private val configError = LLMError.ConfigurationError(
-        "LLM is not configured. Please go to Settings → Tools → MaxVibes to configure an API key."
+        "LLM is not configured. Please go to Settings \u2192 Tools \u2192 MaxVibes to configure an API key."
     )
 
     override suspend fun chat(

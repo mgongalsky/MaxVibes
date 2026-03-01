@@ -45,7 +45,8 @@ object MaxVibesLogger : LoggerPort {
             }
             logDir.mkdirs()
             rotateIfNeeded()
-            writer = PrintWriter(FileWriter(logFile, true), true)
+            writer =
+                PrintWriter(java.io.OutputStreamWriter(java.io.FileOutputStream(logFile, true), Charsets.UTF_8), true)
             println("[MaxVibesLogger] Writing to: ${logFile.absolutePath}")
             while (running || queue.isNotEmpty()) {
                 val line = queue.poll(100, TimeUnit.MILLISECONDS) ?: continue
