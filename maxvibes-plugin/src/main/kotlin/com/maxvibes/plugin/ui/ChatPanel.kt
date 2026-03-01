@@ -19,9 +19,13 @@ import java.awt.event.KeyEvent
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.*
+import com.intellij.openapi.wm.ToolWindow
+import com.intellij.icons.AllIcons
+import com.intellij.openapi.wm.ToolWindowManager
 
 class ChatPanel(
     private val project: Project,
+    private val toolWindow: ToolWindow,
     private val onShowSessions: () -> Unit
 ) : JPanel(BorderLayout()), ChatPanelCallbacks {
 
@@ -87,6 +91,9 @@ class ChatPanel(
     private val promptsButton = JButton("⚙").apply { toolTipText = "Edit prompts"; font = font.deriveFont(11f) }
     private val contextFilesButton = JButton("📎 Ctx").apply { font = font.deriveFont(11f); isFocusPainted = false }
     private val claudeInstrButton = JButton("📋").apply { font = font.deriveFont(11f); isFocusPainted = false }
+    private val maximizeButton = JButton(AllIcons.General.ExpandComponent).apply {
+        toolTipText = "Maximize / Restore"; font = font.deriveFont(11f); isFocusPainted = false
+    }
 
     private val service: MaxVibesService by lazy { MaxVibesService.getInstance(project) }
     private val chatHistory: ChatHistoryService by lazy { ChatHistoryService.getInstance(project) }
@@ -151,6 +158,7 @@ class ChatPanel(
         sessionsButton.isEnabled = enabled; branchButton.isEnabled = enabled
         newChatButton.isEnabled = enabled; deleteButton.isEnabled = enabled
         contextFilesButton.isEnabled = enabled; claudeInstrButton.isEnabled = enabled
+        maximizeButton.isEnabled = enabled
     }
 
     override fun setStatus(text: String) {
@@ -257,14 +265,14 @@ class ChatPanel(
     }
 
     fun refreshHeader() {
-        updateBreadcrumb(); updateModeIndicator(); updateContextIndicator()
+        updateBreadcrumb(); updateModeIndicator(); updateContextIndicator(); updateMaximizeIcon()
     }
 
     fun loadCurrentSession() {
         val session = chatHistory.getActiveSession()
         conversationPanel.clearMessages()
         elementNavRegistry.clear()
-        updateBreadcrumb(); updateModeIndicator(); updateContextIndicator(); updateTokenDisplay()
+        updateBreadcrumb(); updateModeIndicator(); updateContextIndicator(); updateTokenDisplay(); updateMaximizeIcon()
 
         if (session.messages.isEmpty()) {
             showWelcome()
@@ -307,6 +315,7 @@ class ChatPanel(
                     background = JBColor.background()
                     add(contextFilesButton.apply { preferredSize = Dimension(56, 24) })
                     add(claudeInstrButton.apply { preferredSize = Dimension(26, 24) })
+                    add(maximizeButton.apply { preferredSize = Dimension(26, 24) })
                     add(promptsButton.apply { preferredSize = Dimension(26, 24) })
                 }
                 add(left, BorderLayout.WEST); add(right, BorderLayout.EAST)
@@ -411,6 +420,12 @@ class ChatPanel(
 
         claudeInstrButton.addActionListener {
             ChatDialogsHelper.showClaudeInstructionsPopup(project, claudeInstrButton) { statusLabel.text = it }
+        }
+
+        maximizeButton.addActionListener {
+            val manager = ToolWindowManager.getInstance(project)
+            manager.setMaximized(toolWindow, !manager.isMaximized(toolWindow))
+            updateMaximizeIcon()
         }
 
         attachTraceButton.addActionListener { attachTraceFromClipboard() }
@@ -712,5 +727,11 @@ class ChatPanel(
         if (ctxCount > 0) lines += "📎 $ctxCount global context file(s) active"
         lines += "Type your task • Ctrl+Enter to send"
         lines.forEach { conversationPanel.addSystemBubble(it) }
+    }
+
+    private fun updateMaximizeIcon() {
+        val manager = ToolWindowManager.getInstance(project)
+        maximizeButton.icon =
+            if (manager.isMaximized(toolWindow)) AllIcons.General.CollapseComponent else AllIcons.General.ExpandComponent
     }
 }

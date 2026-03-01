@@ -17,7 +17,7 @@ import javax.swing.JPanel
 
 class MaxVibesToolWindowFactory : ToolWindowFactory {
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
-        val panel = MaxVibesToolPanel(project)
+        val panel = MaxVibesToolPanel(project, toolWindow)
         val content = ContentFactory.getInstance().createContent(panel, "", false)
         toolWindow.contentManager.addContent(content)
     }
@@ -28,9 +28,9 @@ class MaxVibesToolWindowFactory : ToolWindowFactory {
 private const val CARD_CHAT = "chat"
 private const val CARD_SESSIONS = "sessions"
 
-class MaxVibesToolPanel(private val project: Project) : JPanel(CardLayout()) {
+class MaxVibesToolPanel(private val project: Project, private val toolWindow: ToolWindow) : JPanel(CardLayout()) {
 
-    private val chatPanel = ChatPanel(project, onShowSessions = { showSessions() })
+    private val chatPanel = ChatPanel(project, toolWindow, onShowSessions = { showSessions() })
     private val sessionTreePanel: SessionTreePanel
 
     private val chatHistory: ChatHistoryService by lazy { ChatHistoryService.getInstance(project) }
