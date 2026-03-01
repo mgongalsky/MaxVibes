@@ -2,7 +2,7 @@
     <id>com.maxvibes.plugin</id>
     <name>MaxVibes</name>
     <vendor email="support@maxvibes.ai" url="https://maxvibes.ai">MaxVibes Team</vendor>
-    <version>1.0.1-SNAPSHOT</version>
+    <version>1.0.6-SNAPSHOT</version>
 
     <description><![CDATA[
         <h2>MaxVibes - AI-powered Kotlin Assistant</h2>
@@ -25,7 +25,7 @@
     ]]></description>
 
     <change-notes><![CDATA[
-        <h3>Version 1.0.1</h3>
+        <h3>Version 1.0.6</h3>
         <ul>
             <li>Initial release</li>
             <li>Support for OpenAI, Anthropic, and Ollama</li>
