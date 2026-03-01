@@ -660,7 +660,6 @@ class ChatPanel(
         val showBar = hasTrace || hasErrs
         val bar = traceIndicator.parent
         bar?.isVisible = showBar
-        bar?.parent?.isVisible = showBar
         bar?.revalidate(); bar?.repaint()
     }
 
