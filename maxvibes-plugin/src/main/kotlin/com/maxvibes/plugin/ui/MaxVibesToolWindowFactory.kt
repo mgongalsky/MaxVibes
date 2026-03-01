@@ -101,18 +101,13 @@ class MaxVibesToolPanel(private val project: Project, private val toolWindow: To
 
     private fun deleteSession(sessionId: String) {
         val session = chatHistory.getSessionById(sessionId) ?: return
-        val childCount = chatHistory.getChildCount(sessionId)
-        val msg = if (childCount > 0) {
-            "Delete \"${session.title}\"?\n$childCount branch(es) will be re-attached to parent."
-        } else {
-            "Delete \"${session.title}\"?"
-        }
-        val confirm = JOptionPane.showConfirmDialog(
-            this, msg, "Delete Dialog", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE
-        )
-        if (confirm == JOptionPane.YES_OPTION) {
-            chatHistory.deleteSession(sessionId)
-            sessionTreePanel.refresh()
+        chatPanel.resetClipboard()
+        chatHistory.deleteSessionCascade(sessionId)
+        if (chatHistory.getAllSessions().isEmpty()) chatHistory.createNewSession()
+        sessionTreePanel.refresh()
+        // Если удалили активную сессию — перезагружаем chat
+        if (chatHistory.getActiveSession().id != session.id) {
+            chatPanel.loadCurrentSession()
         }
     }
 }

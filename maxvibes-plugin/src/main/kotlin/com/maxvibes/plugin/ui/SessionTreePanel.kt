@@ -17,6 +17,10 @@ import javax.swing.tree.DefaultMutableTreeNode
 import javax.swing.tree.DefaultTreeCellRenderer
 import javax.swing.tree.DefaultTreeModel
 import javax.swing.tree.TreePath
+import javax.swing.tree.TreeSelectionModel
+import javax.swing.AbstractAction
+import javax.swing.JComponent
+import javax.swing.KeyStroke
 
 /**
  * Full-window panel for browsing the session tree.
@@ -38,8 +42,9 @@ class SessionTreePanel(
     private val tree = Tree(treeModel).apply {
         isRootVisible = false
         showsRootHandles = true
-        rowHeight = 0  // auto-calculate from renderer
+        rowHeight = 0
         border = JBUI.Borders.empty(2)
+        selectionModel.selectionMode = TreeSelectionModel.DISCONTIGUOUS_TREE_SELECTION
     }
 
     init {
@@ -59,7 +64,7 @@ class SessionTreePanel(
 
             val titlePanel = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
                 background = JBColor.background()
-                add(JBLabel("\uD83D\uDCC2").apply { font = font.deriveFont(16f) }) // 📂
+                add(JBLabel("\uD83D\uDCC2").apply { font = font.deriveFont(16f) })
                 add(JBLabel("<html><b>Sessions</b></html>").apply {
                     font = font.deriveFont(14f)
                 })
@@ -67,6 +72,13 @@ class SessionTreePanel(
 
             val actionsPanel = JPanel(FlowLayout(FlowLayout.RIGHT, 6, 0)).apply {
                 background = JBColor.background()
+                add(JButton("\uD83D\uDDD1 Delete").apply {
+                    toolTipText = "Delete selected chats"
+                    font = font.deriveFont(12f)
+                    isFocusPainted = false
+                    foreground = JBColor(Color(0xE53935), Color(0xEF5350))
+                    addActionListener { deleteSelectedSessions() }
+                })
                 add(JButton("+ New Chat").apply {
                     toolTipText = "Create new root dialog"
                     font = font.deriveFont(12f)
@@ -90,6 +102,20 @@ class SessionTreePanel(
     private fun setupTree() {
         tree.cellRenderer = SessionCellRenderer(dateFormat)
 
+        // Delete key → удалить выбранные
+        val deleteAction = object : AbstractAction() {
+            override fun actionPerformed(e: java.awt.event.ActionEvent) {
+                deleteSelectedSessions()
+            }
+        }
+        tree.getInputMap(JComponent.WHEN_FOCUSED).put(
+            KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_DELETE, 0), "deleteSelected"
+        )
+        tree.getInputMap(JComponent.WHEN_FOCUSED).put(
+            KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_BACK_SPACE, 0), "deleteSelected"
+        )
+        tree.actionMap.put("deleteSelected", deleteAction)
+
         // Double click → open
         tree.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
@@ -103,34 +129,64 @@ class SessionTreePanel(
 
         // Right click → context menu
         tree.addMouseListener(object : MouseAdapter() {
-            override fun mousePressed(e: MouseEvent) { showContextMenu(e) }
-            override fun mouseReleased(e: MouseEvent) { showContextMenu(e) }
+            override fun mousePressed(e: MouseEvent) {
+                showContextMenu(e)
+            }
+
+            override fun mouseReleased(e: MouseEvent) {
+                showContextMenu(e)
+            }
 
             private fun showContextMenu(e: MouseEvent) {
                 if (!e.isPopupTrigger) return
                 val path = tree.getPathForLocation(e.x, e.y) ?: return
-                tree.selectionPath = path
+
+                val selectedPaths = tree.selectionPaths ?: emptyArray()
+                val isMultiSelection = selectedPaths.size > 1 && selectedPaths.contains(path)
+                if (!isMultiSelection) {
+                    tree.selectionPath = path
+                }
+
                 val node = path.lastPathComponent as? DefaultMutableTreeNode ?: return
                 val data = node.userObject as? TreeNodeData ?: return
 
                 JPopupMenu().apply {
-                    add(JMenuItem("\uD83D\uDCAC Open").apply {
-                        font = font.deriveFont(12f)
-                        addActionListener { onOpenSession(data.sessionId) }
-                    })
-                    add(JMenuItem("\u270F\uFE0F Rename").apply {
-                        font = font.deriveFont(12f)
-                        addActionListener { renameSession(data) }
-                    })
-                    add(JMenuItem("\u2442 New branch here").apply {
-                        font = font.deriveFont(12f)
-                        addActionListener { onNewBranch(data.sessionId) }
-                    })
-                    addSeparator()
-                    add(JMenuItem("\uD83D\uDDD1 Delete").apply {
+                    if (!isMultiSelection) {
+                        add(JMenuItem("\uD83D\uDCAC Open").apply {
+                            font = font.deriveFont(12f)
+                            addActionListener { onOpenSession(data.sessionId) }
+                        })
+                        add(JMenuItem("\u270F\uFE0F Rename").apply {
+                            font = font.deriveFont(12f)
+                            addActionListener { renameSession(data) }
+                        })
+                        add(JMenuItem("\u2442 New branch here").apply {
+                            font = font.deriveFont(12f)
+                            addActionListener { onNewBranch(data.sessionId) }
+                        })
+                        addSeparator()
+                    }
+                    val selectedCount = if (isMultiSelection) (tree.selectionPaths?.size ?: 1) else 1
+                    add(JMenuItem("\uD83D\uDDD1 Delete${if (isMultiSelection) " ($selectedCount selected)" else " & branches"}").apply {
                         font = font.deriveFont(12f)
                         foreground = JBColor(Color(0xE53935), Color(0xEF5350))
-                        addActionListener { onDeleteSession(data.sessionId) }
+                        addActionListener {
+                            if (isMultiSelection) {
+                                deleteSelectedSessions()
+                            } else {
+                                val confirmed = JOptionPane.showConfirmDialog(
+                                    this@SessionTreePanel,
+                                    "Delete \"${data.title}\" and all its branches?\nThis cannot be undone.",
+                                    "Confirm Delete",
+                                    JOptionPane.YES_NO_OPTION,
+                                    JOptionPane.WARNING_MESSAGE
+                                )
+                                if (confirmed == JOptionPane.YES_OPTION) {
+                                    onDeleteSession(data.sessionId)
+                                    refresh()
+                                }
+                            }
+                        }
                     })
                 }.show(tree, e.x, e.y)
             }
@@ -141,12 +197,55 @@ class SessionTreePanel(
         }
         add(scrollPane, BorderLayout.CENTER)
 
-        // Bottom hint
-        val hint = JBLabel("<html><small>Double-click to open \u2022 Right-click for actions</small></html>").apply {
-            foreground = JBColor.GRAY
-            border = JBUI.Borders.empty(4, 12)
-        }
+        val hint =
+            JBLabel("<html><small>Double-click to open \u2022 Right-click for actions \u2022 Ctrl+click to multi-select \u2022 Del to delete</small></html>").apply {
+                foreground = JBColor.GRAY
+                border = JBUI.Borders.empty(4, 12)
+            }
         add(hint, BorderLayout.SOUTH)
+    }
+
+    /**
+     * Удаляет все выбранные в дереве сессии с одним подтверждением.
+     * Использует каскадное удаление — вся ветка сносится вместе с детьми.
+     * Сортирует от самых глубоких к корням, чтобы избежать двойного удаления.
+     */
+    private fun deleteSelectedSessions() {
+        val paths = tree.selectionPaths ?: return
+        val items = paths.mapNotNull { path ->
+            (path.lastPathComponent as? DefaultMutableTreeNode)
+                ?.userObject as? TreeNodeData
+        }
+        if (items.isEmpty()) return
+
+        val count = items.size
+        val message = if (count == 1) {
+            "Delete \"${items.first().title}\" and all its branches?\nThis cannot be undone."
+        } else {
+            "Delete $count selected chats and all their branches?\nThis cannot be undone."
+        }
+
+        val confirmed = JOptionPane.showConfirmDialog(
+            this,
+            message,
+            "Confirm Delete",
+            JOptionPane.YES_NO_OPTION,
+            JOptionPane.WARNING_MESSAGE
+        )
+        if (confirmed != JOptionPane.YES_OPTION) return
+
+        // Удаляем от самых глубоких к корням, чтобы не было двойного удаления
+        // (если выбраны и родитель, и ребёнок — родитель каскадно удалит ребёнка,
+        //  поэтому сначала убираем детей из списка)
+        val sorted = items.sortedByDescending { it.depth }
+        val deletedIds = mutableSetOf<String>()
+        for (item in sorted) {
+            if (item.sessionId !in deletedIds) {
+                onDeleteSession(item.sessionId)
+                deletedIds.add(item.sessionId)
+            }
+        }
+        refresh()
     }
 
     /**
