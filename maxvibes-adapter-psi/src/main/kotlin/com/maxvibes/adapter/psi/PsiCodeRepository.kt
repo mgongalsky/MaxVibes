@@ -126,11 +126,10 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
 
     private fun createFile(mod: Modification.CreateFile): ModificationResult {
         println("[PsiCodeRepository] Creating file: ${mod.targetPath.value}")
-
         return try {
             var resultContent: String? = null
-
-            ApplicationManager.getApplication().invokeAndWait {
+            val app = ApplicationManager.getApplication()
+            val action = {
                 WriteCommandAction.runWriteCommandAction(project) {
                     val filePath = mod.targetPath.filePath
                     val directory = findOrCreateDirectory(filePath)
@@ -138,7 +137,6 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
                         println("[PsiCodeRepository] ERROR: Could not find/create directory for $filePath")
                         return@runWriteCommandAction
                     }
-
                     val fileName = File(filePath).name
                     val psiFile = modifier.createFile(directory, fileName, mod.content)
                     if (psiFile != null) {
@@ -147,47 +145,74 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
                     }
                 }
             }
-
+            if (app.isDispatchThread) action() else app.invokeAndWait(action)
             if (resultContent != null) {
-                ModificationResult.Success(modification = mod, affectedPath = mod.targetPath, resultContent = resultContent)
+                ModificationResult.Success(
+                    modification = mod,
+                    affectedPath = mod.targetPath,
+                    resultContent = resultContent
+                )
             } else {
-                ModificationResult.Failure(modification = mod, error = ModificationError.IOError("Failed to create file"))
+                ModificationResult.Failure(
+                    modification = mod,
+                    error = ModificationError.IOError("Failed to create file")
+                )
             }
         } catch (e: Exception) {
             println("[PsiCodeRepository] ERROR creating file: ${e.message}")
-            ModificationResult.Failure(modification = mod, error = ModificationError.IOError(e.message ?: "Failed to create file"))
+            ModificationResult.Failure(
+                modification = mod,
+                error = ModificationError.IOError(e.message ?: "Failed to create file")
+            )
         }
     }
 
     private fun replaceFile(mod: Modification.ReplaceFile): ModificationResult {
         val psiFile = runReadAction { navigator.findFile(mod.targetPath) }
-            ?: return ModificationResult.Failure(modification = mod, error = ModificationError.FileNotFound(mod.targetPath.filePath))
-
+            ?: return ModificationResult.Failure(
+                modification = mod,
+                error = ModificationError.FileNotFound(mod.targetPath.filePath)
+            )
         return try {
-            ApplicationManager.getApplication().invokeAndWait {
+            val app = ApplicationManager.getApplication()
+            val action = {
                 WriteCommandAction.runWriteCommandAction(project) {
-                    modifier.replaceFileContent(psiFile, mod.newContent)
+                    modifier.replaceFileContent(
+                        psiFile,
+                        mod.newContent
+                    )
                 }
             }
-            ModificationResult.Success(modification = mod, affectedPath = mod.targetPath, resultContent = mod.newContent)
+            if (app.isDispatchThread) action() else app.invokeAndWait(action)
+            ModificationResult.Success(
+                modification = mod,
+                affectedPath = mod.targetPath,
+                resultContent = mod.newContent
+            )
         } catch (e: Exception) {
-            ModificationResult.Failure(modification = mod, error = ModificationError.IOError(e.message ?: "Failed to replace file"))
+            ModificationResult.Failure(
+                modification = mod,
+                error = ModificationError.IOError(e.message ?: "Failed to replace file")
+            )
         }
     }
 
     private fun deleteFile(mod: Modification.DeleteFile): ModificationResult {
         val psiFile = runReadAction { navigator.findFile(mod.targetPath) }
-            ?: return ModificationResult.Failure(modification = mod, error = ModificationError.FileNotFound(mod.targetPath.filePath))
-
+            ?: return ModificationResult.Failure(
+                modification = mod,
+                error = ModificationError.FileNotFound(mod.targetPath.filePath)
+            )
         return try {
-            ApplicationManager.getApplication().invokeAndWait {
-                WriteCommandAction.runWriteCommandAction(project) {
-                    modifier.deleteElement(psiFile)
-                }
-            }
+            val app = ApplicationManager.getApplication()
+            val action = { WriteCommandAction.runWriteCommandAction(project) { modifier.deleteElement(psiFile) } }
+            if (app.isDispatchThread) action() else app.invokeAndWait(action)
             ModificationResult.Success(modification = mod, affectedPath = mod.targetPath, resultContent = null)
         } catch (e: Exception) {
-            ModificationResult.Failure(modification = mod, error = ModificationError.IOError(e.message ?: "Failed to delete file"))
+            ModificationResult.Failure(
+                modification = mod,
+                error = ModificationError.IOError(e.message ?: "Failed to delete file")
+            )
         }
     }
 
@@ -197,24 +222,37 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
 
     private fun createElement(mod: Modification.CreateElement): ModificationResult {
         val parent = runReadAction { navigator.findElement(mod.targetPath) }
-            ?: return ModificationResult.Failure(modification = mod, error = ModificationError.ElementNotFound(mod.targetPath))
-
+            ?: return ModificationResult.Failure(
+                modification = mod,
+                error = ModificationError.ElementNotFound(mod.targetPath)
+            )
         return try {
             var resultText: String? = null
-            ApplicationManager.getApplication().invokeAndWait {
+            val app = ApplicationManager.getApplication()
+            val action = {
                 WriteCommandAction.runWriteCommandAction(project) {
                     val added = modifier.addElement(parent, mod.content, mod.elementKind, mod.position)
                     resultText = added?.text
                 }
             }
-
+            if (app.isDispatchThread) action() else app.invokeAndWait(action)
             if (resultText != null) {
-                ModificationResult.Success(modification = mod, affectedPath = mod.targetPath, resultContent = resultText)
+                ModificationResult.Success(
+                    modification = mod,
+                    affectedPath = mod.targetPath,
+                    resultContent = resultText
+                )
             } else {
-                ModificationResult.Failure(modification = mod, error = ModificationError.ParseError("Failed to parse: ${mod.content.take(50)}"))
+                ModificationResult.Failure(
+                    modification = mod,
+                    error = ModificationError.ParseError("Failed to parse: ${mod.content.take(50)}")
+                )
             }
         } catch (e: Exception) {
-            ModificationResult.Failure(modification = mod, error = ModificationError.IOError(e.message ?: "Failed to create element"))
+            ModificationResult.Failure(
+                modification = mod,
+                error = ModificationError.IOError(e.message ?: "Failed to create element")
+            )
         }
     }
 
@@ -227,18 +265,17 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
             modification = mod,
             error = ModificationError.ElementNotFound(mod.targetPath)
         )
-
         val (element, kind) = elementAndKind
-
         return try {
             var resultText: String? = null
-            ApplicationManager.getApplication().invokeAndWait {
+            val app = ApplicationManager.getApplication()
+            val action = {
                 WriteCommandAction.runWriteCommandAction(project) {
                     val replaced = modifier.replaceElement(element, mod.newContent, kind)
                     resultText = replaced?.text
                 }
             }
-
+            if (app.isDispatchThread) action() else app.invokeAndWait(action)
             if (resultText != null) {
                 ModificationResult.Success(
                     modification = mod,
@@ -261,17 +298,20 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
 
     private fun deleteElement(mod: Modification.DeleteElement): ModificationResult {
         val element = runReadAction { navigator.findElement(mod.targetPath) }
-            ?: return ModificationResult.Failure(modification = mod, error = ModificationError.ElementNotFound(mod.targetPath))
-
+            ?: return ModificationResult.Failure(
+                modification = mod,
+                error = ModificationError.ElementNotFound(mod.targetPath)
+            )
         return try {
-            ApplicationManager.getApplication().invokeAndWait {
-                WriteCommandAction.runWriteCommandAction(project) {
-                    modifier.deleteElement(element)
-                }
-            }
+            val app = ApplicationManager.getApplication()
+            val action = { WriteCommandAction.runWriteCommandAction(project) { modifier.deleteElement(element) } }
+            if (app.isDispatchThread) action() else app.invokeAndWait(action)
             ModificationResult.Success(modification = mod, affectedPath = mod.targetPath, resultContent = null)
         } catch (e: Exception) {
-            ModificationResult.Failure(modification = mod, error = ModificationError.IOError(e.message ?: "Failed to delete element"))
+            ModificationResult.Failure(
+                modification = mod,
+                error = ModificationError.IOError(e.message ?: "Failed to delete element")
+            )
         }
     }
 
@@ -285,13 +325,11 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
                 modification = mod,
                 error = ModificationError.FileNotFound(mod.targetPath.filePath)
             )
-
         return try {
-            ApplicationManager.getApplication().invokeAndWait {
-                WriteCommandAction.runWriteCommandAction(project) {
-                    modifier.addImport(ktFile, mod.importPath)
-                }
-            }
+            val app = ApplicationManager.getApplication()
+            val action =
+                { WriteCommandAction.runWriteCommandAction(project) { modifier.addImport(ktFile, mod.importPath) } }
+            if (app.isDispatchThread) action() else app.invokeAndWait(action)
             ModificationResult.Success(
                 modification = mod,
                 affectedPath = mod.targetPath,
@@ -311,15 +349,15 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
                 modification = mod,
                 error = ModificationError.FileNotFound(mod.targetPath.filePath)
             )
-
         return try {
             var removed = false
-            ApplicationManager.getApplication().invokeAndWait {
+            val app = ApplicationManager.getApplication()
+            val action = {
                 WriteCommandAction.runWriteCommandAction(project) {
                     removed = modifier.removeImport(ktFile, mod.importPath)
                 }
             }
-
+            if (app.isDispatchThread) action() else app.invokeAndWait(action)
             if (removed) {
                 ModificationResult.Success(modification = mod, affectedPath = mod.targetPath, resultContent = null)
             } else {

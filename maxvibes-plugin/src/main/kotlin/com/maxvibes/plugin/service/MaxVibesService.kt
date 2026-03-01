@@ -37,6 +37,13 @@ class MaxVibesService(private val project: Project) {
 
     private val LOG = Logger.getInstance(MaxVibesService::class.java)
 
+    init {
+        println("[MaxVibesService] init block running for project: ${project.name}")
+        MaxVibesLogger.info("MaxVibesService", "Plugin service initialized", mapOf("project" to project.name))
+        println("[MaxVibesService] MaxVibesLogger.info() called. Log file should be at: ${System.getProperty("user.home")}/.maxvibes/maxvibes.log")
+        LOG.info("[MaxVibes] MaxVibesLogger initialized")
+    }
+
     // ========== Ports ==========
 
     val codeRepository: CodeRepository by lazy {
@@ -72,10 +79,14 @@ class MaxVibesService(private val project: Project) {
     val notificationPort: NotificationPort
         get() = notificationService
 
+    val loggerPort: LoggerPort by lazy {
+        ProjectLogger(project)
+    }
+
     // ========== Use Cases ==========
 
     val modifyCodeUseCase: ModifyCodeUseCase by lazy {
-        ModifyCodeService(codeRepository, llmService, notificationPort)
+        ModifyCodeService(codeRepository, llmService, notificationPort, MaxVibesLogger)
     }
 
     val analyzeCodeUseCase: AnalyzeCodeUseCase by lazy {
@@ -88,24 +99,25 @@ class MaxVibesService(private val project: Project) {
             llmService = llmService,
             codeRepository = codeRepository,
             notificationPort = notificationPort,
-            promptPort = promptPort
+            promptPort = promptPort,
+            logger = MaxVibesLogger
         )
     }
 
-    // ========== Clipboard Service (for CLIPBOARD mode) ==========
+    // ========== Clipboard Service ==========
 
-    /** Clipboard interaction service. Always available, lightweight. */
     val clipboardService: ClipboardInteractionService by lazy {
         ClipboardInteractionService(
             contextProvider = projectContextProvider,
             clipboardPort = ClipboardAdapter(),
             codeRepository = codeRepository,
             notificationPort = notificationPort,
-            promptPort = promptPort
+            promptPort = promptPort,
+            logger = MaxVibesLogger
         )
     }
 
-    // ========== Cheap LLM (for CHEAP_API mode) ==========
+    // ========== Cheap LLM ==========
 
     @Volatile
     private var _cheapLLMService: LLMService? = null
@@ -113,31 +125,23 @@ class MaxVibesService(private val project: Project) {
     @Volatile
     private var _cheapContextAwareModifyUseCase: ContextAwareModifyUseCase? = null
 
-    /** Cheap context-aware use case, null until ensureCheapLLMService() is called */
     val cheapContextAwareModifyUseCase: ContextAwareModifyUseCase?
         get() = _cheapContextAwareModifyUseCase
 
-    /**
-     * Initializes cheap LLM service. Called when switching to CHEAP_API mode.
-     */
     fun ensureCheapLLMService() {
         if (_cheapContextAwareModifyUseCase != null) return
-
         val settings = MaxVibesSettings.getInstance()
-
         try {
             val providerType = try {
                 LLMProviderType.valueOf(settings.cheapProvider)
             } catch (_: Exception) {
                 LLMProviderType.ANTHROPIC
             }
-
             val baseUrl = when (providerType) {
                 LLMProviderType.OLLAMA -> settings.cheapOllamaBaseUrl
                 LLMProviderType.DEEPSEEK -> "https://api.deepseek.com"
                 else -> null
             }
-
             val cheapConfig = LLMProviderConfig(
                 providerType = providerType,
                 apiKey = settings.currentCheapApiKey,
@@ -146,23 +150,22 @@ class MaxVibesService(private val project: Project) {
                 temperature = settings.cheapTemperature,
                 maxTokens = settings.cheapMaxTokens
             )
-
             val cheapLlm = LangChainLLMService(cheapConfig)
             _cheapLLMService = cheapLlm
-
             _cheapContextAwareModifyUseCase = ContextAwareModifyService(
                 contextProvider = projectContextProvider,
                 llmService = cheapLlm,
                 codeRepository = codeRepository,
                 notificationPort = notificationPort,
-                promptPort = promptPort
+                promptPort = promptPort,
+                logger = MaxVibesLogger
             )
-
             LOG.info("Cheap LLM service created: ${settings.cheapProvider} / ${settings.cheapModelId}")
-            MaxVibesLogger.info("Service", "cheapLLM created", mapOf(
-                "provider" to settings.cheapProvider,
-                "model" to settings.cheapModelId
-            ))
+            MaxVibesLogger.info(
+                "Service",
+                "cheapLLM created",
+                mapOf("provider" to settings.cheapProvider, "model" to settings.cheapModelId)
+            )
         } catch (e: Exception) {
             LOG.warn("Failed to create cheap LLM service: ${e.message}", e)
             MaxVibesLogger.error("Service", "cheapLLM creation failed", e)
@@ -173,14 +176,14 @@ class MaxVibesService(private val project: Project) {
 
     private fun createLLMService(): LLMService {
         val settings = MaxVibesSettings.getInstance()
-
         return try {
             if (settings.isConfigured) {
                 LOG.info("Creating real LLM service: ${settings.provider} / ${settings.modelId}")
-                MaxVibesLogger.info("Service", "createLLM", mapOf(
-                    "provider" to settings.provider,
-                    "model" to settings.modelId
-                ))
+                MaxVibesLogger.info(
+                    "Service",
+                    "createLLM",
+                    mapOf("provider" to settings.provider, "model" to settings.modelId)
+                )
                 createRealLLMService(settings)
             } else {
                 handleNotConfigured(settings)
@@ -200,20 +203,17 @@ class MaxVibesService(private val project: Project) {
             baseUrl = if (settings.provider == "OLLAMA") settings.ollamaBaseUrl else null,
             temperature = settings.temperature
         )
-
         return LLMServiceFactory.create(config)
     }
 
     private fun handleNotConfigured(settings: MaxVibesSettings): LLMService {
         LOG.info("LLM not configured, checking environment variables...")
-
         return try {
             val envService = LLMServiceFactory.createFromEnvironment()
             LOG.info("Using LLM from environment variables: ${envService.getProviderInfo()}")
             envService
         } catch (e: Exception) {
             LOG.info("No environment variables found: ${e.message}")
-
             if (settings.enableMockFallback) {
                 LOG.info("Using MockLLMService (mock fallback enabled)")
                 MockLLMService()
@@ -236,7 +236,6 @@ class MaxVibesService(private val project: Project) {
 
     fun refreshLLMService(): LLMService {
         _llmService = createLLMService()
-        // Сбрасываем cheap-сервис чтобы пересоздался при следующем использовании
         _cheapLLMService = null
         _cheapContextAwareModifyUseCase = null
         return _llmService!!
@@ -255,13 +254,13 @@ class MaxVibesService(private val project: Project) {
         return llmService is LangChainLLMService
     }
 
+    val ideErrorsPort: IdeErrorsPort by lazy { IntellijIdeErrorsAdapter(project) }
+
     companion object {
         fun getInstance(project: Project): MaxVibesService {
             return project.getService(MaxVibesService::class.java)
         }
     }
-
-    val ideErrorsPort: IdeErrorsPort by lazy { IntellijIdeErrorsAdapter(project) }
 }
 
 /**

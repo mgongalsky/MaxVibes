@@ -9,32 +9,15 @@ import com.maxvibes.domain.model.modification.InsertPosition
 import com.maxvibes.domain.model.modification.Modification
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.shared.result.Result
+import com.maxvibes.application.port.output.LoggerPort
 
-/**
- * Сервис для clipboard-режима взаимодействия.
- *
- * Непрерывный диалог:
- *   User msg → JSON (с fileTree) → clipboard → paste response →
- *     ├─ has requestedFiles? → gather files → JSON (с содержимым файлов) → clipboard → paste response → ...
- *     ├─ has modifications? → apply → show message → session alive, user can continue
- *     └─ message only? → show message → session alive, user can continue
- *
- * Контекст:
- *   - chatHistory: полная текстовая история (без кода)
- *   - freshFiles: полное содержимое только свежезапрошенных файлов
- *   - previouslyGatheredPaths: пути ранее собранных файлов (без содержимого)
- *   - fileTree: всегда включено
- *
- * Единый формат ответа Claude:
- *   { "message": "...", "requestedFiles": [...], "modifications": [...] }
- *   Все поля опциональны, но message рекомендуется всегда.
- */
 class ClipboardInteractionService(
     private val contextProvider: ProjectContextPort,
     private val clipboardPort: ClipboardPort,
     private val codeRepository: CodeRepository,
     private val notificationPort: NotificationPort,
-    private val promptPort: PromptPort? = null
+    private val promptPort: PromptPort? = null,
+    private val logger: LoggerPort? = null
 ) {
     /** Текущее состояние clipboard-сессии */
     private var sessionState: ClipboardSessionState? = null
@@ -109,6 +92,17 @@ class ClipboardInteractionService(
     }
 
     suspend fun handlePastedResponse(rawText: String): ClipboardStepResult {
+        return try {
+            handlePastedResponseInternal(rawText)
+        } catch (e: Exception) {
+            val msg = "Unexpected error processing response: ${e.javaClass.simpleName}: ${e.message}"
+            println("[MaxVibes Clipboard] FATAL: $msg")
+            logger?.error("Clipboard", msg, e)
+            ClipboardStepResult.Error("⚠️ $msg\n\nThe session is still active — you can try pasting the response again.")
+        }
+    }
+
+    private suspend fun handlePastedResponseInternal(rawText: String): ClipboardStepResult {
         val state = sessionState
             ?: return error("No active clipboard session. Start a new task first.")
 
@@ -119,9 +113,15 @@ class ClipboardInteractionService(
         val outputTokens = rawText.length / 4
         val inputTokens = state.lastInputTokens
 
-        val response = clipboardPort.parseResponse(rawText)
+        val response = try {
+            clipboardPort.parseResponse(rawText)
+        } catch (e: Exception) {
+            log("ERROR: Exception during JSON parse: ${e.message}")
+            return error("Failed to parse response JSON: ${e.message}\n\nMake sure you pasted the complete raw JSON (no markdown backticks).")
+        }
+
         if (response == null) {
-            log("ERROR: Failed to parse response")
+            log("ERROR: Failed to parse response — null returned")
             return error(
                 "Failed to parse LLM response.\n\n" +
                         "Expected JSON format:\n" +
@@ -130,7 +130,7 @@ class ClipboardInteractionService(
                         "  \"requestedFiles\": [\"path/file.kt\"],  // optional\n" +
                         "  \"modifications\": [...]                  // optional\n" +
                         "}\n\n" +
-                        "Tip: make sure you pasted the complete response."
+                        "Tip: make sure you pasted the complete response without markdown code blocks."
             )
         }
 
@@ -153,6 +153,7 @@ class ClipboardInteractionService(
         val state = sessionState ?: return null
         return if (state.allGatheredFiles.isEmpty()) ClipboardPhase.PLANNING else ClipboardPhase.CHAT
     }
+
     fun hasActiveSession(): Boolean = sessionState != null
     fun reset() {
         log("Session reset")
@@ -285,7 +286,6 @@ class ClipboardInteractionService(
     ): Map<String, String>? {
         val state = sessionState ?: return null
 
-        // Фильтруем уже собранные файлы
         val newPaths = requestedPaths.filter { it !in state.allGatheredFiles }
         val alreadyGathered = requestedPaths.filter { it in state.allGatheredFiles }
 
@@ -295,7 +295,6 @@ class ClipboardInteractionService(
 
         if (newPaths.isEmpty()) {
             log("All requested files already gathered, re-sending existing")
-            // Все файлы уже были — отправляем из кэша
             return requestedPaths.associateWith { state.allGatheredFiles[it] ?: "" }
         }
 
@@ -309,12 +308,10 @@ class ClipboardInteractionService(
         }
         val gathered = (gatherResult as Result.Success).value
 
-        // Сохраняем в кэш
         state.allGatheredFiles.putAll(gathered.files)
 
         log("Gathered ${gathered.files.size} files, total cached: ${state.allGatheredFiles.size}")
 
-        // Возвращаем только свежезапрошенные (полное содержимое)
         return gathered.files
     }
 
@@ -389,34 +386,6 @@ class ClipboardInteractionService(
         )
     }
 
-    private fun buildModSummary(modResults: List<ModificationResult>): String = buildString {
-        val ok = modResults.filterIsInstance<ModificationResult.Success>()
-        val fail = modResults.filterIsInstance<ModificationResult.Failure>()
-        appendLine("\n───────────────")
-        if (ok.isNotEmpty()) {
-            appendLine("✅ Applied ${ok.size} change(s):")
-            ok.forEach { appendLine("   • ${formatAffectedPath(it.affectedPath)}") }
-        }
-        if (fail.isNotEmpty()) {
-            appendLine("❌ Failed ${fail.size} change(s):")
-            fail.forEach { appendLine("   • ${it.error.message}") }
-        }
-    }
-
-    /**
-     * Compact display format for element paths, matching UI's formatElementPath.
-     * Example: "LinesGame.kt/function[updateAnimations]"
-     */
-    private fun formatAffectedPath(path: ElementPath): String {
-        val fileName = path.filePath.substringAfterLast('/')
-        val segments = path.segments
-        return if (segments.isNotEmpty()) {
-            "$fileName/${segments.joinToString("/") { it.toPathString() }}"
-        } else {
-            fileName
-        }
-    }
-
     private fun buildFileGatherMessage(
         response: ClipboardResponse,
         freshFiles: Map<String, String>
@@ -435,12 +404,7 @@ class ClipboardInteractionService(
 
     private fun buildSystemInstruction(state: ClipboardSessionState): String {
         val isFirstPhase = state.allGatheredFiles.isEmpty()
-
-        return if (isFirstPhase) {
-            buildPlanningInstruction(state)
-        } else {
-            buildChatInstruction(state)
-        }
+        return if (isFirstPhase) buildPlanningInstruction(state) else buildChatInstruction(state)
     }
 
     private fun buildPlanningInstruction(state: ClipboardSessionState): String {
@@ -529,29 +493,45 @@ Always output the JSON with "modifications": [] and put your discussion in "mess
                 request.freshFiles.values.sumOf { it.length } +
                 request.chatHistory.sumOf { it.content.length } +
                 (request.attachedContext?.length ?: 0)
-        return textSize / 4  // rough token estimate
+        return textSize / 4
     }
 
     private fun log(message: String) {
         println("[MaxVibes Clipboard] $message")
+        logger?.info("Clipboard", message)
     }
 
     private fun error(message: String): ClipboardStepResult.Error {
-        log("ERROR: $message")
+        println("[MaxVibes Clipboard] ERROR: $message")
+        logger?.error("Clipboard", message)
         return ClipboardStepResult.Error(message)
     }
 
     private fun convertModification(mod: ClipboardModification): Modification? {
         if (mod.type.isBlank() || mod.path.isBlank()) return null
         val elementPath = ElementPath(mod.path)
-        val elementKind = try { ElementKind.valueOf(mod.elementKind.uppercase()) } catch (_: Exception) { ElementKind.FILE }
-        val position = try { InsertPosition.valueOf(mod.position.uppercase()) } catch (_: Exception) { InsertPosition.LAST_CHILD }
+        val elementKind = try {
+            ElementKind.valueOf(mod.elementKind.uppercase())
+        } catch (_: Exception) {
+            ElementKind.FILE
+        }
+        val position = try {
+            InsertPosition.valueOf(mod.position.uppercase())
+        } catch (_: Exception) {
+            InsertPosition.LAST_CHILD
+        }
 
         return when (mod.type.uppercase()) {
             "CREATE_FILE" -> Modification.CreateFile(targetPath = elementPath, content = mod.content)
             "REPLACE_FILE" -> Modification.ReplaceFile(targetPath = elementPath, newContent = mod.content)
             "DELETE_FILE" -> Modification.DeleteFile(targetPath = elementPath)
-            "CREATE_ELEMENT" -> Modification.CreateElement(targetPath = elementPath, elementKind = elementKind, content = mod.content, position = position)
+            "CREATE_ELEMENT" -> Modification.CreateElement(
+                targetPath = elementPath,
+                elementKind = elementKind,
+                content = mod.content,
+                position = position
+            )
+
             "REPLACE_ELEMENT" -> Modification.ReplaceElement(targetPath = elementPath, newContent = mod.content)
             "DELETE_ELEMENT" -> Modification.DeleteElement(targetPath = elementPath)
             "ADD_IMPORT" -> {
@@ -559,14 +539,17 @@ Always output the JSON with "modifications": [] and put your discussion in "mess
                 if (importFqName.isBlank()) null
                 else Modification.AddImport(targetPath = elementPath, importPath = importFqName)
             }
+
             "REMOVE_IMPORT" -> {
                 val importFqName = mod.importPath.ifBlank { mod.content.removePrefix("import ").trim() }
                 if (importFqName.isBlank()) null
                 else Modification.RemoveImport(targetPath = elementPath, importPath = importFqName)
             }
+
             else -> null
         }
     }
+
     fun recopyLastRequest(): Boolean {
         val req = lastRequest ?: return false
         return clipboardPort.copyRequestToClipboard(req)
