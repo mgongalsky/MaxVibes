@@ -44,14 +44,12 @@ class ClipboardInteractionService(
 
     // ==================== Public API ====================
 
-    /**
-     * Начинает новый диалог: генерирует первый JSON с fileTree.
-     */
     suspend fun startTask(
         task: String,
         history: List<ChatMessageDTO> = emptyList(),
         attachedContext: String? = null,
-        planOnly: Boolean = false
+        planOnly: Boolean = false,
+        ideErrors: String? = null
     ): ClipboardStepResult {
         log("Starting new clipboard task: \"${task.take(60)}...\" (planOnly=$planOnly)")
 
@@ -72,10 +70,10 @@ class ClipboardInteractionService(
             prompts = prompts,
             allGatheredFiles = mutableMapOf(),
             attachedContext = attachedContext,
+            ideErrors = ideErrors,
             planOnly = planOnly
         )
 
-        // Добавляем user message в историю
         addToHistory(ChatRole.USER, task)
 
         return generateAndCopyJson(
@@ -84,23 +82,20 @@ class ClipboardInteractionService(
         )
     }
 
-    /**
-     * Продолжает существующий диалог: генерирует JSON с новым сообщением.
-     * Используется когда пользователь хочет продолжить разговор (не paste).
-     */
     suspend fun continueDialog(
         message: String,
         attachedContext: String? = null,
-        planOnly: Boolean? = null
+        planOnly: Boolean? = null,
+        ideErrors: String? = null
     ): ClipboardStepResult {
         val state = sessionState
             ?: return error("No active clipboard session. Start a new task first.")
 
         log("Continuing dialog: \"${message.take(60)}...\" (new planOnly=$planOnly)")
 
-        // Обновляем состояние сессии
         sessionState = state.copy(
             attachedContext = attachedContext ?: state.attachedContext,
+            ideErrors = ideErrors ?: state.ideErrors,
             planOnly = planOnly ?: state.planOnly
         )
 
@@ -251,6 +246,7 @@ class ClipboardInteractionService(
                 )
             },
             attachedContext = state.attachedContext,
+            ideErrors = state.ideErrors,
             planOnly = state.planOnly
         )
 
@@ -260,7 +256,6 @@ class ClipboardInteractionService(
         val totalTokens = estimateTokens(request)
         state.lastInputTokens = totalTokens
 
-        // statusMessage — техническое уведомление, НЕ для истории чата
         val statusMessage = "📋 JSON $copyStatus\nPaste into Claude/ChatGPT, then paste the response back here."
 
         log("JSON ready: $copyStatus, ~$totalTokens tokens")
@@ -604,6 +599,7 @@ private data class ClipboardSessionState(
     val prompts: PromptTemplates,
     val allGatheredFiles: MutableMap<String, String>,
     val attachedContext: String? = null,
+    val ideErrors: String? = null,
     var lastInputTokens: Int = 0,
     val planOnly: Boolean = false
 )

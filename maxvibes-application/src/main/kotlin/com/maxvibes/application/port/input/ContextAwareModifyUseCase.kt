@@ -30,7 +30,10 @@ data class ContextAwareRequest(
     val planOnly: Boolean = false,
 
     /** Global context files — always included in LLM context (relative paths in project) */
-    val globalContextFiles: List<String> = emptyList()
+    val globalContextFiles: List<String> = emptyList(),
+
+    /** Ошибки компилятора из IDE, прикрепленные к запросу */
+    val ideErrors: String? = null
 )
 
 data class ContextAwareResult(

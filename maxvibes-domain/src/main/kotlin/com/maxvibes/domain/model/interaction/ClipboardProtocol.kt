@@ -26,6 +26,8 @@ data class ClipboardRequest(
     val chatHistory: List<ClipboardHistoryEntry> = emptyList(),
     /** Дополнительный контекст (ошибки, трейсы) */
     val attachedContext: String? = null,
+    /** Ошибки компиляции (из IDE) */
+    val ideErrors: String? = null,
     /** Plan-only mode: discussion without code modifications */
     val planOnly: Boolean = false
 )

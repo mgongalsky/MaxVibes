@@ -25,6 +25,8 @@ import com.maxvibes.domain.model.modification.Modification
 import com.maxvibes.plugin.clipboard.ClipboardAdapter
 import com.maxvibes.plugin.settings.MaxVibesSettings
 import com.maxvibes.shared.result.Result
+import com.maxvibes.application.port.output.IdeErrorsPort
+import com.maxvibes.adapter.psi.context.IntellijIdeErrorsAdapter
 
 /**
  * Main service for MaxVibes plugin.
@@ -248,6 +250,8 @@ class MaxVibesService(private val project: Project) {
             return project.getService(MaxVibesService::class.java)
         }
     }
+
+    val ideErrorsPort: IdeErrorsPort by lazy { IntellijIdeErrorsAdapter(project) }
 }
 
 /**

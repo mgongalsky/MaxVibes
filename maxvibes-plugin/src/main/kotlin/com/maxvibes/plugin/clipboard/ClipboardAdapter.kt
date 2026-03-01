@@ -175,6 +175,11 @@ class ClipboardAdapter : ClipboardPort {
             if (!trace.isNullOrBlank()) {
                 put("errorTrace", trace)
             }
+
+            val errs = request.ideErrors
+            if (!errs.isNullOrBlank()) {
+                put("ideErrors", errs)
+            }
         }
 
         return json.encodeToString(JsonObject.serializer(), obj)

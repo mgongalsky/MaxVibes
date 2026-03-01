@@ -58,7 +58,8 @@ class ChatMessageController(
         history: List<com.maxvibes.application.port.output.ChatMessageDTO>,
         isDryRun: Boolean,
         isPlanOnly: Boolean,
-        globalContextFiles: List<String>
+        globalContextFiles: List<String>,
+        ideErrors: String? = null
     ) {
         ProgressManager.getInstance().run(object : Task.Backgroundable(project, "MaxVibes: Processing...", true) {
             override fun run(indicator: ProgressIndicator) {
@@ -66,7 +67,8 @@ class ChatMessageController(
                 runBlocking {
                     val req = ContextAwareRequest(
                         task = task, history = history, dryRun = isDryRun,
-                        planOnly = isPlanOnly, globalContextFiles = globalContextFiles
+                        planOnly = isPlanOnly, globalContextFiles = globalContextFiles,
+                        ideErrors = ideErrors
                     )
                     val result = service.contextAwareModifyUseCase.execute(req)
                     ApplicationManager.getApplication().invokeLater { handleApiResult(result, session, isPlanOnly) }
@@ -76,7 +78,7 @@ class ChatMessageController(
             override fun onCancel() {
                 ApplicationManager.getApplication().invokeLater {
                     session.addMessage(MessageRole.SYSTEM, "Cancelled")
-                    callbacks.appendToChat("\u26A0\uFE0F Cancelled")
+                    callbacks.appendToChat("⚠️ Cancelled")
                     callbacks.setInputEnabled(true)
                     callbacks.setStatus("Cancelled")
                 }
@@ -92,7 +94,8 @@ class ChatMessageController(
         history: List<com.maxvibes.application.port.output.ChatMessageDTO>,
         isDryRun: Boolean,
         isPlanOnly: Boolean,
-        globalContextFiles: List<String>
+        globalContextFiles: List<String>,
+        ideErrors: String? = null
     ) {
         ProgressManager.getInstance()
             .run(object : Task.Backgroundable(project, "MaxVibes: Processing (budget)...", true) {
@@ -101,7 +104,8 @@ class ChatMessageController(
                     runBlocking {
                         val req = ContextAwareRequest(
                             task = task, history = history, dryRun = isDryRun,
-                            planOnly = isPlanOnly, globalContextFiles = globalContextFiles
+                            planOnly = isPlanOnly, globalContextFiles = globalContextFiles,
+                            ideErrors = ideErrors
                         )
                         val uc = service.cheapContextAwareModifyUseCase ?: service.contextAwareModifyUseCase
                         val result = uc.execute(req)
@@ -112,7 +116,7 @@ class ChatMessageController(
                 override fun onCancel() {
                     ApplicationManager.getApplication().invokeLater {
                         session.addMessage(MessageRole.SYSTEM, "Cancelled")
-                        callbacks.appendToChat("\u26A0\uFE0F Cancelled")
+                        callbacks.appendToChat("⚠️ Cancelled")
                         callbacks.setInputEnabled(true)
                         callbacks.setStatus("Cancelled")
                     }
@@ -256,9 +260,12 @@ class ChatMessageController(
     private fun fmt(n: Int) = if (n >= 1000) "${n / 1000}k" else n.toString()
 
     companion object {
-        fun buildTaskWithTrace(task: String, trace: String?): String {
-            if (trace.isNullOrBlank()) return task
-            return "$task\n\n--- Error/Trace/Logs ---\n$trace"
+        fun buildTaskWithContext(task: String, trace: String?, errs: String?): String {
+            return buildString {
+                append(task)
+                if (!trace.isNullOrBlank()) append("\n\n--- Error/Trace/Logs ---\n$trace")
+                if (!errs.isNullOrBlank()) append("\n\n--- IDE Errors ---\n$errs")
+            }
         }
     }
 }
