@@ -22,6 +22,7 @@ import javax.swing.*
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.wm.ToolWindowManager
+import com.intellij.openapi.wm.ToolWindowType
 
 class ChatPanel(
     private val project: Project,
@@ -93,6 +94,9 @@ class ChatPanel(
     private val claudeInstrButton = JButton("📋").apply { font = font.deriveFont(11f); isFocusPainted = false }
     private val maximizeButton = JButton(AllIcons.General.ExpandComponent).apply {
         toolTipText = "Maximize / Restore"; font = font.deriveFont(11f); isFocusPainted = false
+    }
+    private val windowedButton = JButton(AllIcons.Actions.MoveToWindow).apply {
+        toolTipText = "Floating Mode / Dock"; font = font.deriveFont(11f); isFocusPainted = false
     }
 
     private val service: MaxVibesService by lazy { MaxVibesService.getInstance(project) }
@@ -265,14 +269,14 @@ class ChatPanel(
     }
 
     fun refreshHeader() {
-        updateBreadcrumb(); updateModeIndicator(); updateContextIndicator(); updateMaximizeIcon()
+        updateBreadcrumb(); updateModeIndicator(); updateContextIndicator(); updateToolWindowIcons()
     }
 
     fun loadCurrentSession() {
         val session = chatHistory.getActiveSession()
         conversationPanel.clearMessages()
         elementNavRegistry.clear()
-        updateBreadcrumb(); updateModeIndicator(); updateContextIndicator(); updateTokenDisplay(); updateMaximizeIcon()
+        updateBreadcrumb(); updateModeIndicator(); updateContextIndicator(); updateTokenDisplay(); updateToolWindowIcons()
 
         if (session.messages.isEmpty()) {
             showWelcome()
@@ -315,6 +319,7 @@ class ChatPanel(
                     background = JBColor.background()
                     add(contextFilesButton.apply { preferredSize = Dimension(56, 24) })
                     add(claudeInstrButton.apply { preferredSize = Dimension(26, 24) })
+                    add(windowedButton.apply { preferredSize = Dimension(26, 24) })
                     add(maximizeButton.apply { preferredSize = Dimension(26, 24) })
                     add(promptsButton.apply { preferredSize = Dimension(26, 24) })
                 }
@@ -425,7 +430,16 @@ class ChatPanel(
         maximizeButton.addActionListener {
             val manager = ToolWindowManager.getInstance(project)
             manager.setMaximized(toolWindow, !manager.isMaximized(toolWindow))
-            updateMaximizeIcon()
+            updateToolWindowIcons()
+        }
+
+        windowedButton.addActionListener {
+            if (toolWindow.type == ToolWindowType.FLOATING || toolWindow.type == ToolWindowType.WINDOWED) {
+                toolWindow.setType(ToolWindowType.DOCKED, null)
+            } else {
+                toolWindow.setType(ToolWindowType.FLOATING, null)
+            }
+            updateToolWindowIcons()
         }
 
         attachTraceButton.addActionListener { attachTraceFromClipboard() }
@@ -729,9 +743,13 @@ class ChatPanel(
         lines.forEach { conversationPanel.addSystemBubble(it) }
     }
 
-    private fun updateMaximizeIcon() {
+    private fun updateToolWindowIcons() {
         val manager = ToolWindowManager.getInstance(project)
         maximizeButton.icon =
             if (manager.isMaximized(toolWindow)) AllIcons.General.CollapseComponent else AllIcons.General.ExpandComponent
+
+        val isFloating = toolWindow.type == ToolWindowType.FLOATING || toolWindow.type == ToolWindowType.WINDOWED
+        windowedButton.icon = AllIcons.Actions.MoveToWindow
+        windowedButton.toolTipText = if (isFloating) "Dock Tool Window" else "Floating Mode"
     }
 }
