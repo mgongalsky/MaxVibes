@@ -42,8 +42,22 @@ class PsiToDomainMapper {
             is KtNamedFunction -> mapFunction(element, parentPath)
             is KtProperty -> mapProperty(element, parentPath)
             is KtObjectDeclaration -> mapObject(element, parentPath)
+            is KtClassInitializer -> mapInitBlock(element, parentPath)
             else -> null
         }
+    }
+
+    private fun mapInitBlock(ktInit: KtClassInitializer, parentPath: ElementPath): CodeFunction {
+        val path = parentPath.child("init", "")
+        return CodeFunction(
+            path = path,
+            name = "init",
+            content = ktInit.text,
+            modifiers = emptySet(),
+            parameters = emptyList(),
+            returnType = null,
+            hasBody = true
+        )
     }
 
     private fun mapClass(ktClass: KtClass, parentPath: ElementPath): CodeClass {
@@ -141,7 +155,7 @@ class PsiToDomainMapper {
         return modifiers
     }
 
-    fun inferKind(element: PsiElement): ElementKind {
+    fun inferKind(element: PsiElement): ElementKind? {
         return when (element) {
             is KtFile -> ElementKind.FILE
             is KtClass -> when {
@@ -149,11 +163,16 @@ class PsiToDomainMapper {
                 element.isEnum() -> ElementKind.ENUM
                 else -> ElementKind.CLASS
             }
+
             is KtObjectDeclaration -> ElementKind.OBJECT
             is KtNamedFunction -> ElementKind.FUNCTION
             is KtProperty -> ElementKind.PROPERTY
             is KtPrimaryConstructor, is KtSecondaryConstructor -> ElementKind.CONSTRUCTOR
-            else -> throw IllegalArgumentException("Unknown element type: ${element.javaClass}")
+            is KtClassInitializer -> ElementKind.INIT
+            else -> {
+                println("[PsiToDomainMapper] WARNING: Unknown PSI element type: ${element.javaClass.name} — skipping")
+                null
+            }
         }
     }
 }

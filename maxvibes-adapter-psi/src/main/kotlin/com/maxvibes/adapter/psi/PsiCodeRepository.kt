@@ -221,9 +221,12 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
     private fun replaceElement(mod: Modification.ReplaceElement): ModificationResult {
         val elementAndKind = runReadAction {
             val element = navigator.findElement(mod.targetPath) ?: return@runReadAction null
-            val kind = mapper.inferKind(element)
+            val kind = mapper.inferKind(element) ?: return@runReadAction null
             element to kind
-        } ?: return ModificationResult.Failure(modification = mod, error = ModificationError.ElementNotFound(mod.targetPath))
+        } ?: return ModificationResult.Failure(
+            modification = mod,
+            error = ModificationError.ElementNotFound(mod.targetPath)
+        )
 
         val (element, kind) = elementAndKind
 
@@ -237,12 +240,22 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
             }
 
             if (resultText != null) {
-                ModificationResult.Success(modification = mod, affectedPath = mod.targetPath, resultContent = resultText)
+                ModificationResult.Success(
+                    modification = mod,
+                    affectedPath = mod.targetPath,
+                    resultContent = resultText
+                )
             } else {
-                ModificationResult.Failure(modification = mod, error = ModificationError.ParseError("Failed to parse replacement"))
+                ModificationResult.Failure(
+                    modification = mod,
+                    error = ModificationError.ParseError("Failed to parse replacement")
+                )
             }
         } catch (e: Exception) {
-            ModificationResult.Failure(modification = mod, error = ModificationError.IOError(e.message ?: "Failed to replace element"))
+            ModificationResult.Failure(
+                modification = mod,
+                error = ModificationError.IOError(e.message ?: "Failed to replace element")
+            )
         }
     }
 

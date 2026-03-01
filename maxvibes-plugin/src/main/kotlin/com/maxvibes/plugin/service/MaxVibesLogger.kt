@@ -8,6 +8,7 @@ import java.time.format.DateTimeFormatter
 import java.util.UUID
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import com.intellij.openapi.diagnostic.Logger
 
 /**
  * File-based verbose logger for MaxVibes plugin debugging.
@@ -22,6 +23,7 @@ import java.util.concurrent.TimeUnit
 object MaxVibesLogger {
 
     val sessionId: String = "s-" + UUID.randomUUID().toString().take(8)
+    private val LOG = Logger.getInstance(MaxVibesLogger::class.java)
 
     private val logDir = File(System.getProperty("user.home"), ".maxvibes")
     private val logFile = File(logDir, "maxvibes.log")
@@ -40,7 +42,8 @@ object MaxVibesLogger {
                 val line = queue.poll(100, TimeUnit.MILLISECONDS) ?: continue
                 writer.println(line)
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            LOG.error("MaxVibesLogger writer thread failed", e)
         } finally {
             writer?.close()
         }

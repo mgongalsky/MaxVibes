@@ -30,6 +30,7 @@ class KotlinElementFactory(private val project: Project) {
                 ElementKind.FUNCTION -> psiFactory.createFunction(text)
                 ElementKind.PROPERTY -> psiFactory.createProperty(text)
                 ElementKind.CONSTRUCTOR -> null
+                ElementKind.INIT -> null // init blocks are not directly creatable; handled via file-fragment fallback
             }
         } catch (e: Exception) {
             println("[KotlinElementFactory] Direct creation failed for $kind: ${e.message}")
