@@ -195,7 +195,8 @@ class ClipboardAdapter : ClipboardPort {
             requestedFiles = obj["requestedFiles"]?.jsonArray
                 ?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList(),
             modifications = obj["modifications"]?.jsonArray
-                ?.mapNotNull { parseModification(it.jsonObject) } ?: emptyList()
+                ?.mapNotNull { parseModification(it.jsonObject) } ?: emptyList(),
+            commitMessage = obj["commitMessage"]?.jsonPrimitive?.contentOrNull
         )
     }
 

@@ -12,6 +12,9 @@ class ChatResponseDTO {
 
     @Description("List of code modifications to apply. Empty list if no code changes needed")
     var modifications: List<ModificationDTO> = emptyList()
+
+    @Description("Optional: a concise Git commit message summarizing the changes made (in English, conventional commits format preferred, e.g. 'feat: add commit message generation'). Include when you've completed a coding task and there are actual code modifications, or when the user explicitly asks for a commit message. Leave null if no code changes were made.")
+    var commitMessage: String? = null
 }
 
 class ModificationDTO {

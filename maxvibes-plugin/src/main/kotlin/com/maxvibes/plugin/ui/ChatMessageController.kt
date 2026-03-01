@@ -37,6 +37,9 @@ interface ChatPanelCallbacks {
     fun appendIconToLastBubble(icon: String)
     fun clearChatDisplay()
     fun setPlanOnlyMode(enabled: Boolean)
+
+    /** Sets the commit message in the IDE VCS commit dialog. */
+    fun setCommitMessage(message: String)
 }
 
 /**
@@ -161,14 +164,17 @@ class ChatMessageController(
         session.addChatTokens(result.chatInputTokens, result.chatOutputTokens)
         callbacks.updateTokenDisplay()
 
-        MaxVibesLogger.info("Controller", "apiResult", mapOf(
-            "success" to result.success,
-            "mods" to result.modifications.size,
-            "planIn" to result.planningInputTokens,
-            "planOut" to result.planningOutputTokens,
-            "chatIn" to result.chatInputTokens,
-            "chatOut" to result.chatOutputTokens
-        ))
+        MaxVibesLogger.info(
+            "Controller", "apiResult", mapOf(
+                "success" to result.success,
+                "mods" to result.modifications.size,
+                "planIn" to result.planningInputTokens,
+                "planOut" to result.planningOutputTokens,
+                "chatIn" to result.chatInputTokens,
+                "chatOut" to result.chatOutputTokens,
+                "hasCommitMsg" to (result.commitMessage != null)
+            )
+        )
 
         val mainText = result.message
         session.addMessage(MessageRole.ASSISTANT, mainText)
@@ -185,6 +191,11 @@ class ChatMessageController(
             null
         )
 
+        result.commitMessage?.let { msg ->
+            callbacks.setCommitMessage(msg)
+            callbacks.appendToChat("💬 Commit message set in IDE")
+        }
+
         if (wasPlanOnly) {
             callbacks.setPlanOnlyMode(false)
         }
@@ -197,11 +208,13 @@ class ChatMessageController(
     private fun handleClipboardResult(result: ClipboardStepResult, session: ChatSession) {
         when (result) {
             is ClipboardStepResult.WaitingForResponse -> {
-                MaxVibesLogger.info("Controller", "clipboard waiting", mapOf(
-                    "phase" to result.phase.name,
-                    "estimatedTokens" to result.estimatedInputTokens,
-                    "freshFiles" to result.freshFileNames.size
-                ))
+                MaxVibesLogger.info(
+                    "Controller", "clipboard waiting", mapOf(
+                        "phase" to result.phase.name,
+                        "estimatedTokens" to result.estimatedInputTokens,
+                        "freshFiles" to result.freshFileNames.size
+                    )
+                )
                 session.addChatTokens(result.estimatedInputTokens, 0)
                 callbacks.updateTokenDisplay()
 
@@ -232,11 +245,14 @@ class ChatMessageController(
             }
 
             is ClipboardStepResult.Completed -> {
-                MaxVibesLogger.info("Controller", "clipboard completed", mapOf(
-                    "success" to result.success,
-                    "mods" to result.modifications.size,
-                    "outputTokens" to result.outputTokens
-                ))
+                MaxVibesLogger.info(
+                    "Controller", "clipboard completed", mapOf(
+                        "success" to result.success,
+                        "mods" to result.modifications.size,
+                        "outputTokens" to result.outputTokens,
+                        "hasCommitMsg" to (result.commitMessage != null)
+                    )
+                )
                 callbacks.registerElementPaths(result.modifications)
                 session.addChatTokens(0, result.outputTokens)
                 callbacks.updateTokenDisplay()
@@ -246,6 +262,10 @@ class ChatMessageController(
                 callbacks.addAssistantMessageBubble(
                     callbacks.formatMarkdown(text), tokenInfo, result.modifications, emptyList(), result.llmReasoning
                 )
+                result.commitMessage?.let { msg ->
+                    callbacks.setCommitMessage(msg)
+                    callbacks.appendToChat("💬 Commit message set in IDE")
+                }
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
                 val hint = if (service.clipboardService.hasActiveSession()) " • Session active" else ""

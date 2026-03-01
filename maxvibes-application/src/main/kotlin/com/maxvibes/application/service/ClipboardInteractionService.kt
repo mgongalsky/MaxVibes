@@ -380,7 +380,8 @@ class ClipboardInteractionService(
             success = failCount == 0,
             inputTokens = inputTokens,
             outputTokens = outputTokens,
-            llmReasoning = reasoningStr
+            llmReasoning = reasoningStr,
+            commitMessage = response.commitMessage?.takeIf { it.isNotBlank() }
         )
     }
 
@@ -584,7 +585,8 @@ sealed class ClipboardStepResult {
         val success: Boolean,
         val inputTokens: Int = 0,
         val outputTokens: Int = 0,
-        val llmReasoning: String? = null
+        val llmReasoning: String? = null,
+        val commitMessage: String? = null
     ) : ClipboardStepResult()
 
     data class Error(val message: String) : ClipboardStepResult()

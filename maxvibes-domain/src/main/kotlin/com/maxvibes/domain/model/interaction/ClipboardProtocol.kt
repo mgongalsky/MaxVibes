@@ -45,7 +45,9 @@ data class ClipboardResponse(
     /** Запрошенные файлы для следующего шага */
     val requestedFiles: List<String> = emptyList(),
     /** Модификации кода */
-    val modifications: List<ClipboardModification> = emptyList()
+    val modifications: List<ClipboardModification> = emptyList(),
+    /** Сгенерированный commit message — плагин автоматически вставит его в поле коммита в IDE */
+    val commitMessage: String? = null
 )
 
 /**

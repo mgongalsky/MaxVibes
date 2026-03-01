@@ -83,7 +83,8 @@ data class ChatResponse(
     val modifications: List<Modification> = emptyList(),
     val requestedFiles: List<String> = emptyList(),
     val tokenUsage: TokenUsage? = null,
-    val reasoning: String? = null
+    val reasoning: String? = null,
+    val commitMessage: String? = null
 )
 
 data class TokenUsage(

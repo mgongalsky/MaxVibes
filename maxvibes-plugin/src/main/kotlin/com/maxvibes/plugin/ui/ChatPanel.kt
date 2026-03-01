@@ -24,6 +24,7 @@ import com.intellij.icons.AllIcons
 import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.openapi.wm.ToolWindowType
 import com.maxvibes.plugin.service.MaxVibesLogger
+import com.intellij.openapi.vcs.VcsConfiguration
 
 class ChatPanel(
     private val project: Project,
@@ -263,6 +264,15 @@ class ChatPanel(
     override fun updateTokenDisplay() {
         val session = chatHistory.getActiveSession()
         tokenLabel.text = session.formatTokenDisplay()
+    }
+
+    override fun setCommitMessage(message: String) {
+        try {
+            VcsConfiguration.getInstance(project).saveCommitMessage(message)
+            MaxVibesLogger.info("ChatPanel", "setCommitMessage", mapOf("len" to message.length))
+        } catch (e: Exception) {
+            MaxVibesLogger.error("ChatPanel", "setCommitMessage failed", e)
+        }
     }
 
     override fun setPlanOnlyMode(enabled: Boolean) {

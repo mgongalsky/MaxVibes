@@ -14,6 +14,10 @@ CRITICAL: Respond ONLY with a valid JSON object. No markdown, no explanations, j
 ]
 }
 
+## Plan-only mode
+
+If the request contains `planOnly: true` — your analysis should focus on discussing the approach and architecture rather than immediately diving into implementation. Still request the relevant files so the developer can review context, but emphasize planning and trade-offs in your "message".
+
 ## Guidelines
 
 1. Request only files that are DIRECTLY relevant to the task

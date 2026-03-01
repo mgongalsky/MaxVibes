@@ -121,7 +121,8 @@ class ContextAwareModifyService(
             planningInputTokens = 0,
             planningOutputTokens = 0,
             chatInputTokens = chatResponse.tokenUsage?.inputTokens ?: 0,
-            chatOutputTokens = chatResponse.tokenUsage?.outputTokens ?: 0
+            chatOutputTokens = chatResponse.tokenUsage?.outputTokens ?: 0,
+            commitMessage = chatResponse.commitMessage
         )
     }
 
