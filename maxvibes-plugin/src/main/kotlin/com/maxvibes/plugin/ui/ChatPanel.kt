@@ -51,6 +51,8 @@ class ChatPanel(
 
     private val dryRunCheckbox = JBCheckBox("Dry run").apply { toolTipText = "Show plan without applying changes" }
     private val planOnlyCheckbox = JBCheckBox("💬 Plan").apply { toolTipText = "Plan-only mode" }
+    private val copyJsonButton =
+        JButton("📋 Copy JSON").apply { toolTipText = "Re-copy last generated JSON"; isVisible = false }
 
     private val attachErrorsButton = JButton("🐞 Errors").apply {
         toolTipText = "Attach IDE errors from open files"; font = font.deriveFont(11f)
@@ -160,6 +162,7 @@ class ChatPanel(
     override fun setInputEnabled(enabled: Boolean) {
         inputArea.isEnabled = enabled; sendButton.isEnabled = enabled
         dryRunCheckbox.isEnabled = enabled; planOnlyCheckbox.isEnabled = enabled
+        copyJsonButton.isEnabled = enabled
         attachTraceButton.isEnabled = enabled; clearTraceButton.isEnabled = enabled
         attachErrorsButton.isEnabled = enabled; clearErrorsButton.isEnabled = enabled
         promptsButton.isEnabled = enabled; modeComboBox.isEnabled = enabled
@@ -177,6 +180,7 @@ class ChatPanel(
         when (currentMode) {
             InteractionMode.API -> {
                 modeIndicator.isVisible = false; sendButton.text = "Send"; dryRunCheckbox.isVisible = true
+                copyJsonButton.isVisible = false
             }
 
             InteractionMode.CLIPBOARD -> {
@@ -190,16 +194,19 @@ class ChatPanel(
                             else -> "⏳ Paste response"
                         }
                         modeIndicator.isVisible = true; sendButton.text = "Paste"
+                        copyJsonButton.isVisible = true
                     }
 
                     cs.hasActiveSession() -> {
                         modeIndicator.text = "📋 Active"
                         modeIndicator.isVisible = true; sendButton.text = "Send / Paste"
+                        copyJsonButton.isVisible = false
                     }
 
                     else -> {
                         modeIndicator.text = "📋"
                         modeIndicator.isVisible = true; sendButton.text = "Generate"
+                        copyJsonButton.isVisible = false
                     }
                 }
                 dryRunCheckbox.isVisible = false
@@ -208,6 +215,7 @@ class ChatPanel(
             InteractionMode.CHEAP_API -> {
                 modeIndicator.text = "💰"; modeIndicator.isVisible = true
                 sendButton.text = "Send"; dryRunCheckbox.isVisible = true
+                copyJsonButton.isVisible = false
             }
         }
     }
@@ -425,7 +433,7 @@ class ChatPanel(
                 background = JBColor.background()
                 add(attachErrorsButton.apply { preferredSize = Dimension(85, 26) })
                 add(attachTraceButton.apply { preferredSize = Dimension(80, 26) })
-                add(planOnlyCheckbox); add(dryRunCheckbox); add(sendButton)
+                add(planOnlyCheckbox); add(dryRunCheckbox); add(copyJsonButton); add(sendButton)
             }, BorderLayout.SOUTH)
         }
 
@@ -451,6 +459,13 @@ class ChatPanel(
 
     private fun setupListeners() {
         sendButton.addActionListener { sendMessage() }
+        copyJsonButton.addActionListener {
+            if (service.clipboardService.recopyLastRequest()) {
+                statusLabel.text = "JSON re-copied to clipboard"
+            } else {
+                statusLabel.text = "Nothing to copy"
+            }
+        }
         sessionsButton.addActionListener { onShowSessions() }
 
         newChatButton.addActionListener {

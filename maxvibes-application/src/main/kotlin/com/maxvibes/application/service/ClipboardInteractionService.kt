@@ -41,6 +41,7 @@ class ClipboardInteractionService(
 
     /** Ждём ли мы вставки ответа от LLM */
     private var waitingForPaste: Boolean = false
+    private var lastRequest: ClipboardRequest? = null
 
     // ==================== Public API ====================
 
@@ -157,6 +158,7 @@ class ClipboardInteractionService(
         log("Session reset")
         sessionState = null
         waitingForPaste = false
+        lastRequest = null
     }
 
     // ==================== Core Logic ====================
@@ -249,6 +251,8 @@ class ClipboardInteractionService(
             ideErrors = state.ideErrors,
             planOnly = state.planOnly
         )
+
+        lastRequest = request
 
         val copied = clipboardPort.copyRequestToClipboard(request)
         val copyStatus = if (copied) "copied to clipboard ✓" else "generated (copy manually)"
@@ -562,6 +566,10 @@ Always output the JSON with "modifications": [] and put your discussion in "mess
             }
             else -> null
         }
+    }
+    fun recopyLastRequest(): Boolean {
+        val req = lastRequest ?: return false
+        return clipboardPort.copyRequestToClipboard(req)
     }
 }
 
