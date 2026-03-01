@@ -25,6 +25,8 @@ import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.openapi.wm.ToolWindowType
 import com.maxvibes.plugin.service.MaxVibesLogger
 import com.intellij.openapi.vcs.VcsConfiguration
+import com.intellij.ide.DataManager
+import com.intellij.openapi.vcs.VcsDataKeys
 
 class ChatPanel(
     private val project: Project,
@@ -268,8 +270,44 @@ class ChatPanel(
 
     override fun setCommitMessage(message: String) {
         try {
+            // Fallback: save to VCS history so it appears next time dialog opens
             VcsConfiguration.getInstance(project).saveCommitMessage(message)
-            MaxVibesLogger.info("ChatPanel", "setCommitMessage", mapOf("len" to message.length))
+
+            // Try to inject into already-open commit UI via DataManager + reflection
+            // (avoids direct dependency on CommitMessageI which may not be in classpath)
+            fun tryInject(component: java.awt.Component): Boolean {
+                val dataContext = com.intellij.ide.DataManager.getInstance().getDataContext(component)
+                val control = dataContext.getData(VcsDataKeys.COMMIT_MESSAGE_CONTROL) ?: return false
+                return try {
+                    control.javaClass.getMethod("setCommitMessage", String::class.java).invoke(control, message)
+                    true
+                } catch (_: Exception) {
+                    false
+                }
+            }
+
+            val frame = com.intellij.openapi.wm.WindowManager.getInstance().getFrame(project)
+            if (frame != null && tryInject(frame)) {
+                MaxVibesLogger.info("ChatPanel", "setCommitMessage: injected via frame", mapOf("len" to message.length))
+                return
+            }
+
+            val commitTw = com.intellij.openapi.wm.ToolWindowManager.getInstance(project).getToolWindow("Commit")
+            val contentComponent = commitTw?.takeIf { it.isVisible }?.contentManager?.selectedContent?.component
+            if (contentComponent != null && tryInject(contentComponent)) {
+                MaxVibesLogger.info(
+                    "ChatPanel",
+                    "setCommitMessage: injected via Commit tool window",
+                    mapOf("len" to message.length)
+                )
+                return
+            }
+
+            MaxVibesLogger.info(
+                "ChatPanel",
+                "setCommitMessage: saved to VCS history (commit UI not open)",
+                mapOf("len" to message.length)
+            )
         } catch (e: Exception) {
             MaxVibesLogger.error("ChatPanel", "setCommitMessage failed", e)
         }
@@ -299,7 +337,18 @@ class ChatPanel(
             }
             session.messages.forEach { msg ->
                 when (msg.role) {
-                    MessageRole.USER -> conversationPanel.addUserBubble(msg.content)
+                    MessageRole.USER -> {
+                        // Skip pure clipboard-paste markers — they have no meaningful display content
+                        if (msg.content.trim() == "[Pasted LLM response]") return@forEach
+                        // Strip UI-only annotations that were appended for LLM context but clutter the UI
+                        val displayText = msg.content
+                            .replace(Regex("\\n\\[trace: \\d+ lines]"), "")
+                            .replace(Regex("\\n\\[attached ide errors]"), "")
+                            .replace(Regex("\\n\\[plan-only]"), "")
+                            .trim()
+                        if (displayText.isNotBlank()) conversationPanel.addUserBubble(displayText)
+                    }
+
                     MessageRole.ASSISTANT -> conversationPanel.addAssistantBubble(msg.content)
                     MessageRole.SYSTEM -> conversationPanel.addSystemBubble(msg.content)
                 }
@@ -522,7 +571,7 @@ class ChatPanel(
         inputArea.text = ""
         when {
             cs.isWaitingForResponse() -> {
-                session.addMessage(MessageRole.USER, "[Pasted LLM response]")
+                // Do NOT save [Pasted LLM response] to session — it's a UI-only marker with no value in history
                 conversationPanel.appendIconToLastBubble("📥")
                 setInputEnabled(false); statusLabel.text = "Processing..."
                 messageController.runClipboardBg("Processing response...", session) {
