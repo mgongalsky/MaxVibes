@@ -23,6 +23,7 @@ import com.intellij.openapi.wm.ToolWindow
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.openapi.wm.ToolWindowType
+import com.maxvibes.plugin.service.MaxVibesLogger
 
 class ChatPanel(
     private val project: Project,
@@ -471,6 +472,13 @@ class ChatPanel(
         val trace = attachedTrace; clearAttachedTrace()
         val errs = attachedErrors; clearAttachedErrors()
         val isPlanOnly = planOnlyCheckbox.isSelected
+        MaxVibesLogger.info("ChatPanel", "sendMessage", mapOf(
+            "mode" to currentMode.name,
+            "msgLen" to userInput.length,
+            "isPlanOnly" to isPlanOnly,
+            "hasTrace" to (trace != null),
+            "hasErrors" to (errs != null)
+        ))
         when (currentMode) {
             InteractionMode.API -> sendApiMessage(userInput, trace, errs)
             InteractionMode.CLIPBOARD -> sendClipboardMessage(userInput, trace, errs, isPlanOnly)
@@ -585,6 +593,7 @@ class ChatPanel(
             }
             service.clipboardService.reset()
         }
+        MaxVibesLogger.info("ChatPanel", "switchMode", mapOf("from" to currentMode.name, "to" to newMode.name))
         currentMode = newMode; settings.interactionMode = newMode.name; updateModeIndicator()
         if (newMode == InteractionMode.CHEAP_API) service.ensureCheapLLMService()
         val label = MaxVibesSettings.INTERACTION_MODES.find { it.first == newMode.name }?.second ?: newMode.name

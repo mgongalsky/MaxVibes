@@ -11,6 +11,7 @@ import com.maxvibes.application.service.ClipboardStepResult
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.plugin.chat.ChatSession
 import com.maxvibes.plugin.chat.MessageRole
+import com.maxvibes.plugin.service.MaxVibesLogger
 import com.maxvibes.plugin.service.MaxVibesService
 import kotlinx.coroutines.runBlocking
 
@@ -81,6 +82,7 @@ class ChatMessageController(
                     callbacks.appendToChat("⚠️ Cancelled")
                     callbacks.setInputEnabled(true)
                     callbacks.setStatus("Cancelled")
+                    MaxVibesLogger.warn("Controller", "cancelled by user")
                 }
             }
         })
@@ -159,6 +161,15 @@ class ChatMessageController(
         session.addChatTokens(result.chatInputTokens, result.chatOutputTokens)
         callbacks.updateTokenDisplay()
 
+        MaxVibesLogger.info("Controller", "apiResult", mapOf(
+            "success" to result.success,
+            "mods" to result.modifications.size,
+            "planIn" to result.planningInputTokens,
+            "planOut" to result.planningOutputTokens,
+            "chatIn" to result.chatInputTokens,
+            "chatOut" to result.chatOutputTokens
+        ))
+
         val mainText = result.message
         session.addMessage(MessageRole.ASSISTANT, mainText)
 
@@ -171,7 +182,7 @@ class ChatMessageController(
             tokenInfo,
             result.modifications,
             emptyList(),
-            null // TODO: API mode should also return reasoning in future
+            null
         )
 
         if (wasPlanOnly) {
@@ -186,12 +197,16 @@ class ChatMessageController(
     private fun handleClipboardResult(result: ClipboardStepResult, session: ChatSession) {
         when (result) {
             is ClipboardStepResult.WaitingForResponse -> {
+                MaxVibesLogger.info("Controller", "clipboard waiting", mapOf(
+                    "phase" to result.phase.name,
+                    "estimatedTokens" to result.estimatedInputTokens,
+                    "freshFiles" to result.freshFileNames.size
+                ))
                 session.addChatTokens(result.estimatedInputTokens, 0)
                 callbacks.updateTokenDisplay()
 
                 val assistantText = result.assistantMessage
                 if (!assistantText.isNullOrBlank()) {
-                    // Сохраняем в историю ТОЛЬКО текст сообщения ассистента
                     session.addMessage(MessageRole.ASSISTANT, assistantText)
                     val tokenSummaryParts = mutableListOf<String>()
                     if (result.estimatedInputTokens > 0) tokenSummaryParts += "~${fmt(result.estimatedInputTokens)} tokens"
@@ -207,11 +222,9 @@ class ChatMessageController(
                         result.llmReasoning
                     )
                 } else {
-                    // Если сообщения нет, просто показываем иконку протокола
                     callbacks.appendIconToLastBubble("📋")
                 }
 
-                // Технический статус показываем в чате без сохранения в историю (appendToChat, а не addMessage)
                 callbacks.appendToChat(result.statusMessage)
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
@@ -219,6 +232,11 @@ class ChatMessageController(
             }
 
             is ClipboardStepResult.Completed -> {
+                MaxVibesLogger.info("Controller", "clipboard completed", mapOf(
+                    "success" to result.success,
+                    "mods" to result.modifications.size,
+                    "outputTokens" to result.outputTokens
+                ))
                 callbacks.registerElementPaths(result.modifications)
                 session.addChatTokens(0, result.outputTokens)
                 callbacks.updateTokenDisplay()
@@ -230,14 +248,15 @@ class ChatMessageController(
                 )
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
-                val hint = if (service.clipboardService.hasActiveSession()) " \u2022 Session active" else ""
+                val hint = if (service.clipboardService.hasActiveSession()) " • Session active" else ""
                 callbacks.setStatus((if (result.success) "Ready" else "Errors") + hint)
                 callbacks.updateBreadcrumb()
             }
 
             is ClipboardStepResult.Error -> {
+                MaxVibesLogger.warn("Controller", "clipboard error", data = mapOf("msg" to result.message))
                 session.addMessage(MessageRole.SYSTEM, "Error: ${result.message}")
-                callbacks.appendToChat("\u274C ${result.message}")
+                callbacks.appendToChat("❌ ${result.message}")
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
                 callbacks.setStatus("Error")

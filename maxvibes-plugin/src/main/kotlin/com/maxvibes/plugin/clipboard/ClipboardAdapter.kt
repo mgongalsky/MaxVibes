@@ -2,6 +2,7 @@ package com.maxvibes.plugin.clipboard
 
 import com.maxvibes.application.port.output.ClipboardPort
 import com.maxvibes.domain.model.interaction.*
+import com.maxvibes.plugin.service.MaxVibesLogger
 import kotlinx.serialization.json.*
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
@@ -38,9 +39,14 @@ class ClipboardAdapter : ClipboardPort {
             val jsonText = serializeRequest(request)
             val selection = StringSelection(jsonText)
             Toolkit.getDefaultToolkit().systemClipboard.setContents(selection, null)
+            MaxVibesLogger.debug("Clipboard", "copied request", mapOf(
+                "task" to request.task.take(60),
+                "freshFiles" to request.freshFiles.size,
+                "planOnly" to request.planOnly
+            ))
             true
         } catch (e: Exception) {
-            println("[MaxVibes Clipboard] Failed to copy to clipboard: ${e.message}")
+            MaxVibesLogger.error("Clipboard", "copyRequestToClipboard failed", e)
             false
         }
     }
@@ -48,50 +54,43 @@ class ClipboardAdapter : ClipboardPort {
     override fun parseResponse(rawText: String): ClipboardResponse? {
         val text = rawText.trim()
 
-        // Attempt 1: ```json ... ``` block
         val jsonBlockMatch = Regex("```json\\s*\\n([\\s\\S]*?)\\n\\s*```").find(text)
         val jsonBlock = jsonBlockMatch?.groupValues?.get(1)?.trim()
 
-        // Attempt 2: ``` ... ``` с JSON внутри
         val codeBlockMatch = Regex("```\\s*\\n([\\s\\S]*?)\\n\\s*```")
             .findAll(text)
             .firstOrNull { it.groupValues[1].trim().startsWith("{") || it.groupValues[1].trim().startsWith("[") }
         val codeBlock = codeBlockMatch?.groupValues?.get(1)?.trim()
 
-        // Attempt 3: raw JSON
         val rawJson = if (text.startsWith("{") || text.startsWith("[")) text else null
-
-        // Attempt 4: JSON внутри текста
         val embedded = findEmbeddedJson(text)
-
         val jsonText = jsonBlock ?: codeBlock ?: rawJson ?: embedded
 
         if (jsonText == null) {
-            // Attempt 5: Весь текст — это просто сообщение (без JSON)
             if (text.isNotBlank() && !text.contains("{")) {
-                println("[MaxVibes Clipboard] No JSON found, treating as plain message")
+                MaxVibesLogger.debug("Clipboard", "no JSON, treating as plain message", mapOf("len" to text.length))
                 return ClipboardResponse(message = text)
             }
-            println("[MaxVibes Clipboard] Failed to find JSON in response")
+            MaxVibesLogger.warn("Clipboard", "failed to find JSON", data = mapOf("preview" to text.take(120)))
             return null
         }
 
-        // Собираем текст ДО и ПОСЛЕ JSON-блока — это объяснение от Claude
         val surroundingText = extractSurroundingText(text, jsonBlockMatch ?: codeBlockMatch)
 
         return try {
             val response = parseUnifiedResponse(jsonText)
-            println("[MaxVibes Clipboard] Parsed: message=${response.message.take(50)}, " +
-                    "files=${response.requestedFiles.size}, mods=${response.modifications.size}")
-
-            // Если message пустой в JSON, но Claude написал текст вокруг — используем его
+            MaxVibesLogger.debug("Clipboard", "parsed response", mapOf(
+                "msg" to response.message.take(60),
+                "files" to response.requestedFiles.size,
+                "mods" to response.modifications.size
+            ))
             if (response.message.isBlank() && surroundingText.isNotBlank()) {
                 response.copy(message = surroundingText)
             } else {
                 response
             }
         } catch (e: Exception) {
-            println("[MaxVibes Clipboard] JSON parse error: ${e.message}")
+            MaxVibesLogger.error("Clipboard", "JSON parse error", e, mapOf("jsonPreview" to jsonText.take(200)))
             try {
                 embedded?.let { parseUnifiedResponse(it) }
             } catch (_: Exception) {

@@ -12,6 +12,7 @@ import com.maxvibes.plugin.chat.MessageRole
 import java.awt.CardLayout
 import javax.swing.JOptionPane
 import javax.swing.JPanel
+import com.maxvibes.plugin.service.MaxVibesLogger
 
 // ==================== Factory ====================
 
@@ -49,6 +50,11 @@ class MaxVibesToolPanel(private val project: Project, private val toolWindow: To
         add(sessionTreePanel, CARD_SESSIONS)
 
         showChat()
+
+        MaxVibesLogger.info("ToolWindow", "init", mapOf("project" to project.name))
+        com.intellij.openapi.util.Disposer.register(project, com.intellij.openapi.Disposable {
+            MaxVibesLogger.shutdown()
+        })
     }
 
     private fun showChat() {

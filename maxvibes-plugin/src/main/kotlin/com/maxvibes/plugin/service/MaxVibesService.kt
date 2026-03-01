@@ -159,8 +159,13 @@ class MaxVibesService(private val project: Project) {
             )
 
             LOG.info("Cheap LLM service created: ${settings.cheapProvider} / ${settings.cheapModelId}")
+            MaxVibesLogger.info("Service", "cheapLLM created", mapOf(
+                "provider" to settings.cheapProvider,
+                "model" to settings.cheapModelId
+            ))
         } catch (e: Exception) {
             LOG.warn("Failed to create cheap LLM service: ${e.message}", e)
+            MaxVibesLogger.error("Service", "cheapLLM creation failed", e)
         }
     }
 
@@ -172,12 +177,17 @@ class MaxVibesService(private val project: Project) {
         return try {
             if (settings.isConfigured) {
                 LOG.info("Creating real LLM service: ${settings.provider} / ${settings.modelId}")
+                MaxVibesLogger.info("Service", "createLLM", mapOf(
+                    "provider" to settings.provider,
+                    "model" to settings.modelId
+                ))
                 createRealLLMService(settings)
             } else {
                 handleNotConfigured(settings)
             }
         } catch (e: Exception) {
             LOG.warn("Failed to create LLM service: ${e.message}", e)
+            MaxVibesLogger.error("Service", "createLLM failed", e)
             handleCreationError(settings, e)
         }
     }

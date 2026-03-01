@@ -6,6 +6,7 @@ import com.intellij.util.xmlb.XmlSerializerUtil
 import com.intellij.util.xmlb.annotations.Attribute
 import com.intellij.util.xmlb.annotations.Tag
 import com.intellij.util.xmlb.annotations.XCollection
+import com.maxvibes.plugin.service.MaxVibesLogger
 import java.time.Instant
 import java.util.UUID
 
@@ -207,6 +208,11 @@ class ChatHistoryService : PersistentStateComponent<ChatHistoryState> {
     override fun loadState(state: ChatHistoryState) {
         XmlSerializerUtil.copyBean(state, this.state)
         recalculateDepths()
+        MaxVibesLogger.info("ChatHistory", "loadState", mapOf(
+            "sessions" to state.sessions.size,
+            "activeId" to (state.activeSessionId ?: "none"),
+            "contextFiles" to state.globalContextFiles.size
+        ))
     }
 
     // ==================== Basic Operations ====================
@@ -330,6 +336,10 @@ class ChatHistoryService : PersistentStateComponent<ChatHistoryState> {
         state.sessions.add(0, session)
         state.activeSessionId = session.id
         trimOldSessions()
+        MaxVibesLogger.debug("ChatHistory", "createNewSession", mapOf(
+            "id" to session.id,
+            "total" to state.sessions.size
+        ))
         return session
     }
 
