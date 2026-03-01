@@ -429,7 +429,8 @@ class ChatPanel(
 
         maximizeButton.addActionListener {
             val manager = ToolWindowManager.getInstance(project)
-            manager.setMaximized(toolWindow, !manager.isMaximized(toolWindow))
+            val newState = !manager.isMaximized(toolWindow)
+            manager.setMaximized(toolWindow, newState)
             updateToolWindowIcons()
         }
 
