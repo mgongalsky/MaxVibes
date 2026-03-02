@@ -33,7 +33,8 @@ class ClipboardInteractionService(
         history: List<ChatMessageDTO> = emptyList(),
         attachedContext: String? = null,
         planOnly: Boolean = false,
-        ideErrors: String? = null
+        ideErrors: String? = null,
+        globalContextFiles: List<String> = emptyList()
     ): ClipboardStepResult {
         log("Starting new clipboard task: \"${task.take(60)}...\" (planOnly=$planOnly)")
 
@@ -60,8 +61,10 @@ class ClipboardInteractionService(
 
         addToHistory(ChatRole.USER, task)
 
+        val freshFiles = gatherRequestedFiles(globalContextFiles) ?: emptyMap()
+
         return generateAndCopyJson(
-            freshFiles = emptyMap(),
+            freshFiles = freshFiles,
             isFirstMessage = true
         )
     }
@@ -70,7 +73,8 @@ class ClipboardInteractionService(
         message: String,
         attachedContext: String? = null,
         planOnly: Boolean? = null,
-        ideErrors: String? = null
+        ideErrors: String? = null,
+        globalContextFiles: List<String> = emptyList()
     ): ClipboardStepResult {
         val state = sessionState
             ?: return error("No active clipboard session. Start a new task first.")
@@ -85,8 +89,10 @@ class ClipboardInteractionService(
 
         addToHistory(ChatRole.USER, message)
 
+        val freshFiles = gatherRequestedFiles(globalContextFiles) ?: emptyMap()
+
         return generateAndCopyJson(
-            freshFiles = emptyMap(),
+            freshFiles = freshFiles,
             isFirstMessage = false
         )
     }

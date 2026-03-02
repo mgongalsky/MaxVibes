@@ -1,0 +1,116 @@
+{"t":"2026-03-01T23:52:54.110","s":"s-423eef28","lvl":"INFO","tag":"ChatHistory","msg":"loadState","data":{"sessions":11,"activeId":"7aa3aff5-8972-456b-a9bd-fdab09688168","contextFiles":1}}
+{"t":"2026-03-01T23:52:54.255","s":"s-423eef28","lvl":"SESSION","tag":"MaxVibesLogger","msg":"START","data":{"logFile":"E:\\Programs\\Kotlin\\MaxPilot\\MaxVibes\\.maxvibes\\logs\\maxvibes.log","ideVersion":"2023.3.3","os":"Windows 11 10.0"}}
+{"t":"2026-03-01T23:52:54.255","s":"s-423eef28","lvl":"INFO","tag":"MaxVibesService","msg":"Plugin service initialized","data":{"project":"MaxVibes"}}
+{"t":"2026-03-01T23:52:54.439","s":"s-423eef28","lvl":"INFO","tag":"ToolWindow","msg":"init","data":{"project":"MaxVibes"}}
+{"t":"2026-03-01T23:53:30.753","s":"s-423eef28","lvl":"SESSION","tag":"MaxVibesLogger","msg":"END"}
+{"t":"2026-03-02T22:32:03.603","s":"s-87ca86d6","lvl":"INFO","tag":"ChatHistory","msg":"loadState","data":{"sessions":11,"activeId":"7aa3aff5-8972-456b-a9bd-fdab09688168","contextFiles":1}}
+{"t":"2026-03-02T22:32:03.810","s":"s-87ca86d6","lvl":"SESSION","tag":"MaxVibesLogger","msg":"START","data":{"logFile":"E:\\Programs\\Kotlin\\MaxPilot\\MaxVibes\\.maxvibes\\logs\\maxvibes.log","ideVersion":"2023.3.3","os":"Windows 11 10.0"}}
+{"t":"2026-03-02T22:32:03.810","s":"s-87ca86d6","lvl":"INFO","tag":"MaxVibesService","msg":"Plugin service initialized","data":{"project":"MaxVibes"}}
+{"t":"2026-03-02T22:32:04.120","s":"s-87ca86d6","lvl":"INFO","tag":"ToolWindow","msg":"init","data":{"project":"MaxVibes"}}
+{"t":"2026-03-02T22:33:36.927","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Session reset"}
+{"t":"2026-03-02T22:33:36.927","s":"s-87ca86d6","lvl":"DEBUG","tag":"ChatHistory","msg":"createNewSession","data":{"id":"3a36bf04-7bf1-48ec-86b4-11842f219761","total":12}}
+{"t":"2026-03-02T22:34:08.569","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Session reset"}
+{"t":"2026-03-02T22:35:36.308","s":"s-87ca86d6","lvl":"INFO","tag":"ChatPanel","msg":"sendMessage","data":{"mode":"CLIPBOARD","msgLen":300,"isPlanOnly":true,"hasTrace":false,"hasErrors":false}}
+{"t":"2026-03-02T22:35:36.392","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Starting new clipboard task: \"у нас есть в UI штука для присоединения файлов к глобальном ...\" (planOnly=true)"}
+{"t":"2026-03-02T22:35:36.538","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Project: MaxVibes, files in tree: 91"}
+{"t":"2026-03-02T22:35:36.540","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Generating JSON: freshFiles=0, previousPaths=0, historySize=1, planOnly=true"}
+{"t":"2026-03-02T22:35:36.627","s":"s-87ca86d6","lvl":"DEBUG","tag":"Clipboard","msg":"copied request","data":{"task":"у нас есть в UI штука для присоединения файлов к глобальном ","freshFiles":0,"planOnly":true}}
+{"t":"2026-03-02T22:35:36.628","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"JSON ready: copied to clipboard ✓, ~1742 tokens"}
+{"t":"2026-03-02T22:35:36.631","s":"s-87ca86d6","lvl":"INFO","tag":"Controller","msg":"clipboard waiting","data":{"phase":"PLANNING","estimatedTokens":1742,"freshFiles":0}}
+{"t":"2026-03-02T22:37:06.338","s":"s-87ca86d6","lvl":"INFO","tag":"ChatPanel","msg":"sendMessage","data":{"mode":"CLIPBOARD","msgLen":2431,"isPlanOnly":true,"hasTrace":false,"hasErrors":false}}
+{"t":"2026-03-02T22:37:06.359","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Parsing pasted response (2431 chars)..."}
+{"t":"2026-03-02T22:37:06.381","s":"s-87ca86d6","lvl":"DEBUG","tag":"Clipboard","msg":"parsed response","data":{"msg":"Хорошая задача! Вот мой анализ и план.\n\n## Что происходит се","files":7,"mods":0}}
+{"t":"2026-03-02T22:37:06.382","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Parsed: message=Хорошая задача! Вот мой анализ и план.\n\n## Что про..., requestedFiles=7, modifications=0, reasoning=none"}
+{"t":"2026-03-02T22:37:06.383","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Processing: hasFiles=true, hasMods=false, hasMessage=true"}
+{"t":"2026-03-02T22:37:06.384","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Gathering 7 new files..."}
+{"t":"2026-03-02T22:37:06.403","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Gathered 7 files, total cached: 7"}
+{"t":"2026-03-02T22:37:06.404","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Generating JSON: freshFiles=7, previousPaths=7, historySize=2, planOnly=true"}
+{"t":"2026-03-02T22:37:06.490","s":"s-87ca86d6","lvl":"DEBUG","tag":"Clipboard","msg":"copied request","data":{"task":"у нас есть в UI штука для присоединения файлов к глобальном ","freshFiles":7,"planOnly":true}}
+{"t":"2026-03-02T22:37:06.491","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"JSON ready: copied to clipboard ✓, ~32391 tokens"}
+{"t":"2026-03-02T22:37:06.494","s":"s-87ca86d6","lvl":"INFO","tag":"Controller","msg":"clipboard waiting","data":{"phase":"CHAT","estimatedTokens":32391,"freshFiles":7}}
+{"t":"2026-03-02T22:39:01.917","s":"s-87ca86d6","lvl":"DEBUG","tag":"Clipboard","msg":"copied request","data":{"task":"у нас есть в UI штука для присоединения файлов к глобальном ","freshFiles":7,"planOnly":true}}
+{"t":"2026-03-02T22:40:33.834","s":"s-87ca86d6","lvl":"INFO","tag":"ChatPanel","msg":"sendMessage","data":{"mode":"CLIPBOARD","msgLen":2251,"isPlanOnly":true,"hasTrace":false,"hasErrors":false}}
+{"t":"2026-03-02T22:40:33.856","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Parsing pasted response (2251 chars)..."}
+{"t":"2026-03-02T22:40:33.857","s":"s-87ca86d6","lvl":"DEBUG","tag":"Clipboard","msg":"parsed response","data":{"msg":"Хорошо, посмотрел цепочку по всем файлам. Вот что вижу.\n\n## ","files":0,"mods":0}}
+{"t":"2026-03-02T22:40:33.858","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Parsed: message=Хорошо, посмотрел цепочку по всем файлам. Вот что ..., requestedFiles=0, modifications=0, reasoning=none"}
+{"t":"2026-03-02T22:40:33.858","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Processing: hasFiles=false, hasMods=false, hasMessage=true"}
+{"t":"2026-03-02T22:40:33.859","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Completed: message=Хорошо, посмотрел цепочку по всем файлам..., mods=0 ok/0 fail."}
+{"t":"2026-03-02T22:40:33.863","s":"s-87ca86d6","lvl":"INFO","tag":"Controller","msg":"clipboard completed","data":{"success":true,"mods":0,"failures":0,"outputTokens":562,"hasCommitMsg":false}}
+{"t":"2026-03-02T22:41:39.966","s":"s-87ca86d6","lvl":"INFO","tag":"ChatPanel","msg":"sendMessage","data":{"mode":"CLIPBOARD","msgLen":96,"isPlanOnly":true,"hasTrace":false,"hasErrors":false}}
+{"t":"2026-03-02T22:41:39.986","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Continuing dialog: \"так запроси у меня эти файлы джейсоном, как сказано в систем...\" (new planOnly=true)"}
+{"t":"2026-03-02T22:41:39.986","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Generating JSON: freshFiles=0, previousPaths=7, historySize=4, planOnly=true"}
+{"t":"2026-03-02T22:41:39.992","s":"s-87ca86d6","lvl":"DEBUG","tag":"Clipboard","msg":"copied request","data":{"task":"у нас есть в UI штука для присоединения файлов к глобальном ","freshFiles":0,"planOnly":true}}
+{"t":"2026-03-02T22:41:39.993","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"JSON ready: copied to clipboard ✓, ~3920 tokens"}
+{"t":"2026-03-02T22:41:39.995","s":"s-87ca86d6","lvl":"INFO","tag":"Controller","msg":"clipboard waiting","data":{"phase":"CHAT","estimatedTokens":3920,"freshFiles":0}}
+{"t":"2026-03-02T22:42:31.694","s":"s-87ca86d6","lvl":"DEBUG","tag":"Clipboard","msg":"copied request","data":{"task":"у нас есть в UI штука для присоединения файлов к глобальном ","freshFiles":0,"planOnly":true}}
+{"t":"2026-03-02T22:43:47.897","s":"s-87ca86d6","lvl":"INFO","tag":"ChatPanel","msg":"sendMessage","data":{"mode":"CLIPBOARD","msgLen":470,"isPlanOnly":true,"hasTrace":false,"hasErrors":false}}
+{"t":"2026-03-02T22:43:47.963","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Parsing pasted response (470 chars)..."}
+{"t":"2026-03-02T22:43:47.963","s":"s-87ca86d6","lvl":"DEBUG","tag":"Clipboard","msg":"parsed response","data":{"msg":"Понял, запрашиваю `ClipboardInteractionService.kt` и `ChatHi","files":2,"mods":0}}
+{"t":"2026-03-02T22:43:47.965","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Parsed: message=Понял, запрашиваю `ClipboardInteractionService.kt`..., requestedFiles=2, modifications=0, reasoning=none"}
+{"t":"2026-03-02T22:43:47.966","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Processing: hasFiles=true, hasMods=false, hasMessage=true"}
+{"t":"2026-03-02T22:43:47.966","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Gathering 2 new files..."}
+{"t":"2026-03-02T22:43:47.975","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Gathered 2 files, total cached: 9"}
+{"t":"2026-03-02T22:43:47.976","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Generating JSON: freshFiles=2, previousPaths=9, historySize=5, planOnly=true"}
+{"t":"2026-03-02T22:43:47.992","s":"s-87ca86d6","lvl":"DEBUG","tag":"Clipboard","msg":"copied request","data":{"task":"у нас есть в UI штука для присоединения файлов к глобальном ","freshFiles":2,"planOnly":true}}
+{"t":"2026-03-02T22:43:47.994","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"JSON ready: copied to clipboard ✓, ~14031 tokens"}
+{"t":"2026-03-02T22:43:48.144","s":"s-87ca86d6","lvl":"INFO","tag":"Controller","msg":"clipboard waiting","data":{"phase":"CHAT","estimatedTokens":14031,"freshFiles":2}}
+{"t":"2026-03-02T22:44:59.313","s":"s-87ca86d6","lvl":"INFO","tag":"ChatPanel","msg":"sendMessage","data":{"mode":"CLIPBOARD","msgLen":1885,"isPlanOnly":true,"hasTrace":false,"hasErrors":false}}
+{"t":"2026-03-02T22:44:59.334","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Parsing pasted response (1885 chars)..."}
+{"t":"2026-03-02T22:44:59.335","s":"s-87ca86d6","lvl":"DEBUG","tag":"Clipboard","msg":"parsed response","data":{"msg":"Изучил `ClipboardInteractionService.kt` и `ChatHistoryServic","files":0,"mods":0}}
+{"t":"2026-03-02T22:44:59.336","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Parsed: message=Изучил `ClipboardInteractionService.kt` и `ChatHis..., requestedFiles=0, modifications=0, reasoning=none"}
+{"t":"2026-03-02T22:44:59.336","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Processing: hasFiles=false, hasMods=false, hasMessage=true"}
+{"t":"2026-03-02T22:44:59.336","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Completed: message=Изучил `ClipboardInteractionService.kt` ..., mods=0 ok/0 fail."}
+{"t":"2026-03-02T22:44:59.341","s":"s-87ca86d6","lvl":"INFO","tag":"Controller","msg":"clipboard completed","data":{"success":true,"mods":0,"failures":0,"outputTokens":471,"hasCommitMsg":false}}
+{"t":"2026-03-02T22:47:11.191","s":"s-87ca86d6","lvl":"INFO","tag":"ChatPanel","msg":"sendMessage","data":{"mode":"CLIPBOARD","msgLen":138,"isPlanOnly":false,"hasTrace":false,"hasErrors":false}}
+{"t":"2026-03-02T22:47:11.264","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Continuing dialog: \"хорошо, звучит норм. запрашивай файлы которые нужны и присту...\" (new planOnly=false)"}
+{"t":"2026-03-02T22:47:11.265","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Generating JSON: freshFiles=0, previousPaths=9, historySize=7, planOnly=false"}
+{"t":"2026-03-02T22:47:11.272","s":"s-87ca86d6","lvl":"DEBUG","tag":"Clipboard","msg":"copied request","data":{"task":"у нас есть в UI штука для присоединения файлов к глобальном ","freshFiles":0,"planOnly":false}}
+{"t":"2026-03-02T22:47:11.274","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"JSON ready: copied to clipboard ✓, ~4317 tokens"}
+{"t":"2026-03-02T22:47:11.340","s":"s-87ca86d6","lvl":"INFO","tag":"Controller","msg":"clipboard waiting","data":{"phase":"CHAT","estimatedTokens":4317,"freshFiles":0}}
+{"t":"2026-03-02T22:48:21.522","s":"s-87ca86d6","lvl":"INFO","tag":"ChatPanel","msg":"sendMessage","data":{"mode":"CLIPBOARD","msgLen":417,"isPlanOnly":false,"hasTrace":false,"hasErrors":false}}
+{"t":"2026-03-02T22:48:21.542","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Parsing pasted response (417 chars)..."}
+{"t":"2026-03-02T22:48:21.546","s":"s-87ca86d6","lvl":"ERROR","tag":"Clipboard","msg":"JSON parse error","data":{"jsonPreview":"{\n  \"message\": \"Отлично. Запрашиваю `ChatPanel.kt` и обновленную версию `ClipboardInteractionService.kt`, чтобы внести необходимые изменения. Как только получу файлы, сразу сгенерирую код.\",\n  \"reques","ex":"JsonDecodingException","exMsg":"Cannot read Json element because of unexpected end of the input at path: $\nJSON input: .....vice/ClipboardInteractionService.kt\"\n  ],\n  \"modifications\":","stack":"kotlinx.serialization.json.internal.JsonExceptionsKt.JsonDecodingException(JsonExceptions.kt:24) | kotlinx.serialization.json.internal.JsonExceptionsKt.JsonDecodingException(JsonExceptions.kt:32) | kotlinx.serialization.json.internal.AbstractJsonLexer.fail(AbstractJsonLexer.kt:587) | kotlinx.serialization.json.internal.AbstractJsonLexer.fail$default(AbstractJsonLexer.kt:585) | kotlinx.serialization.json.internal.JsonTreeReader.read(JsonTreeReader.kt:107)"}}
+{"t":"2026-03-02T22:48:21.546","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"ERROR: Failed to parse response — null returned"}
+{"t":"2026-03-02T22:48:21.548","s":"s-87ca86d6","lvl":"ERROR","tag":"Clipboard","msg":"Failed to parse LLM response.\n\nExpected JSON format:\n{\n  \"message\": \"explanation text\",\n  \"requestedFiles\": [\"path/file.kt\"],  // optional\n  \"modifications\": [...]                  // optional\n}\n\nTip: make sure you pasted the complete response without markdown code blocks."}
+{"t":"2026-03-02T22:48:21.556","s":"s-87ca86d6","lvl":"WARN","tag":"Controller","msg":"clipboard error","data":{"msg":"Failed to parse LLM response.\n\nExpected JSON format:\n{\n  \"message\": \"explanation text\",\n  \"requestedFiles\": [\"path/file.kt\"],  // optional\n  \"modifications\": [...]                  // optional\n}\n\nTip: make sure you pasted the complete response without markdown code blocks."}}
+{"t":"2026-03-02T22:48:49.183","s":"s-87ca86d6","lvl":"INFO","tag":"ChatPanel","msg":"sendMessage","data":{"mode":"CLIPBOARD","msgLen":33,"isPlanOnly":false,"hasTrace":false,"hasErrors":false}}
+{"t":"2026-03-02T22:48:49.207","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Continuing dialog: \"так давай повторим запрос файолв....\" (new planOnly=false)"}
+{"t":"2026-03-02T22:48:49.208","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Generating JSON: freshFiles=0, previousPaths=9, historySize=8, planOnly=false"}
+{"t":"2026-03-02T22:48:49.212","s":"s-87ca86d6","lvl":"DEBUG","tag":"Clipboard","msg":"copied request","data":{"task":"у нас есть в UI штука для присоединения файлов к глобальном ","freshFiles":0,"planOnly":false}}
+{"t":"2026-03-02T22:48:49.213","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"JSON ready: copied to clipboard ✓, ~4325 tokens"}
+{"t":"2026-03-02T22:48:49.221","s":"s-87ca86d6","lvl":"INFO","tag":"Controller","msg":"clipboard waiting","data":{"phase":"CHAT","estimatedTokens":4325,"freshFiles":0}}
+{"t":"2026-03-02T22:48:57.753","s":"s-87ca86d6","lvl":"INFO","tag":"ChatPanel","msg":"sendMessage","data":{"mode":"CLIPBOARD","msgLen":420,"isPlanOnly":false,"hasTrace":false,"hasErrors":false}}
+{"t":"2026-03-02T22:48:57.776","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Parsing pasted response (420 chars)..."}
+{"t":"2026-03-02T22:48:57.777","s":"s-87ca86d6","lvl":"DEBUG","tag":"Clipboard","msg":"parsed response","data":{"msg":"Отлично. Запрашиваю `ChatPanel.kt` и обновленную версию `Cli","files":2,"mods":0}}
+{"t":"2026-03-02T22:48:57.778","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Parsed: message=Отлично. Запрашиваю `ChatPanel.kt` и обновленную в..., requestedFiles=2, modifications=0, reasoning=none"}
+{"t":"2026-03-02T22:48:57.778","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Processing: hasFiles=true, hasMods=false, hasMessage=true"}
+{"t":"2026-03-02T22:48:57.778","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Already gathered (skipping): 2 files"}
+{"t":"2026-03-02T22:48:57.779","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"All requested files already gathered, re-sending existing"}
+{"t":"2026-03-02T22:48:57.779","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Generating JSON: freshFiles=2, previousPaths=9, historySize=9, planOnly=false"}
+{"t":"2026-03-02T22:48:57.790","s":"s-87ca86d6","lvl":"DEBUG","tag":"Clipboard","msg":"copied request","data":{"task":"у нас есть в UI штука для присоединения файлов к глобальном ","freshFiles":2,"planOnly":false}}
+{"t":"2026-03-02T22:48:57.791","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"JSON ready: copied to clipboard ✓, ~20125 tokens"}
+{"t":"2026-03-02T22:48:57.794","s":"s-87ca86d6","lvl":"INFO","tag":"Controller","msg":"clipboard waiting","data":{"phase":"CHAT","estimatedTokens":20125,"freshFiles":2}}
+{"t":"2026-03-02T22:50:38.207","s":"s-87ca86d6","lvl":"INFO","tag":"ChatPanel","msg":"sendMessage","data":{"mode":"CLIPBOARD","msgLen":6323,"isPlanOnly":false,"hasTrace":false,"hasErrors":false}}
+{"t":"2026-03-02T22:50:38.229","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Parsing pasted response (6323 chars)..."}
+{"t":"2026-03-02T22:50:38.233","s":"s-87ca86d6","lvl":"DEBUG","tag":"Clipboard","msg":"parsed response","data":{"msg":"Отлично, я внес изменения. Добавил параметр `globalContextFi","files":0,"mods":3}}
+{"t":"2026-03-02T22:50:38.234","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Parsed: message=Отлично, я внес изменения. Добавил параметр `globa..., requestedFiles=0, modifications=3, reasoning=none"}
+{"t":"2026-03-02T22:50:38.234","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Processing: hasFiles=false, hasMods=true, hasMessage=true"}
+{"t":"2026-03-02T22:50:38.243","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Applying 3 modifications..."}
+{"t":"2026-03-02T22:50:52.129","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Modifications: 3 success, 0 failed"}
+{"t":"2026-03-02T22:50:52.136","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Completed: message=Отлично, я внес изменения. Добавил парам..., mods=3 ok/0 fail."}
+{"t":"2026-03-02T22:50:52.317","s":"s-87ca86d6","lvl":"INFO","tag":"Controller","msg":"clipboard completed","data":{"success":true,"mods":3,"failures":0,"outputTokens":1580,"hasCommitMsg":true}}
+{"t":"2026-03-02T22:50:52.339","s":"s-87ca86d6","lvl":"INFO","tag":"ChatPanel","msg":"setCommitMessage: saved to VCS history (commit UI not open)","data":{"len":51}}
+{"t":"2026-03-02T22:57:28.723","s":"s-87ca86d6","lvl":"INFO","tag":"ChatPanel","msg":"sendMessage","data":{"mode":"CLIPBOARD","msgLen":55,"isPlanOnly":false,"hasTrace":false,"hasErrors":false}}
+{"t":"2026-03-02T22:57:28.751","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Continuing dialog: \"ага работает. давай сообщени для коммита на английском....\" (new planOnly=false)"}
+{"t":"2026-03-02T22:57:28.752","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Generating JSON: freshFiles=0, previousPaths=9, historySize=11, planOnly=false"}
+{"t":"2026-03-02T22:57:28.757","s":"s-87ca86d6","lvl":"DEBUG","tag":"Clipboard","msg":"copied request","data":{"task":"у нас есть в UI штука для присоединения файлов к глобальном ","freshFiles":0,"planOnly":false}}
+{"t":"2026-03-02T22:57:28.758","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"JSON ready: copied to clipboard ✓, ~4460 tokens"}
+{"t":"2026-03-02T22:57:28.765","s":"s-87ca86d6","lvl":"INFO","tag":"Controller","msg":"clipboard waiting","data":{"phase":"CHAT","estimatedTokens":4460,"freshFiles":0}}
+{"t":"2026-03-02T22:58:46.815","s":"s-87ca86d6","lvl":"INFO","tag":"ChatPanel","msg":"sendMessage","data":{"mode":"CLIPBOARD","msgLen":198,"isPlanOnly":false,"hasTrace":false,"hasErrors":false}}
+{"t":"2026-03-02T22:58:46.873","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Parsing pasted response (198 chars)..."}
+{"t":"2026-03-02T22:58:46.874","s":"s-87ca86d6","lvl":"DEBUG","tag":"Clipboard","msg":"parsed response","data":{"msg":"Супер! Вот подходящее сообщение для коммита в формате Conven","files":0,"mods":0}}
+{"t":"2026-03-02T22:58:46.874","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Parsed: message=Супер! Вот подходящее сообщение для коммита в форм..., requestedFiles=0, modifications=0, reasoning=none"}
+{"t":"2026-03-02T22:58:46.875","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Processing: hasFiles=false, hasMods=false, hasMessage=true"}
+{"t":"2026-03-02T22:58:46.875","s":"s-87ca86d6","lvl":"INFO","tag":"Clipboard","msg":"Completed: message=Супер! Вот подходящее сообщение для комм..., mods=0 ok/0 fail."}
+{"t":"2026-03-02T22:58:46.968","s":"s-87ca86d6","lvl":"INFO","tag":"Controller","msg":"clipboard completed","data":{"success":true,"mods":0,"failures":0,"outputTokens":49,"hasCommitMsg":true}}
+{"t":"2026-03-02T22:58:46.976","s":"s-87ca86d6","lvl":"INFO","tag":"ChatPanel","msg":"setCommitMessage: saved to VCS history (commit UI not open)","data":{"len":60}}

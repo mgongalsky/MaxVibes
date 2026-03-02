@@ -583,10 +583,11 @@ class ChatPanel(
     private fun sendClipboardMessage(userInput: String, trace: String?, errs: String?, isPlanOnly: Boolean) {
         val cs = service.clipboardService
         val session = chatHistory.getActiveSession()
+        val globalContextFiles = chatHistory.getGlobalContextFiles()
         inputArea.text = ""
         when {
             cs.isWaitingForResponse() -> {
-                // Do NOT save [Pasted LLM response] to session — it's a UI-only marker with no value in history
+                // Do NOT save[Pasted LLM response] to session — it's a UI-only marker with no value in history
                 conversationPanel.appendIconToLastBubble("📥")
                 setInputEnabled(false); statusLabel.text = "Processing..."
                 messageController.runClipboardBg("Processing response...", session) {
@@ -605,7 +606,7 @@ class ChatPanel(
                 session.addMessage(MessageRole.USER, fullMsg)
                 setInputEnabled(false); statusLabel.text = "Continuing..."
                 messageController.runClipboardBg("Continuing...", session) {
-                    cs.continueDialog(userInput, trace, isPlanOnly, errs)
+                    cs.continueDialog(userInput, trace, isPlanOnly, errs, globalContextFiles)
                 }
             }
 
@@ -621,7 +622,7 @@ class ChatPanel(
                 setInputEnabled(false); statusLabel.text = "Generating JSON..."
                 messageController.runClipboardBg("Generating request...", session) {
                     val dtos = session.messages.dropLast(1).map { it.toChatMessageDTO() }
-                    cs.startTask(userInput, dtos, trace, isPlanOnly, errs)
+                    cs.startTask(userInput, dtos, trace, isPlanOnly, errs, globalContextFiles)
                 }
             }
         }
