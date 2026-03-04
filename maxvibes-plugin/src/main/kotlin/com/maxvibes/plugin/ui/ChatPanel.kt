@@ -287,15 +287,11 @@ class ChatPanel(
     override fun setCommitMessage(message: String) {
         com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
             try {
-                // Подход А: ChangeListManager.editComment — live update в открытом commit UI
                 val clm = com.intellij.openapi.vcs.changes.ChangeListManager.getInstance(project)
                 val defaultList = clm.defaultChangeList
                 (clm as? com.intellij.openapi.vcs.changes.ChangeListManagerEx)
                     ?.editComment(defaultList.id, message)
-
-                // Fallback: сохранить в историю VCS (работает при следующем открытии диалога)
                 VcsConfiguration.getInstance(project).saveCommitMessage(message)
-
                 MaxVibesLogger.info("ChatPanel", "setCommitMessage: done", mapOf("len" to message.length))
             } catch (e: Exception) {
                 MaxVibesLogger.error("ChatPanel", "setCommitMessage failed", e)
@@ -312,7 +308,7 @@ class ChatPanel(
     }
 
     fun loadCurrentSession() {
-        // Save draft for the session that was displayed before switching
+        // Save draft for the session currently displayed before switching
         val prevId = displayedSessionId
         if (prevId != null) {
             sessionDrafts[prevId] = inputArea.text
@@ -325,7 +321,7 @@ class ChatPanel(
         elementNavRegistry.clear()
         updateBreadcrumb(); updateModeIndicator(); updateContextIndicator(); updateTokenDisplay(); updateToolWindowIcons()
 
-        // Restore draft for the newly active session
+        // Restore draft for the newly active session (empty string if no draft saved)
         inputArea.text = sessionDrafts[session.id] ?: ""
 
         if (session.messages.isEmpty()) {
@@ -357,6 +353,13 @@ class ChatPanel(
 
     fun resetClipboard() {
         service.clipboardService.reset()
+    }
+
+    /** Clears the input field and removes the draft for the current session (called on send). */
+    private fun clearInput() {
+        val sessionId = chatHistory.getActiveSession().id
+        sessionDrafts.remove(sessionId)
+        inputArea.text = ""
     }
 
     private fun setupUI() {
@@ -537,13 +540,15 @@ class ChatPanel(
         val trace = attachedTrace; clearAttachedTrace()
         val errs = attachedErrors; clearAttachedErrors()
         val isPlanOnly = planOnlyCheckbox.isSelected
-        MaxVibesLogger.info("ChatPanel", "sendMessage", mapOf(
-            "mode" to currentMode.name,
-            "msgLen" to userInput.length,
-            "isPlanOnly" to isPlanOnly,
-            "hasTrace" to (trace != null),
-            "hasErrors" to (errs != null)
-        ))
+        MaxVibesLogger.info(
+            "ChatPanel", "sendMessage", mapOf(
+                "mode" to currentMode.name,
+                "msgLen" to userInput.length,
+                "isPlanOnly" to isPlanOnly,
+                "hasTrace" to (trace != null),
+                "hasErrors" to (errs != null)
+            )
+        )
         when (currentMode) {
             InteractionMode.API -> sendApiMessage(userInput, trace, errs)
             InteractionMode.CLIPBOARD -> sendClipboardMessage(userInput, trace, errs, isPlanOnly)
@@ -562,7 +567,7 @@ class ChatPanel(
             if (isPlanOnly) append("\n[plan-only]")
         }
         session.addMessage(MessageRole.USER, fullTask)
-        inputArea.text = ""; setInputEnabled(false)
+        clearInput(); setInputEnabled(false)
         statusLabel.text = if (isPlanOnly) "Planning..." else "Thinking..."
         val history = session.messages.dropLast(1).map { it.toChatMessageDTO() }
         messageController.sendApiMessage(
@@ -576,7 +581,7 @@ class ChatPanel(
         val session = chatHistory.getActiveSession()
         val globalContextFiles = chatHistory.getGlobalContextFiles()
         val includeHistory = historyCheckbox.isSelected
-        inputArea.text = ""
+        clearInput()
         when {
             cs.isWaitingForResponse() -> {
                 conversationPanel.appendIconToLastBubble("📥")
@@ -625,7 +630,7 @@ class ChatPanel(
         conversationPanel.addUserBubble(msg)
         val fullTask = ChatMessageController.buildTaskWithContext(msg, trace, errs)
         session.addMessage(MessageRole.USER, fullTask)
-        inputArea.text = ""; setInputEnabled(false); statusLabel.text = "Thinking (cheap)..."
+        clearInput(); setInputEnabled(false); statusLabel.text = "Thinking (cheap)..."
         val history = session.messages.dropLast(1).map { it.toChatMessageDTO() }
         service.ensureCheapLLMService()
         messageController.sendCheapApiMessage(
