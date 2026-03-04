@@ -113,6 +113,8 @@ class ChatPanel(
     private var currentMode: InteractionMode = InteractionMode.API
     private var attachedTrace: String? = null
     private val elementNavRegistry = mutableMapOf<String, String>()
+    private val sessionDrafts = mutableMapOf<String, String>()
+    private var displayedSessionId: String? = null
 
     private val messageController: ChatMessageController by lazy {
         ChatMessageController(project, service, this)
@@ -310,10 +312,21 @@ class ChatPanel(
     }
 
     fun loadCurrentSession() {
+        // Save draft for the session that was displayed before switching
+        val prevId = displayedSessionId
+        if (prevId != null) {
+            sessionDrafts[prevId] = inputArea.text
+        }
+
         val session = chatHistory.getActiveSession()
+        displayedSessionId = session.id
+
         conversationPanel.clearMessages()
         elementNavRegistry.clear()
         updateBreadcrumb(); updateModeIndicator(); updateContextIndicator(); updateTokenDisplay(); updateToolWindowIcons()
+
+        // Restore draft for the newly active session
+        inputArea.text = sessionDrafts[session.id] ?: ""
 
         if (session.messages.isEmpty()) {
             showWelcome()
@@ -326,9 +339,7 @@ class ChatPanel(
             session.messages.forEach { msg ->
                 when (msg.role) {
                     MessageRole.USER -> {
-                        // Skip pure clipboard-paste markers — they have no meaningful display content
                         if (msg.content.trim() == "[Pasted LLM response]") return@forEach
-                        // Strip UI-only annotations that were appended for LLM context but clutter the UI
                         val displayText = msg.content
                             .replace(Regex("\\n\\[trace: \\d+ lines]"), "")
                             .replace(Regex("\\n\\[attached ide errors]"), "")
