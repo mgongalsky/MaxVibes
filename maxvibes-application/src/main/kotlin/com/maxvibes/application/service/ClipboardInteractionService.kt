@@ -34,9 +34,10 @@ class ClipboardInteractionService(
         attachedContext: String? = null,
         planOnly: Boolean = false,
         ideErrors: String? = null,
-        globalContextFiles: List<String> = emptyList()
+        globalContextFiles: List<String> = emptyList(),
+        includeHistory: Boolean = true
     ): ClipboardStepResult {
-        log("Starting new clipboard task: \"${task.take(60)}...\" (planOnly=$planOnly)")
+        log("Starting new clipboard task: \"${task.take(60)}...\" (planOnly=$planOnly, includeHistory=$includeHistory, historySize=${history.size})")
 
         notificationPort.showProgress("Gathering project context...", 0.1)
         val projectContextResult = contextProvider.getProjectContext()
@@ -56,16 +57,29 @@ class ClipboardInteractionService(
             allGatheredFiles = mutableMapOf(),
             attachedContext = attachedContext,
             ideErrors = ideErrors,
-            planOnly = planOnly
+            planOnly = planOnly,
+            includeHistory = includeHistory
         )
 
         addToHistory(ChatRole.USER, task)
 
-        val freshFiles = gatherRequestedFiles(globalContextFiles) ?: emptyMap()
+        // In lightweight mode, skip global context files — they'll be included only if
+        // this is a genuinely fresh dialog (no history) or History checkbox is checked.
+        val filesToGather = if (includeHistory || history.isEmpty()) {
+            globalContextFiles
+        } else {
+            emptyList()
+        }
+        val freshFiles = gatherRequestedFiles(filesToGather) ?: emptyMap()
+
+        // isFirstMessage=true only when the dialog genuinely starts fresh (no prior history).
+        // If history is non-empty, this is a continuation — use lightweight mode unless historyCheckbox is on.
+        val isFirstMessage = history.isEmpty()
+        log("startTask: isFirstMessage=$isFirstMessage (history.size=${history.size}), includeHistory=$includeHistory")
 
         return generateAndCopyJson(
             freshFiles = freshFiles,
-            isFirstMessage = true
+            isFirstMessage = isFirstMessage
         )
     }
 
@@ -74,22 +88,33 @@ class ClipboardInteractionService(
         attachedContext: String? = null,
         planOnly: Boolean? = null,
         ideErrors: String? = null,
-        globalContextFiles: List<String> = emptyList()
+        globalContextFiles: List<String> = emptyList(),
+        includeHistory: Boolean = false
     ): ClipboardStepResult {
         val state = sessionState
             ?: return error("No active clipboard session. Start a new task first.")
 
-        log("Continuing dialog: \"${message.take(60)}...\" (new planOnly=$planOnly)")
+        log("Continuing dialog: \"${message.take(60)}...\" (includeHistory=$includeHistory, planOnly=$planOnly)")
 
         sessionState = state.copy(
             attachedContext = attachedContext ?: state.attachedContext,
             ideErrors = ideErrors ?: state.ideErrors,
-            planOnly = planOnly ?: state.planOnly
+            planOnly = planOnly ?: state.planOnly,
+            includeHistory = includeHistory
         )
 
         addToHistory(ChatRole.USER, message)
 
-        val freshFiles = gatherRequestedFiles(globalContextFiles) ?: emptyMap()
+        // In lightweight mode: skip global context files that are already cached —
+        // they were sent in the first message and the LLM already has them.
+        val filesToGather = if (includeHistory) {
+            globalContextFiles
+        } else {
+            globalContextFiles.filter { it !in state.allGatheredFiles }
+        }
+        log("continueDialog: globalContextFiles=${globalContextFiles.size}, filesToGather=${filesToGather.size}, skipped=${globalContextFiles.size - filesToGather.size} (already cached)")
+
+        val freshFiles = gatherRequestedFiles(filesToGather) ?: emptyMap()
 
         return generateAndCopyJson(
             freshFiles = freshFiles,
@@ -229,10 +254,12 @@ class ClipboardInteractionService(
         val state = sessionState ?: return error("No active session")
 
         val previousPaths = state.allGatheredFiles.keys.toList()
+        val isFullContext = isFirstMessage || state.includeHistory
 
         log(
-            "Generating JSON: freshFiles=${freshFiles.size}, previousPaths=${previousPaths.size}, " +
-                    "historySize=${state.dialogHistory.size}, planOnly=${state.planOnly}"
+            "generateAndCopyJson: isFirstMessage=$isFirstMessage, includeHistory=${state.includeHistory}, " +
+                    "isFullContext=$isFullContext, historyMsgs=${state.dialogHistory.size}, " +
+                    "freshFiles=${freshFiles.size}, prevPaths=${previousPaths.size}, planOnly=${state.planOnly}"
         )
 
         val request = ClipboardRequest(
@@ -240,11 +267,11 @@ class ClipboardInteractionService(
                 ClipboardPhase.PLANNING else ClipboardPhase.CHAT,
             task = state.task,
             projectName = state.projectContext.name,
-            systemInstruction = buildSystemInstruction(state),
-            fileTree = state.projectContext.fileTree.toCompactString(maxDepth = 4),
+            systemInstruction = if (isFullContext) buildSystemInstruction(state) else "",
+            fileTree = if (isFullContext) state.projectContext.fileTree.toCompactString(maxDepth = 4) else "",
             freshFiles = freshFiles,
-            previouslyGatheredPaths = previousPaths,
-            chatHistory = state.dialogHistory.map { msg ->
+            previouslyGatheredPaths = if (isFullContext) previousPaths else emptyList(),
+            chatHistory = if (isFullContext) state.dialogHistory.map { msg ->
                 ClipboardHistoryEntry(
                     role = when (msg.role) {
                         ChatRole.USER -> "user"
@@ -253,10 +280,16 @@ class ClipboardInteractionService(
                     },
                     content = msg.content
                 )
-            },
+            } else emptyList(),
             attachedContext = state.attachedContext,
             ideErrors = state.ideErrors,
             planOnly = state.planOnly
+        )
+
+        log(
+            "JSON built: systemInstruction=${request.systemInstruction.length}chars, " +
+                    "fileTree=${request.fileTree.length}chars, chatHistory=${request.chatHistory.size}msgs, " +
+                    "freshFiles=${request.freshFiles.size}, prevPaths=${request.previouslyGatheredPaths.size}"
         )
 
         lastRequest = request
@@ -269,7 +302,7 @@ class ClipboardInteractionService(
 
         val statusMessage = "📋 JSON $copyStatus\nPaste into Claude/ChatGPT, then paste the response back here."
 
-        log("JSON ready: $copyStatus, ~$totalTokens tokens")
+        log("JSON ready: $copyStatus, ~$totalTokens tokens (isFullContext=$isFullContext)")
 
         waitingForPaste = true
 
@@ -319,6 +352,38 @@ class ClipboardInteractionService(
         log("Gathered ${gathered.files.size} files, total cached: ${state.allGatheredFiles.size}")
 
         return gathered.files
+    }
+
+    private fun buildShortInstruction(state: ClipboardSessionState): String {
+        val base = """
+        You are MaxVibes, an AI coding assistant integrated into IntelliJ IDEA.
+        Project: ${state.projectContext.name}, Language: ${state.projectContext.techStack.language}
+
+        IMPORTANT RULES:
+        - Respond with ONLY a raw JSON object.
+        - Do NOT use markdown, code fences, or any text outside JSON.
+        - If code changes are needed, put them into the "modifications" array.
+
+        JSON shape (example):
+        {"message":"...","requestedFiles":["..."],"modifications":[...]}
+
+        Use element-level modifications when possible:
+        - REPLACE_ELEMENT / CREATE_ELEMENT / DELETE_ELEMENT
+        - ADD_IMPORT / REMOVE_IMPORT
+        - REPLACE_FILE only when required (e.g., init block changes)
+
+        Keep the response concise and strictly valid JSON.
+    """.trimIndent()
+
+        if (!state.planOnly) return base
+
+        return base + """
+
+        PLAN-ONLY MODE:
+        - DO NOT generate any code changes.
+        - Keep "modifications": [] empty.
+        - Put the plan/discussion in "message".
+    """.trimIndent()
     }
 
     // ==================== Modifications ====================
@@ -600,5 +665,6 @@ private data class ClipboardSessionState(
     val attachedContext: String? = null,
     val ideErrors: String? = null,
     var lastInputTokens: Int = 0,
-    val planOnly: Boolean = false
+    val planOnly: Boolean = false,
+    val includeHistory: Boolean = false
 )

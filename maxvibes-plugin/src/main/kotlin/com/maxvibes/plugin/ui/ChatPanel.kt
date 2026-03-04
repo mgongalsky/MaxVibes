@@ -51,6 +51,8 @@ class ChatPanel(
 
     private val dryRunCheckbox = JBCheckBox("Dry run").apply { toolTipText = "Show plan without applying changes" }
     private val planOnlyCheckbox = JBCheckBox("💬 Plan").apply { toolTipText = "Plan-only mode" }
+    private val historyCheckbox =
+        JBCheckBox("📜 History").apply { toolTipText = "Include full context and history"; isVisible = false }
     private val copyJsonButton =
         JButton("📋 Copy JSON").apply { toolTipText = "Re-copy last generated JSON"; isVisible = false }
 
@@ -162,6 +164,7 @@ class ChatPanel(
     override fun setInputEnabled(enabled: Boolean) {
         inputArea.isEnabled = enabled; sendButton.isEnabled = enabled
         dryRunCheckbox.isEnabled = enabled; planOnlyCheckbox.isEnabled = enabled
+        historyCheckbox.isEnabled = enabled
         copyJsonButton.isEnabled = enabled
         attachTraceButton.isEnabled = enabled; clearTraceButton.isEnabled = enabled
         attachErrorsButton.isEnabled = enabled; clearErrorsButton.isEnabled = enabled
@@ -181,6 +184,7 @@ class ChatPanel(
             InteractionMode.API -> {
                 modeIndicator.isVisible = false; sendButton.text = "Send"; dryRunCheckbox.isVisible = true
                 copyJsonButton.isVisible = false
+                historyCheckbox.isVisible = false
             }
 
             InteractionMode.CLIPBOARD -> {
@@ -195,18 +199,21 @@ class ChatPanel(
                         }
                         modeIndicator.isVisible = true; sendButton.text = "Paste"
                         copyJsonButton.isVisible = true
+                        historyCheckbox.isVisible = true
                     }
 
                     cs.hasActiveSession() -> {
                         modeIndicator.text = "📋 Active"
                         modeIndicator.isVisible = true; sendButton.text = "Send / Paste"
                         copyJsonButton.isVisible = false
+                        historyCheckbox.isVisible = true
                     }
 
                     else -> {
                         modeIndicator.text = "📋"
                         modeIndicator.isVisible = true; sendButton.text = "Generate"
                         copyJsonButton.isVisible = false
+                        historyCheckbox.isVisible = true
                     }
                 }
                 dryRunCheckbox.isVisible = false
@@ -216,6 +223,7 @@ class ChatPanel(
                 modeIndicator.text = "💰"; modeIndicator.isVisible = true
                 sendButton.text = "Send"; dryRunCheckbox.isVisible = true
                 copyJsonButton.isVisible = false
+                historyCheckbox.isVisible = false
             }
         }
     }
@@ -433,7 +441,7 @@ class ChatPanel(
                 background = JBColor.background()
                 add(attachErrorsButton.apply { preferredSize = Dimension(85, 26) })
                 add(attachTraceButton.apply { preferredSize = Dimension(80, 26) })
-                add(planOnlyCheckbox); add(dryRunCheckbox); add(copyJsonButton); add(sendButton)
+                add(historyCheckbox); add(planOnlyCheckbox); add(dryRunCheckbox); add(copyJsonButton); add(sendButton)
             }, BorderLayout.SOUTH)
         }
 
@@ -584,10 +592,10 @@ class ChatPanel(
         val cs = service.clipboardService
         val session = chatHistory.getActiveSession()
         val globalContextFiles = chatHistory.getGlobalContextFiles()
+        val includeHistory = historyCheckbox.isSelected
         inputArea.text = ""
         when {
             cs.isWaitingForResponse() -> {
-                // Do NOT save[Pasted LLM response] to session — it's a UI-only marker with no value in history
                 conversationPanel.appendIconToLastBubble("📥")
                 setInputEnabled(false); statusLabel.text = "Processing..."
                 messageController.runClipboardBg("Processing response...", session) {
@@ -606,7 +614,7 @@ class ChatPanel(
                 session.addMessage(MessageRole.USER, fullMsg)
                 setInputEnabled(false); statusLabel.text = "Continuing..."
                 messageController.runClipboardBg("Continuing...", session) {
-                    cs.continueDialog(userInput, trace, isPlanOnly, errs, globalContextFiles)
+                    cs.continueDialog(userInput, trace, isPlanOnly, errs, globalContextFiles, includeHistory)
                 }
             }
 
@@ -622,7 +630,7 @@ class ChatPanel(
                 setInputEnabled(false); statusLabel.text = "Generating JSON..."
                 messageController.runClipboardBg("Generating request...", session) {
                     val dtos = session.messages.dropLast(1).map { it.toChatMessageDTO() }
-                    cs.startTask(userInput, dtos, trace, isPlanOnly, errs, globalContextFiles)
+                    cs.startTask(userInput, dtos, trace, isPlanOnly, errs, globalContextFiles, includeHistory)
                 }
             }
         }
