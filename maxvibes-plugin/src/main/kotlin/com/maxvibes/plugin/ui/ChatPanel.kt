@@ -9,7 +9,6 @@ import com.maxvibes.domain.model.interaction.ClipboardPhase
 import com.maxvibes.domain.model.interaction.InteractionMode
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.plugin.chat.ChatHistoryService
-import com.maxvibes.plugin.chat.MessageRole
 import com.maxvibes.plugin.service.MaxVibesService
 import com.maxvibes.plugin.service.PromptService
 import com.maxvibes.plugin.settings.MaxVibesSettings
@@ -27,6 +26,7 @@ import com.maxvibes.plugin.service.MaxVibesLogger
 import com.intellij.openapi.vcs.VcsConfiguration
 import com.intellij.ide.DataManager
 import com.intellij.openapi.vcs.VcsDataKeys
+import com.maxvibes.domain.model.chat.MessageRole
 
 class ChatPanel(
     private val project: Project,

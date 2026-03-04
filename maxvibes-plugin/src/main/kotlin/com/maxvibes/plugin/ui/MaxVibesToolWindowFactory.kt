@@ -8,11 +8,11 @@ import com.maxvibes.application.port.output.ChatMessageDTO
 import com.maxvibes.application.port.output.ChatRole
 import com.maxvibes.plugin.chat.ChatHistoryService
 import com.maxvibes.plugin.chat.ChatMessage
-import com.maxvibes.plugin.chat.MessageRole
 import java.awt.CardLayout
 import javax.swing.JOptionPane
 import javax.swing.JPanel
 import com.maxvibes.plugin.service.MaxVibesLogger
+import com.maxvibes.domain.model.chat.MessageRole
 
 // ==================== Factory ====================
 

@@ -9,6 +9,7 @@ import com.intellij.util.xmlb.annotations.XCollection
 import com.maxvibes.plugin.service.MaxVibesLogger
 import java.time.Instant
 import java.util.UUID
+import com.maxvibes.domain.model.chat.MessageRole
 
 /**
  * Сообщение в чате
@@ -35,10 +36,6 @@ class ChatMessage {
         this.content = content
         this.timestamp = timestamp
     }
-}
-
-enum class MessageRole {
-    USER, ASSISTANT, SYSTEM
 }
 
 /**

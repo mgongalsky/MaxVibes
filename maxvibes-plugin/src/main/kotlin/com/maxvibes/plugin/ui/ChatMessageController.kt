@@ -10,10 +10,10 @@ import com.maxvibes.application.port.input.ContextAwareResult
 import com.maxvibes.application.service.ClipboardStepResult
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.plugin.chat.ChatSession
-import com.maxvibes.plugin.chat.MessageRole
 import com.maxvibes.plugin.service.MaxVibesLogger
 import com.maxvibes.plugin.service.MaxVibesService
 import kotlinx.coroutines.runBlocking
+import com.maxvibes.domain.model.chat.MessageRole
 
 interface ChatPanelCallbacks {
     fun appendToChat(text: String)
