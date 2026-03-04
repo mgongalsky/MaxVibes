@@ -10,6 +10,7 @@ import com.maxvibes.plugin.service.MaxVibesLogger
 import java.time.Instant
 import java.util.UUID
 import com.maxvibes.domain.model.chat.MessageRole
+import com.maxvibes.domain.model.chat.TokenUsage
 
 /**
  * Сообщение в чате
@@ -152,6 +153,14 @@ class ChatSession {
         parts += "~\$$costStr"
         return parts.joinToString("  |  ")
     }
+
+    fun toTokenUsage(): TokenUsage = TokenUsage(
+        planningInput = planningInputTokens,
+        planningOutput = planningOutputTokens,
+        chatInput = chatInputTokens,
+        chatOutput = chatOutputTokens
+    )
+
     private fun formatTok(n: Int): String = when {
         n >= 1_000_000 -> "${n / 1_000_000}.${(n % 1_000_000) / 100_000}M"
         n >= 1_000 -> "${n / 1_000}k"
