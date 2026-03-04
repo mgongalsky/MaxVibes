@@ -7,13 +7,17 @@ import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.maxvibes.application.port.input.ContextAwareRequest
 import com.maxvibes.application.port.input.ContextAwareResult
+import com.maxvibes.application.port.output.ChatMessageDTO
+import com.maxvibes.application.port.output.ChatRole
 import com.maxvibes.application.service.ClipboardStepResult
+import com.maxvibes.domain.model.chat.ChatMessage
+import com.maxvibes.domain.model.chat.ChatSession
+import com.maxvibes.domain.model.chat.MessageRole
 import com.maxvibes.domain.model.modification.ModificationResult
-import com.maxvibes.plugin.chat.ChatSession
+import com.maxvibes.plugin.chat.ChatHistoryService
 import com.maxvibes.plugin.service.MaxVibesLogger
 import com.maxvibes.plugin.service.MaxVibesService
 import kotlinx.coroutines.runBlocking
-import com.maxvibes.domain.model.chat.MessageRole
 
 interface ChatPanelCallbacks {
     fun appendToChat(text: String)
@@ -48,13 +52,14 @@ interface ChatPanelCallbacks {
  * Extracted from ChatPanel to separate message flow logic from UI setup.
  * Uses [ChatPanelCallbacks] to communicate UI updates back to the panel.
  *
- * Auto-retry: when LLM response has ModificationResult.Failure entries (e.g. ElementNotFound),
- * the controller automatically sends a follow-up message to LLM with error details,
- * asking for corrected modifications. Limited to [MAX_AUTO_RETRIES] per user message.
+ * Auto-retry: when LLM response has ModificationResult.Failure entries,
+ * the controller automatically sends a follow-up message to LLM with error details.
+ * Limited to [MAX_AUTO_RETRIES] per user message.
  */
 class ChatMessageController(
     private val project: Project,
     private val service: MaxVibesService,
+    private val chatHistory: ChatHistoryService,
     private val callbacks: ChatPanelCallbacks
 ) {
 
@@ -80,12 +85,21 @@ class ChatMessageController(
         }
     }
 
+    private fun ChatMessage.toChatMessageDTO(): ChatMessageDTO = ChatMessageDTO(
+        role = when (role) {
+            MessageRole.USER -> ChatRole.USER
+            MessageRole.ASSISTANT -> ChatRole.ASSISTANT
+            MessageRole.SYSTEM -> ChatRole.SYSTEM
+        },
+        content = content
+    )
+
     // ==================== API Mode ====================
 
     fun sendApiMessage(
         task: String,
         session: ChatSession,
-        history: List<com.maxvibes.application.port.output.ChatMessageDTO>,
+        history: List<ChatMessageDTO>,
         isDryRun: Boolean,
         isPlanOnly: Boolean,
         globalContextFiles: List<String>,
@@ -101,7 +115,7 @@ class ChatMessageController(
     fun sendCheapApiMessage(
         task: String,
         session: ChatSession,
-        history: List<com.maxvibes.application.port.output.ChatMessageDTO>,
+        history: List<ChatMessageDTO>,
         isDryRun: Boolean,
         isPlanOnly: Boolean,
         globalContextFiles: List<String>,
@@ -127,8 +141,10 @@ class ChatMessageController(
 
                 override fun onCancel() {
                     ApplicationManager.getApplication().invokeLater {
-                        session.addMessage(MessageRole.SYSTEM, "Cancelled")
-                        callbacks.appendToChat("⚠️ Cancelled")
+                        chatHistory.saveSession(
+                            session.withMessage(ChatMessage(role = MessageRole.SYSTEM, content = "Cancelled"))
+                        )
+                        callbacks.appendToChat("\u26A0\uFE0F Cancelled")
                         callbacks.setInputEnabled(true)
                         callbacks.setStatus("Cancelled")
                     }
@@ -167,9 +183,10 @@ class ChatMessageController(
 
     private fun handleApiResult(result: ContextAwareResult, session: ChatSession, wasPlanOnly: Boolean = false) {
         callbacks.registerElementPaths(result.modifications)
-        session.addPlanningTokens(result.planningInputTokens, result.planningOutputTokens)
-        session.addChatTokens(result.chatInputTokens, result.chatOutputTokens)
-        callbacks.updateTokenDisplay()
+
+        var updatedSession = session
+            .addPlanningTokens(result.planningInputTokens, result.planningOutputTokens)
+            .addChatTokens(result.chatInputTokens, result.chatOutputTokens)
 
         val failures = result.modifications.filterIsInstance<ModificationResult.Failure>()
 
@@ -188,7 +205,9 @@ class ChatMessageController(
         )
 
         val mainText = result.message
-        session.addMessage(MessageRole.ASSISTANT, mainText)
+        updatedSession = updatedSession.withMessage(ChatMessage(role = MessageRole.ASSISTANT, content = mainText))
+        chatHistory.saveSession(updatedSession)
+        callbacks.updateTokenDisplay()
 
         val tokenInfo = buildTokenInfo(
             result.planningInputTokens, result.planningOutputTokens,
@@ -204,25 +223,24 @@ class ChatMessageController(
 
         result.commitMessage?.let { msg ->
             callbacks.setCommitMessage(msg)
-            callbacks.appendToChat("💬 Commit message set in IDE")
+            callbacks.appendToChat("\uD83D\uDCAC Commit message set in IDE")
         }
 
         if (wasPlanOnly) {
             callbacks.setPlanOnlyMode(false)
         }
 
-        // Auto-retry when there are modification failures
         if (failures.isNotEmpty() && autoRetryCount < MAX_AUTO_RETRIES) {
             val ctx = lastApiContext
             if (ctx != null) {
-                triggerAutoRetry(failures, session, ctx)
-                return // keep input disabled during retry
+                triggerAutoRetry(failures, updatedSession, ctx)
+                return
             }
         }
 
         callbacks.setInputEnabled(true)
         if (failures.isNotEmpty()) {
-            callbacks.setStatus("Done — ${failures.size} modification(s) failed (retry exhausted)")
+            callbacks.setStatus("Done \u2014 ${failures.size} modification(s) failed (retry exhausted)")
         } else {
             callbacks.setStatus(if (result.success) "Ready" else "Errors")
         }
@@ -239,12 +257,18 @@ class ChatMessageController(
                         "freshFiles" to result.freshFileNames.size
                     )
                 )
-                session.addChatTokens(result.estimatedInputTokens, 0)
-                callbacks.updateTokenDisplay()
+                var updatedSession = session.addChatTokens(result.estimatedInputTokens, 0)
 
                 val assistantText = result.assistantMessage
                 if (!assistantText.isNullOrBlank()) {
-                    session.addMessage(MessageRole.ASSISTANT, assistantText)
+                    updatedSession = updatedSession.withMessage(
+                        ChatMessage(role = MessageRole.ASSISTANT, content = assistantText)
+                    )
+                }
+                chatHistory.saveSession(updatedSession)
+                callbacks.updateTokenDisplay()
+
+                if (!assistantText.isNullOrBlank()) {
                     val tokenSummaryParts = mutableListOf<String>()
                     if (result.estimatedInputTokens > 0) tokenSummaryParts += "~${fmt(result.estimatedInputTokens)} tokens"
                     if (result.freshFileNames.isNotEmpty()) tokenSummaryParts += "${result.freshFileNames.size} files"
@@ -259,7 +283,7 @@ class ChatMessageController(
                         result.llmReasoning
                     )
                 } else {
-                    callbacks.appendIconToLastBubble("📋")
+                    callbacks.appendIconToLastBubble("\uD83D\uDCCB")
                 }
 
                 callbacks.appendToChat(result.statusMessage)
@@ -280,43 +304,65 @@ class ChatMessageController(
                     )
                 )
                 callbacks.registerElementPaths(result.modifications)
-                session.addChatTokens(0, result.outputTokens)
-                callbacks.updateTokenDisplay()
-                val text = result.message.trim().ifBlank { "Done." }
-                session.addMessage(MessageRole.ASSISTANT, text)
-                val tokenInfo = if (result.outputTokens > 0) "\u2193${fmt(result.outputTokens)}" else null
-                callbacks.addAssistantMessageBubble(
-                    callbacks.formatMarkdown(text), tokenInfo, result.modifications, emptyList(), result.llmReasoning
-                )
-                result.commitMessage?.let { msg ->
-                    callbacks.setCommitMessage(msg)
-                    callbacks.appendToChat("💬 Commit message set in IDE")
-                }
 
-                // When clipboard mode has failures — show error details and set waiting state
-                // so user can paste a corrected response
+                var updatedSession = session.addChatTokens(0, result.outputTokens)
+                val text = result.message.trim().ifBlank { "Done." }
+                updatedSession = updatedSession.withMessage(ChatMessage(role = MessageRole.ASSISTANT, content = text))
+
+                val tokenInfo = if (result.outputTokens > 0) "\u2193${fmt(result.outputTokens)}" else null
+
                 if (failures.isNotEmpty()) {
                     val errorSummary = buildErrorSummary(failures)
                     val feedbackMsg = buildString {
-                        appendLine("❌ ${failures.size} modification(s) failed to apply:")
+                        appendLine("\u274C ${failures.size} modification(s) failed to apply:")
                         appendLine(errorSummary)
                         appendLine()
-                        appendLine("📋 A retry prompt has been prepared. Paste it into your LLM and paste the response back here.")
+                        appendLine("\uD83D\uDCCB A retry prompt has been prepared. Paste it into your LLM and paste the response back here.")
                     }
-                    session.addMessage(MessageRole.SYSTEM, feedbackMsg)
+                    updatedSession = updatedSession.withMessage(
+                        ChatMessage(role = MessageRole.SYSTEM, content = feedbackMsg)
+                    )
+                    chatHistory.saveSession(updatedSession)
+                    callbacks.updateTokenDisplay()
+
+                    callbacks.addAssistantMessageBubble(
+                        callbacks.formatMarkdown(text),
+                        tokenInfo,
+                        result.modifications,
+                        emptyList(),
+                        result.llmReasoning
+                    )
+                    result.commitMessage?.let { msg ->
+                        callbacks.setCommitMessage(msg)
+                        callbacks.appendToChat("\uD83D\uDCAC Commit message set in IDE")
+                    }
                     callbacks.appendToChat(feedbackMsg)
 
-                    // Prepare retry prompt and copy to clipboard
                     val retryTask = buildClipboardRetryTask(failures)
                     copyToClipboard(retryTask)
 
                     callbacks.setInputEnabled(true)
                     callbacks.updateModeIndicator()
-                    callbacks.setStatus("⚠️ ${failures.size} failed — retry prompt copied, paste LLM response")
+                    callbacks.setStatus("\u26A0\uFE0F ${failures.size} failed \u2014 retry prompt copied, paste LLM response")
                 } else {
+                    chatHistory.saveSession(updatedSession)
+                    callbacks.updateTokenDisplay()
+
+                    callbacks.addAssistantMessageBubble(
+                        callbacks.formatMarkdown(text),
+                        tokenInfo,
+                        result.modifications,
+                        emptyList(),
+                        result.llmReasoning
+                    )
+                    result.commitMessage?.let { msg ->
+                        callbacks.setCommitMessage(msg)
+                        callbacks.appendToChat("\uD83D\uDCAC Commit message set in IDE")
+                    }
+
                     callbacks.setInputEnabled(true)
                     callbacks.updateModeIndicator()
-                    val hint = if (service.clipboardService.hasActiveSession()) " • Session active" else ""
+                    val hint = if (service.clipboardService.hasActiveSession()) " \u2022 Session active" else ""
                     callbacks.setStatus((if (result.success) "Ready" else "Errors") + hint)
                     callbacks.updateBreadcrumb()
                 }
@@ -324,8 +370,10 @@ class ChatMessageController(
 
             is ClipboardStepResult.Error -> {
                 MaxVibesLogger.warn("Controller", "clipboard error", data = mapOf("msg" to result.message))
-                session.addMessage(MessageRole.SYSTEM, "Error: ${result.message}")
-                callbacks.appendToChat("❌ ${result.message}")
+                chatHistory.saveSession(
+                    session.withMessage(ChatMessage(role = MessageRole.SYSTEM, content = "Error: ${result.message}"))
+                )
+                callbacks.appendToChat("\u274C ${result.message}")
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
                 callbacks.setStatus("Error")
@@ -349,16 +397,18 @@ class ChatMessageController(
             data = mapOf("attempt" to autoRetryCount, "failures" to failures.size)
         )
 
-        val feedbackMsg = "🔄 Auto-fix: ${failures.size} modification(s) failed — asking LLM to correct:\n$errorSummary"
+        val feedbackMsg =
+            "\uD83D\uDD04 Auto-fix: ${failures.size} modification(s) failed \u2014 asking LLM to correct:\n$errorSummary"
         callbacks.appendToChat(feedbackMsg)
         callbacks.setStatus("Auto-fixing...")
 
         val history = session.messages.map { it.toChatMessageDTO() }
-        session.addMessage(MessageRole.USER, retryTask)
+        val retrySession = session.withMessage(ChatMessage(role = MessageRole.USER, content = retryTask))
+        chatHistory.saveSession(retrySession)
 
         runApiRequest(
             task = retryTask,
-            session = session,
+            session = retrySession,
             history = history,
             isDryRun = ctx.isDryRun,
             isPlanOnly = false,
@@ -371,7 +421,7 @@ class ChatMessageController(
     private fun runApiRequest(
         task: String,
         session: ChatSession,
-        history: List<com.maxvibes.application.port.output.ChatMessageDTO>,
+        history: List<ChatMessageDTO>,
         isDryRun: Boolean,
         isPlanOnly: Boolean,
         globalContextFiles: List<String>,
@@ -395,8 +445,10 @@ class ChatMessageController(
 
                 override fun onCancel() {
                     ApplicationManager.getApplication().invokeLater {
-                        session.addMessage(MessageRole.SYSTEM, "Cancelled")
-                        callbacks.appendToChat("⚠️ Cancelled")
+                        chatHistory.saveSession(
+                            session.withMessage(ChatMessage(role = MessageRole.SYSTEM, content = "Cancelled"))
+                        )
+                        callbacks.appendToChat("\u26A0\uFE0F Cancelled")
                         callbacks.setInputEnabled(true)
                         callbacks.setStatus("Cancelled")
                         MaxVibesLogger.warn("Controller", "cancelled by user")
@@ -408,7 +460,7 @@ class ChatMessageController(
     // ==================== Helpers ====================
 
     private fun buildErrorSummary(failures: List<ModificationResult.Failure>): String =
-        failures.joinToString("\n") { f -> "  • ${f.error.message}" }
+        failures.joinToString("\n") { f -> "  \u2022 ${f.error.message}" }
 
     private fun buildApiRetryTask(failures: List<ModificationResult.Failure>): String {
         val errorLines = buildErrorSummary(failures)
@@ -419,7 +471,7 @@ $errorLines
 Please provide CORRECTED modifications only for the ones that failed.
 Common causes:
 - Wrong element path (class/function name mismatch or wrong nesting)
-- Element doesn't exist yet — use CREATE_ELEMENT instead of REPLACE_ELEMENT
+- Element doesn't exist yet \u2014 use CREATE_ELEMENT instead of REPLACE_ELEMENT
 - For CREATE_ELEMENT, path must point to parent, not the new element itself
 
 Respond with a JSON containing only the corrected modifications.

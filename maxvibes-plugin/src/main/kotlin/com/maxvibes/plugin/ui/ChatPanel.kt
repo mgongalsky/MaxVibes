@@ -27,6 +27,9 @@ import com.intellij.openapi.vcs.VcsConfiguration
 import com.intellij.ide.DataManager
 import com.intellij.openapi.vcs.VcsDataKeys
 import com.maxvibes.domain.model.chat.MessageRole
+import com.maxvibes.domain.model.chat.ChatMessage
+import com.maxvibes.application.port.output.ChatMessageDTO
+import com.maxvibes.application.port.output.ChatRole
 
 class ChatPanel(
     private val project: Project,
@@ -115,7 +118,7 @@ class ChatPanel(
     private val elementNavRegistry = mutableMapOf<String, String>()
 
     private val messageController: ChatMessageController by lazy {
-        ChatMessageController(project, service, this)
+        ChatMessageController(project, service, chatHistory, this)
     }
 
     init {
@@ -273,7 +276,7 @@ class ChatPanel(
 
     override fun updateTokenDisplay() {
         val session = chatHistory.getActiveSession()
-        tokenLabel.text = session.formatTokenDisplay()
+        tokenLabel.text = session.tokenUsage.formatDisplay()
     }
 
     override fun setCommitMessage(message: String) {
@@ -561,7 +564,7 @@ class ChatPanel(
     }
 
     private fun sendApiMessage(msg: String, trace: String?, errs: String?) {
-        val session = chatHistory.getActiveSession()
+        var session = chatHistory.getActiveSession()
         val isPlanOnly = planOnlyCheckbox.isSelected
         conversationPanel.addUserBubble(msg)
         val fullTask = buildString {
@@ -570,10 +573,11 @@ class ChatPanel(
             if (!errs.isNullOrBlank()) append("\n[attached ide errors]")
             if (isPlanOnly) append("\n[plan-only]")
         }
-        session.addMessage(MessageRole.USER, fullTask)
+        val history = session.messages.map { it.toChatMessageDTO() }
+        session = session.withMessage(ChatMessage(role = MessageRole.USER, content = fullTask))
+        chatHistory.saveSession(session)
         inputArea.text = ""; setInputEnabled(false)
         statusLabel.text = if (isPlanOnly) "Planning..." else "Thinking..."
-        val history = session.messages.dropLast(1).map { it.toChatMessageDTO() }
         messageController.sendApiMessage(
             fullTask, session, history, dryRunCheckbox.isSelected,
             isPlanOnly, chatHistory.getGlobalContextFiles(), errs
@@ -582,13 +586,13 @@ class ChatPanel(
 
     private fun sendClipboardMessage(userInput: String, trace: String?, errs: String?, isPlanOnly: Boolean) {
         val cs = service.clipboardService
-        val session = chatHistory.getActiveSession()
+        var session = chatHistory.getActiveSession()
         val globalContextFiles = chatHistory.getGlobalContextFiles()
         inputArea.text = ""
         when {
             cs.isWaitingForResponse() -> {
-                // Do NOT save[Pasted LLM response] to session — it's a UI-only marker with no value in history
-                conversationPanel.appendIconToLastBubble("📥")
+                // Do NOT save [Pasted LLM response] to session — UI-only marker
+                conversationPanel.appendIconToLastBubble("\uD83D\uDCE5")
                 setInputEnabled(false); statusLabel.text = "Processing..."
                 messageController.runClipboardBg("Processing response...", session) {
                     cs.handlePastedResponse(userInput)
@@ -603,7 +607,8 @@ class ChatPanel(
                     if (!errs.isNullOrBlank()) append("\n[attached ide errors]")
                     if (isPlanOnly) append("\n[plan-only]")
                 }
-                session.addMessage(MessageRole.USER, fullMsg)
+                session = session.withMessage(ChatMessage(role = MessageRole.USER, content = fullMsg))
+                chatHistory.saveSession(session)
                 setInputEnabled(false); statusLabel.text = "Continuing..."
                 messageController.runClipboardBg("Continuing...", session) {
                     cs.continueDialog(userInput, trace, isPlanOnly, errs, globalContextFiles)
@@ -618,10 +623,11 @@ class ChatPanel(
                     if (!errs.isNullOrBlank()) append("\n[attached ide errors]")
                     if (isPlanOnly) append("\n[plan-only]")
                 }
-                session.addMessage(MessageRole.USER, fullMsg)
+                val dtos = session.messages.map { it.toChatMessageDTO() }
+                session = session.withMessage(ChatMessage(role = MessageRole.USER, content = fullMsg))
+                chatHistory.saveSession(session)
                 setInputEnabled(false); statusLabel.text = "Generating JSON..."
                 messageController.runClipboardBg("Generating request...", session) {
-                    val dtos = session.messages.dropLast(1).map { it.toChatMessageDTO() }
                     cs.startTask(userInput, dtos, trace, isPlanOnly, errs, globalContextFiles)
                 }
             }
@@ -629,13 +635,14 @@ class ChatPanel(
     }
 
     private fun sendCheapApiMessage(msg: String, trace: String?, errs: String?) {
-        val session = chatHistory.getActiveSession()
+        var session = chatHistory.getActiveSession()
         val isPlanOnly = planOnlyCheckbox.isSelected
         conversationPanel.addUserBubble(msg)
         val fullTask = ChatMessageController.buildTaskWithContext(msg, trace, errs)
-        session.addMessage(MessageRole.USER, fullTask)
+        val history = session.messages.map { it.toChatMessageDTO() }
+        session = session.withMessage(ChatMessage(role = MessageRole.USER, content = fullTask))
+        chatHistory.saveSession(session)
         inputArea.text = ""; setInputEnabled(false); statusLabel.text = "Thinking (cheap)..."
-        val history = session.messages.dropLast(1).map { it.toChatMessageDTO() }
         service.ensureCheapLLMService()
         messageController.sendCheapApiMessage(
             fullTask, session, history, dryRunCheckbox.isSelected,
@@ -836,4 +843,12 @@ class ChatPanel(
         windowedButton.icon = AllIcons.Actions.MoveToWindow
         windowedButton.toolTipText = if (isFloating) "Dock Tool Window" else "Floating Mode"
     }
+    private fun ChatMessage.toChatMessageDTO() = ChatMessageDTO(
+        role = when (role) {
+            MessageRole.USER -> ChatRole.USER
+            MessageRole.ASSISTANT -> ChatRole.ASSISTANT
+            MessageRole.SYSTEM -> ChatRole.SYSTEM
+        },
+        content = content
+    )
 }

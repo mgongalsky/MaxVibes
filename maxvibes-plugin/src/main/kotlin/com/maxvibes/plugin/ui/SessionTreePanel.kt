@@ -286,7 +286,7 @@ class SessionTreePanel(
             messageCount = node.session.messages.size,
             childCount = node.children.size,
             depth = node.depth,
-            totalTokens = node.session.totalTokens
+            totalTokens = node.session.tokenUsage.total
         )
         val swingNode = DefaultMutableTreeNode(data)
         for (child in node.children) {
