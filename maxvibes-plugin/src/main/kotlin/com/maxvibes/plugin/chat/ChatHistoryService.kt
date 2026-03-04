@@ -6,17 +6,22 @@ import com.intellij.util.xmlb.XmlSerializerUtil
 import com.intellij.util.xmlb.annotations.Attribute
 import com.intellij.util.xmlb.annotations.Tag
 import com.intellij.util.xmlb.annotations.XCollection
+import com.maxvibes.application.port.output.ChatMessageDTO
+import com.maxvibes.application.port.output.ChatRole
+import com.maxvibes.domain.model.chat.ChatMessage
+import com.maxvibes.domain.model.chat.MessageRole
+import com.maxvibes.domain.model.chat.TokenUsage
 import com.maxvibes.plugin.service.MaxVibesLogger
 import java.time.Instant
 import java.util.UUID
-import com.maxvibes.domain.model.chat.MessageRole
-import com.maxvibes.domain.model.chat.TokenUsage
 
 /**
- * Сообщение в чате
+ * XML persistence DTO для сообщения в чате.
+ * Использует IntelliJ XML-аннотации и является мутабельным.
+ * Для работы с чистым кодом используй доменный ChatMessage через toDomain().
  */
 @Tag("message")
-class ChatMessage {
+class XmlChatMessage {
     @Attribute("id")
     var id: String = UUID.randomUUID().toString()
 
@@ -36,6 +41,31 @@ class ChatMessage {
         this.role = role
         this.content = content
         this.timestamp = timestamp
+    }
+
+    fun toDomain(): ChatMessage = ChatMessage(
+        id = id,
+        role = role,
+        content = content,
+        timestamp = timestamp
+    )
+
+    fun toChatMessageDTO(): ChatMessageDTO = ChatMessageDTO(
+        role = when (role) {
+            MessageRole.USER -> ChatRole.USER
+            MessageRole.ASSISTANT -> ChatRole.ASSISTANT
+            MessageRole.SYSTEM -> ChatRole.SYSTEM
+        },
+        content = content
+    )
+
+    companion object {
+        fun fromDomain(msg: ChatMessage) = XmlChatMessage(
+            id = msg.id,
+            role = msg.role,
+            content = msg.content,
+            timestamp = msg.timestamp
+        )
     }
 }
 
@@ -62,7 +92,7 @@ class ChatSession {
     var depth: Int = 0
 
     @XCollection(style = XCollection.Style.v2)
-    var messages: MutableList<ChatMessage> = mutableListOf()
+    var messages: MutableList<XmlChatMessage> = mutableListOf()
 
     @Attribute("createdAt")
     var createdAt: Long = Instant.now().toEpochMilli()
@@ -87,7 +117,7 @@ class ChatSession {
     constructor(
         id: String,
         title: String,
-        messages: MutableList<ChatMessage>,
+        messages: MutableList<XmlChatMessage>,
         createdAt: Long,
         updatedAt: Long,
         parentId: String? = null,
@@ -103,13 +133,13 @@ class ChatSession {
     }
 
     fun addMessage(role: MessageRole, content: String): ChatMessage {
-        val message = ChatMessage(
+        val xmlMsg = XmlChatMessage(
             UUID.randomUUID().toString(),
             role,
             content,
             Instant.now().toEpochMilli()
         )
-        messages.add(message)
+        messages.add(xmlMsg)
         updatedAt = Instant.now().toEpochMilli()
 
         // Auto-title from first user message
@@ -117,24 +147,30 @@ class ChatSession {
             title = content.take(40) + if (content.length > 40) "..." else ""
         }
 
-        return message
+        return xmlMsg.toDomain()
     }
+
+    fun messagesToDomain(): List<ChatMessage> = messages.map { it.toDomain() }
 
     fun clear() {
         messages.clear()
         updatedAt = Instant.now().toEpochMilli()
     }
+
     val totalInputTokens: Int get() = planningInputTokens + chatInputTokens
     val totalOutputTokens: Int get() = planningOutputTokens + chatOutputTokens
     val totalTokens: Int get() = totalInputTokens + totalOutputTokens
+
     fun addPlanningTokens(input: Int, output: Int) {
         planningInputTokens += input
         planningOutputTokens += output
     }
+
     fun addChatTokens(input: Int, output: Int) {
         chatInputTokens += input
         chatOutputTokens += output
     }
+
     fun formatTokenDisplay(
         inputCostPerMillion: Double = 3.0,
         outputCostPerMillion: Double = 15.0
@@ -214,11 +250,13 @@ class ChatHistoryService : PersistentStateComponent<ChatHistoryState> {
     override fun loadState(state: ChatHistoryState) {
         XmlSerializerUtil.copyBean(state, this.state)
         recalculateDepths()
-        MaxVibesLogger.info("ChatHistory", "loadState", mapOf(
-            "sessions" to state.sessions.size,
-            "activeId" to (state.activeSessionId ?: "none"),
-            "contextFiles" to state.globalContextFiles.size
-        ))
+        MaxVibesLogger.info(
+            "ChatHistory", "loadState", mapOf(
+                "sessions" to state.sessions.size,
+                "activeId" to (state.activeSessionId ?: "none"),
+                "contextFiles" to state.globalContextFiles.size
+            )
+        )
     }
 
     // ==================== Basic Operations ====================
@@ -342,10 +380,12 @@ class ChatHistoryService : PersistentStateComponent<ChatHistoryState> {
         state.sessions.add(0, session)
         state.activeSessionId = session.id
         trimOldSessions()
-        MaxVibesLogger.debug("ChatHistory", "createNewSession", mapOf(
-            "id" to session.id,
-            "total" to state.sessions.size
-        ))
+        MaxVibesLogger.debug(
+            "ChatHistory", "createNewSession", mapOf(
+                "id" to session.id,
+                "total" to state.sessions.size
+            )
+        )
         return session
     }
 
