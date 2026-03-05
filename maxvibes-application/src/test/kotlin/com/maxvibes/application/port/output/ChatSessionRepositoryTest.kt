@@ -6,8 +6,9 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.*
 
 /**
- * Проверяем что интерфейс корректен через in-memory реализацию.
- * Это также служит примером как тестировать ChatTreeService на шаге 7.
+ * In-memory реализация ChatSessionRepository для тестов.
+ * Используется здесь для контрактных тестов и будет переиспользована на шаге 7
+ * для тестирования ChatTreeService.
  */
 class InMemoryChatSessionRepository : ChatSessionRepository {
     private val sessions = mutableMapOf<String, ChatSession>()
