@@ -203,21 +203,9 @@ class ChatHistoryService : PersistentStateComponent<ChatHistoryState>, ChatSessi
     }
 
     override fun deleteSession(sessionId: String) {
-        val session = state.sessions.find { it.id == sessionId } ?: return
-        val parentId = session.parentId
-        val children = state.sessions.filter { it.parentId == sessionId }
-        for (child in children) {
-            child.parentId = parentId
-            child.depth = parentId?.let { pid ->
-                state.sessions.find { it.id == pid }?.depth?.plus(1)
-            } ?: 0
-            recalculateChildDepths(child.id)
-        }
         state.sessions.removeIf { it.id == sessionId }
         if (state.activeSessionId == sessionId) {
-            state.activeSessionId = parentId
-                ?: children.firstOrNull()?.id
-                        ?: state.sessions.firstOrNull()?.id
+            state.activeSessionId = state.sessions.firstOrNull()?.id
         }
     }
 
