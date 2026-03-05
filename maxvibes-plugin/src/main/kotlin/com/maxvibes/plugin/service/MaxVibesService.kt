@@ -27,6 +27,8 @@ import com.maxvibes.plugin.settings.MaxVibesSettings
 import com.maxvibes.shared.result.Result
 import com.maxvibes.application.port.output.IdeErrorsPort
 import com.maxvibes.adapter.psi.context.IntellijIdeErrorsAdapter
+import com.maxvibes.application.service.ChatTreeService
+import com.maxvibes.plugin.chat.ChatHistoryService
 
 /**
  * Main service for MaxVibes plugin.
@@ -257,6 +259,12 @@ class MaxVibesService(private val project: Project) {
     }
 
     val ideErrorsPort: IdeErrorsPort by lazy { IntellijIdeErrorsAdapter(project) }
+    val chatSessionRepository: ChatSessionRepository by lazy {
+        ChatHistoryService.getInstance(project)
+    }
+    val chatTreeService: ChatTreeService by lazy {
+        ChatTreeService(chatSessionRepository)
+    }
 
     companion object {
         fun getInstance(project: Project): MaxVibesService {

@@ -1,5 +1,6 @@
 package com.maxvibes.application.service
 
+
 import com.maxvibes.application.port.output.InMemoryChatSessionRepository
 import com.maxvibes.domain.model.chat.MessageRole
 import org.junit.jupiter.api.BeforeEach
@@ -99,7 +100,7 @@ class ChatTreeServiceTest {
         val root = service.createNewSession()
         val child1 = service.createBranch(root.id)!!
         val child2 = service.createBranch(root.id)!!
-        service.createBranch(child1.id)!!  // grandchild
+        service.createBranch(child1.id)!!
 
         val children = service.getChildren(root.id)
         assertEquals(2, children.size)
