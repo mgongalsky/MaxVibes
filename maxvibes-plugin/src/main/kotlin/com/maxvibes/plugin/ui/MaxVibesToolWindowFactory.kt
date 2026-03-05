@@ -6,13 +6,13 @@ import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.ui.content.ContentFactory
 import com.maxvibes.application.port.output.ChatMessageDTO
 import com.maxvibes.application.port.output.ChatRole
-import com.maxvibes.plugin.chat.ChatHistoryService
-import java.awt.CardLayout
-import javax.swing.JOptionPane
-import javax.swing.JPanel
+import com.maxvibes.plugin.service.MaxVibesService
 import com.maxvibes.plugin.service.MaxVibesLogger
 import com.maxvibes.domain.model.chat.MessageRole
 import com.maxvibes.domain.model.chat.ChatMessage
+import java.awt.CardLayout
+import javax.swing.JOptionPane
+import javax.swing.JPanel
 
 // ==================== Factory ====================
 
@@ -31,14 +31,14 @@ private const val CARD_SESSIONS = "sessions"
 
 class MaxVibesToolPanel(private val project: Project, private val toolWindow: ToolWindow) : JPanel(CardLayout()) {
 
+    private val chatTreeService get() = MaxVibesService.getInstance(project).chatTreeService
+
     private val chatPanel = ChatPanel(project, toolWindow, onShowSessions = { showSessions() })
     private val sessionTreePanel: SessionTreePanel
 
-    private val chatHistory: ChatHistoryService by lazy { ChatHistoryService.getInstance(project) }
-
     init {
         sessionTreePanel = SessionTreePanel(
-            chatHistory = chatHistory,
+            chatTreeService = chatTreeService,
             onOpenSession = { id -> openSession(id) },
             onNewRoot = { createNewRoot() },
             onNewBranch = { parentId -> createBranch(parentId) },
@@ -68,20 +68,20 @@ class MaxVibesToolPanel(private val project: Project, private val toolWindow: To
     }
 
     private fun openSession(sessionId: String) {
-        chatHistory.setActiveSession(sessionId)
+        chatTreeService.setActiveSession(sessionId)
         chatPanel.loadCurrentSession()
         showChat()
     }
 
     private fun createNewRoot() {
         chatPanel.resetClipboard()
-        chatHistory.createNewSession()
+        chatTreeService.createNewSession()
         chatPanel.loadCurrentSession()
         showChat()
     }
 
     private fun createBranch(parentId: String) {
-        val parent = chatHistory.getSessionById(parentId) ?: return
+        val parent = chatTreeService.getSessionById(parentId) ?: return
         val title = JOptionPane.showInputDialog(
             this,
             "Name for the new branch:",
@@ -92,7 +92,7 @@ class MaxVibesToolPanel(private val project: Project, private val toolWindow: To
         ) as? String ?: return
 
         chatPanel.resetClipboard()
-        val branch = chatHistory.createBranch(parentId, title)
+        val branch = chatTreeService.createBranch(parentId, title)
         if (branch != null) {
             chatPanel.loadCurrentSession()
             showChat()
@@ -100,13 +100,12 @@ class MaxVibesToolPanel(private val project: Project, private val toolWindow: To
     }
 
     private fun deleteSession(sessionId: String) {
-        val session = chatHistory.getSessionById(sessionId) ?: return
+        val session = chatTreeService.getSessionById(sessionId) ?: return
         chatPanel.resetClipboard()
-        chatHistory.deleteSessionCascade(sessionId)
-        if (chatHistory.getAllSessions().isEmpty()) chatHistory.createNewSession()
+        chatTreeService.deleteSessionCascade(sessionId)
+        if (chatTreeService.getAllSessions().isEmpty()) chatTreeService.createNewSession()
         sessionTreePanel.refresh()
-        // Если удалили активную сессию — перезагружаем chat
-        if (chatHistory.getActiveSession().id != session.id) {
+        if (chatTreeService.getActiveSession().id != session.id) {
             chatPanel.loadCurrentSession()
         }
     }

@@ -14,7 +14,6 @@ import com.maxvibes.domain.model.chat.ChatMessage
 import com.maxvibes.domain.model.chat.ChatSession
 import com.maxvibes.domain.model.chat.MessageRole
 import com.maxvibes.domain.model.modification.ModificationResult
-import com.maxvibes.plugin.chat.ChatHistoryService
 import com.maxvibes.plugin.service.MaxVibesLogger
 import com.maxvibes.plugin.service.MaxVibesService
 import kotlinx.coroutines.runBlocking
@@ -59,9 +58,10 @@ interface ChatPanelCallbacks {
 class ChatMessageController(
     private val project: Project,
     private val service: MaxVibesService,
-    private val chatHistory: ChatHistoryService,
     private val callbacks: ChatPanelCallbacks
 ) {
+
+    private val chatTreeService get() = service.chatTreeService
 
     private data class ApiRequestContext(
         val isDryRun: Boolean,
@@ -141,9 +141,7 @@ class ChatMessageController(
 
                 override fun onCancel() {
                     ApplicationManager.getApplication().invokeLater {
-                        chatHistory.saveSession(
-                            session.withMessage(ChatMessage(role = MessageRole.SYSTEM, content = "Cancelled"))
-                        )
+                        chatTreeService.addMessage(session.id, MessageRole.SYSTEM, "Cancelled")
                         callbacks.appendToChat("\u26A0\uFE0F Cancelled")
                         callbacks.setInputEnabled(true)
                         callbacks.setStatus("Cancelled")
@@ -184,9 +182,10 @@ class ChatMessageController(
     private fun handleApiResult(result: ContextAwareResult, session: ChatSession, wasPlanOnly: Boolean = false) {
         callbacks.registerElementPaths(result.modifications)
 
-        var updatedSession = session
-            .addPlanningTokens(result.planningInputTokens, result.planningOutputTokens)
-            .addChatTokens(result.chatInputTokens, result.chatOutputTokens)
+        var updatedSession =
+            chatTreeService.addPlanningTokens(session.id, result.planningInputTokens, result.planningOutputTokens)
+        updatedSession =
+            chatTreeService.addChatTokens(updatedSession.id, result.chatInputTokens, result.chatOutputTokens)
 
         val failures = result.modifications.filterIsInstance<ModificationResult.Failure>()
 
@@ -205,8 +204,7 @@ class ChatMessageController(
         )
 
         val mainText = result.message
-        updatedSession = updatedSession.withMessage(ChatMessage(role = MessageRole.ASSISTANT, content = mainText))
-        chatHistory.saveSession(updatedSession)
+        updatedSession = chatTreeService.addMessage(updatedSession.id, MessageRole.ASSISTANT, mainText)
         callbacks.updateTokenDisplay()
 
         val tokenInfo = buildTokenInfo(
@@ -257,15 +255,12 @@ class ChatMessageController(
                         "freshFiles" to result.freshFileNames.size
                     )
                 )
-                var updatedSession = session.addChatTokens(result.estimatedInputTokens, 0)
+                var updatedSession = chatTreeService.addChatTokens(session.id, result.estimatedInputTokens, 0)
 
                 val assistantText = result.assistantMessage
                 if (!assistantText.isNullOrBlank()) {
-                    updatedSession = updatedSession.withMessage(
-                        ChatMessage(role = MessageRole.ASSISTANT, content = assistantText)
-                    )
+                    updatedSession = chatTreeService.addMessage(updatedSession.id, MessageRole.ASSISTANT, assistantText)
                 }
-                chatHistory.saveSession(updatedSession)
                 callbacks.updateTokenDisplay()
 
                 if (!assistantText.isNullOrBlank()) {
@@ -305,9 +300,9 @@ class ChatMessageController(
                 )
                 callbacks.registerElementPaths(result.modifications)
 
-                var updatedSession = session.addChatTokens(0, result.outputTokens)
+                var updatedSession = chatTreeService.addChatTokens(session.id, 0, result.outputTokens)
                 val text = result.message.trim().ifBlank { "Done." }
-                updatedSession = updatedSession.withMessage(ChatMessage(role = MessageRole.ASSISTANT, content = text))
+                updatedSession = chatTreeService.addMessage(updatedSession.id, MessageRole.ASSISTANT, text)
 
                 val tokenInfo = if (result.outputTokens > 0) "\u2193${fmt(result.outputTokens)}" else null
 
@@ -319,10 +314,7 @@ class ChatMessageController(
                         appendLine()
                         appendLine("\uD83D\uDCCB A retry prompt has been prepared. Paste it into your LLM and paste the response back here.")
                     }
-                    updatedSession = updatedSession.withMessage(
-                        ChatMessage(role = MessageRole.SYSTEM, content = feedbackMsg)
-                    )
-                    chatHistory.saveSession(updatedSession)
+                    chatTreeService.addMessage(updatedSession.id, MessageRole.SYSTEM, feedbackMsg)
                     callbacks.updateTokenDisplay()
 
                     callbacks.addAssistantMessageBubble(
@@ -345,7 +337,6 @@ class ChatMessageController(
                     callbacks.updateModeIndicator()
                     callbacks.setStatus("\u26A0\uFE0F ${failures.size} failed \u2014 retry prompt copied, paste LLM response")
                 } else {
-                    chatHistory.saveSession(updatedSession)
                     callbacks.updateTokenDisplay()
 
                     callbacks.addAssistantMessageBubble(
@@ -370,9 +361,7 @@ class ChatMessageController(
 
             is ClipboardStepResult.Error -> {
                 MaxVibesLogger.warn("Controller", "clipboard error", data = mapOf("msg" to result.message))
-                chatHistory.saveSession(
-                    session.withMessage(ChatMessage(role = MessageRole.SYSTEM, content = "Error: ${result.message}"))
-                )
+                chatTreeService.addMessage(session.id, MessageRole.SYSTEM, "Error: ${result.message}")
                 callbacks.appendToChat("\u274C ${result.message}")
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
@@ -403,8 +392,7 @@ class ChatMessageController(
         callbacks.setStatus("Auto-fixing...")
 
         val history = session.messages.map { it.toChatMessageDTO() }
-        val retrySession = session.withMessage(ChatMessage(role = MessageRole.USER, content = retryTask))
-        chatHistory.saveSession(retrySession)
+        val retrySession = chatTreeService.addMessage(session.id, MessageRole.USER, retryTask)
 
         runApiRequest(
             task = retryTask,
@@ -445,9 +433,7 @@ class ChatMessageController(
 
                 override fun onCancel() {
                     ApplicationManager.getApplication().invokeLater {
-                        chatHistory.saveSession(
-                            session.withMessage(ChatMessage(role = MessageRole.SYSTEM, content = "Cancelled"))
-                        )
+                        chatTreeService.addMessage(session.id, MessageRole.SYSTEM, "Cancelled")
                         callbacks.appendToChat("\u26A0\uFE0F Cancelled")
                         callbacks.setInputEnabled(true)
                         callbacks.setStatus("Cancelled")

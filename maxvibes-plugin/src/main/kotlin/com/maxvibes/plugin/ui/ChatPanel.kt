@@ -8,7 +8,6 @@ import com.intellij.util.ui.JBUI
 import com.maxvibes.domain.model.interaction.ClipboardPhase
 import com.maxvibes.domain.model.interaction.InteractionMode
 import com.maxvibes.domain.model.modification.ModificationResult
-import com.maxvibes.plugin.chat.ChatHistoryService
 import com.maxvibes.plugin.service.MaxVibesService
 import com.maxvibes.plugin.service.PromptService
 import com.maxvibes.plugin.settings.MaxVibesSettings
@@ -53,31 +52,31 @@ class ChatPanel(
     }
 
     private val dryRunCheckbox = JBCheckBox("Dry run").apply { toolTipText = "Show plan without applying changes" }
-    private val planOnlyCheckbox = JBCheckBox("💬 Plan").apply { toolTipText = "Plan-only mode" }
+    private val planOnlyCheckbox = JBCheckBox("\uD83D\uDCAC Plan").apply { toolTipText = "Plan-only mode" }
     private val copyJsonButton =
-        JButton("📋 Copy JSON").apply { toolTipText = "Re-copy last generated JSON"; isVisible = false }
+        JButton("\uD83D\uDCCB Copy JSON").apply { toolTipText = "Re-copy last generated JSON"; isVisible = false }
 
-    private val attachErrorsButton = JButton("🐞 Errors").apply {
+    private val attachErrorsButton = JButton("\uD83D\uDC1E Errors").apply {
         toolTipText = "Attach IDE errors from open files"; font = font.deriveFont(11f)
     }
     private val errorsIndicator = JBLabel("").apply {
         foreground = JBColor(Color(0xD32F2F), Color(0xEF5350)); font = font.deriveFont(Font.BOLD, 11f); isVisible =
         false
     }
-    private val clearErrorsButton = JButton("✕").apply {
+    private val clearErrorsButton = JButton("\u2715").apply {
         toolTipText = "Remove attached errors"; font = font.deriveFont(9f); preferredSize =
         Dimension(20, 20); isVisible = false
     }
     private var attachedErrors: String? = null
 
-    private val attachTraceButton = JButton("📎 Trace").apply {
+    private val attachTraceButton = JButton("\uD83D\uDCCE Trace").apply {
         toolTipText = "Paste error/stacktrace/logs (Ctrl+Shift+V)"; font = font.deriveFont(11f)
     }
     private val traceIndicator = JBLabel("").apply {
         foreground = JBColor(Color(0xFF9800), Color(0xFFB74D)); font = font.deriveFont(Font.BOLD, 11f); isVisible =
         false
     }
-    private val clearTraceButton = JButton("✕").apply {
+    private val clearTraceButton = JButton("\u2715").apply {
         toolTipText = "Remove attached trace"; font = font.deriveFont(9f); preferredSize =
         Dimension(20, 20); isVisible = false
     }
@@ -94,13 +93,16 @@ class ChatPanel(
     }
     private val breadcrumbPanel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply { background = JBColor.background() }
 
-    private val sessionsButton = JButton("📂 Sessions").apply { font = font.deriveFont(11f); isFocusPainted = false }
-    private val branchButton = JButton("⑂ Branch").apply { font = font.deriveFont(11f); isFocusPainted = false }
+    private val sessionsButton =
+        JButton("\uD83D\uDCC2 Sessions").apply { font = font.deriveFont(11f); isFocusPainted = false }
+    private val branchButton = JButton("\u2442 Branch").apply { font = font.deriveFont(11f); isFocusPainted = false }
     private val newChatButton = JButton("+ New").apply { font = font.deriveFont(11f); isFocusPainted = false }
-    private val deleteButton = JButton("🗑 Del").apply { font = font.deriveFont(11f); isFocusPainted = false }
-    private val promptsButton = JButton("⚙").apply { toolTipText = "Edit prompts"; font = font.deriveFont(11f) }
-    private val contextFilesButton = JButton("📎 Ctx").apply { font = font.deriveFont(11f); isFocusPainted = false }
-    private val claudeInstrButton = JButton("📋").apply { font = font.deriveFont(11f); isFocusPainted = false }
+    private val deleteButton = JButton("\uD83D\uDDD1 Del").apply { font = font.deriveFont(11f); isFocusPainted = false }
+    private val promptsButton = JButton("\u2699").apply { toolTipText = "Edit prompts"; font = font.deriveFont(11f) }
+    private val contextFilesButton =
+        JButton("\uD83D\uDCCE Ctx").apply { font = font.deriveFont(11f); isFocusPainted = false }
+    private val claudeInstrButton =
+        JButton("\uD83D\uDCCB").apply { font = font.deriveFont(11f); isFocusPainted = false }
     private val maximizeButton = JButton(AllIcons.General.ExpandComponent).apply {
         toolTipText = "Maximize / Restore"; font = font.deriveFont(11f); isFocusPainted = false
     }
@@ -109,7 +111,7 @@ class ChatPanel(
     }
 
     private val service: MaxVibesService by lazy { MaxVibesService.getInstance(project) }
-    private val chatHistory: ChatHistoryService by lazy { ChatHistoryService.getInstance(project) }
+    private val chatTreeService get() = service.chatTreeService
     private val promptService: PromptService by lazy { PromptService.getInstance(project) }
     private val settings: MaxVibesSettings by lazy { MaxVibesSettings.getInstance() }
 
@@ -118,7 +120,7 @@ class ChatPanel(
     private val elementNavRegistry = mutableMapOf<String, String>()
 
     private val messageController: ChatMessageController by lazy {
-        ChatMessageController(project, service, chatHistory, this)
+        ChatMessageController(project, service, this)
     }
 
     init {
@@ -129,8 +131,8 @@ class ChatPanel(
     override fun appendToChat(text: String) {
         val t = text.trim()
         if (t.isBlank()) return
-        if (t.all { it == '─' || it == '═' || it == '━' || it == '-' }) return
-        if (t.contains("Paste this into") || t.contains("JSON copied") || t.startsWith("📋")) return
+        if (t.all { it == '\u2500' || it == '\u2550' || it == '\u2501' || it == '-' }) return
+        if (t.contains("Paste this into") || t.contains("JSON copied") || t.startsWith("\uD83D\uDCCB")) return
         conversationPanel.addSystemBubble(t)
     }
 
@@ -192,22 +194,22 @@ class ChatPanel(
                     cs.isWaitingForResponse() -> {
                         val phase = cs.getCurrentPhase()
                         modeIndicator.text = when (phase) {
-                            ClipboardPhase.PLANNING -> "⏳ Paste response (planning)"
-                            ClipboardPhase.CHAT -> "⏳ Paste response (chat)"
-                            else -> "⏳ Paste response"
+                            ClipboardPhase.PLANNING -> "\u23F3 Paste response (planning)"
+                            ClipboardPhase.CHAT -> "\u23F3 Paste response (chat)"
+                            else -> "\u23F3 Paste response"
                         }
                         modeIndicator.isVisible = true; sendButton.text = "Paste"
                         copyJsonButton.isVisible = true
                     }
 
                     cs.hasActiveSession() -> {
-                        modeIndicator.text = "📋 Active"
+                        modeIndicator.text = "\uD83D\uDCCB Active"
                         modeIndicator.isVisible = true; sendButton.text = "Send / Paste"
                         copyJsonButton.isVisible = false
                     }
 
                     else -> {
-                        modeIndicator.text = "📋"
+                        modeIndicator.text = "\uD83D\uDCCB"
                         modeIndicator.isVisible = true; sendButton.text = "Generate"
                         copyJsonButton.isVisible = false
                     }
@@ -216,7 +218,7 @@ class ChatPanel(
             }
 
             InteractionMode.CHEAP_API -> {
-                modeIndicator.text = "💰"; modeIndicator.isVisible = true
+                modeIndicator.text = "\uD83D\uDCB0"; modeIndicator.isVisible = true
                 sendButton.text = "Send"; dryRunCheckbox.isVisible = true
                 copyJsonButton.isVisible = false
             }
@@ -225,13 +227,13 @@ class ChatPanel(
 
     override fun updateBreadcrumb() {
         breadcrumbPanel.removeAll()
-        val session = chatHistory.getActiveSession()
-        val path = chatHistory.getSessionPath(session.id)
+        val session = chatTreeService.getActiveSession()
+        val path = chatTreeService.getSessionPath(session.id)
 
         for ((i, s) in path.withIndex()) {
             val isLast = i == path.size - 1
             if (i > 0) {
-                breadcrumbPanel.add(JBLabel(" › ").apply {
+                breadcrumbPanel.add(JBLabel(" \u203A ").apply {
                     foreground = JBColor.GRAY; font = font.deriveFont(11f)
                 })
             }
@@ -257,7 +259,7 @@ class ChatPanel(
                 val sid = s.id
                 label.addMouseListener(object : MouseAdapter() {
                     override fun mouseClicked(e: MouseEvent) {
-                        chatHistory.setActiveSession(sid); loadCurrentSession()
+                        chatTreeService.setActiveSession(sid); loadCurrentSession()
                     }
                 })
                 breadcrumbPanel.add(label)
@@ -275,19 +277,16 @@ class ChatPanel(
     }
 
     override fun updateTokenDisplay() {
-        val session = chatHistory.getActiveSession()
+        val session = chatTreeService.getActiveSession()
         tokenLabel.text = session.tokenUsage.formatDisplay()
     }
 
     override fun setCommitMessage(message: String) {
         try {
-            // Fallback: save to VCS history so it appears next time dialog opens
             VcsConfiguration.getInstance(project).saveCommitMessage(message)
 
-            // Try to inject into already-open commit UI via DataManager + reflection
-            // (avoids direct dependency on CommitMessageI which may not be in classpath)
             fun tryInject(component: java.awt.Component): Boolean {
-                val dataContext = com.intellij.ide.DataManager.getInstance().getDataContext(component)
+                val dataContext = DataManager.getInstance().getDataContext(component)
                 val control = dataContext.getData(VcsDataKeys.COMMIT_MESSAGE_CONTROL) ?: return false
                 return try {
                     control.javaClass.getMethod("setCommitMessage", String::class.java).invoke(control, message)
@@ -303,7 +302,7 @@ class ChatPanel(
                 return
             }
 
-            val commitTw = com.intellij.openapi.wm.ToolWindowManager.getInstance(project).getToolWindow("Commit")
+            val commitTw = ToolWindowManager.getInstance(project).getToolWindow("Commit")
             val contentComponent = commitTw?.takeIf { it.isVisible }?.contentManager?.selectedContent?.component
             if (contentComponent != null && tryInject(contentComponent)) {
                 MaxVibesLogger.info(
@@ -333,7 +332,7 @@ class ChatPanel(
     }
 
     fun loadCurrentSession() {
-        val session = chatHistory.getActiveSession()
+        val session = chatTreeService.getActiveSession()
         conversationPanel.clearMessages()
         elementNavRegistry.clear()
         updateBreadcrumb(); updateModeIndicator(); updateContextIndicator(); updateTokenDisplay(); updateToolWindowIcons()
@@ -341,17 +340,15 @@ class ChatPanel(
         if (session.messages.isEmpty()) {
             showWelcome()
         } else {
-            val path = chatHistory.getSessionPath(session.id)
+            val path = chatTreeService.getSessionPath(session.id)
             if (path.size > 1) {
-                val chain = path.dropLast(1).joinToString(" › ") { it.title.take(25) }
-                conversationPanel.addSystemBubble("└ Branch of: $chain")
+                val chain = path.dropLast(1).joinToString(" \u203A ") { it.title.take(25) }
+                conversationPanel.addSystemBubble("\u2514 Branch of: $chain")
             }
             session.messages.forEach { msg ->
                 when (msg.role) {
                     MessageRole.USER -> {
-                        // Skip pure clipboard-paste markers — they have no meaningful display content
                         if (msg.content.trim() == "[Pasted LLM response]") return@forEach
-                        // Strip UI-only annotations that were appended for LLM context but clutter the UI
                         val displayText = msg.content
                             .replace(Regex("\\n\\[trace: \\d+ lines]"), "")
                             .replace(Regex("\\n\\[attached ide errors]"), "")
@@ -472,18 +469,18 @@ class ChatPanel(
         sessionsButton.addActionListener { onShowSessions() }
 
         newChatButton.addActionListener {
-            resetClipboard(); chatHistory.createNewSession(); clearAttachedTrace(); clearAttachedErrors()
+            resetClipboard(); chatTreeService.createNewSession(); clearAttachedTrace(); clearAttachedErrors()
             loadCurrentSession(); updateModeIndicator(); statusLabel.text = "New dialog"
         }
 
         branchButton.addActionListener {
-            val active = chatHistory.getActiveSession()
+            val active = chatTreeService.getActiveSession()
             val title = JOptionPane.showInputDialog(
                 this, "Name for the new branch:", "New Branch", JOptionPane.PLAIN_MESSAGE,
                 null, null, "Branch: ${active.title.take(25)}"
             ) as? String ?: return@addActionListener
             resetClipboard()
-            val branch = chatHistory.createBranch(active.id, title)
+            val branch = chatTreeService.createBranch(active.id, title)
             if (branch != null) {
                 clearAttachedTrace(); clearAttachedErrors(); loadCurrentSession(); updateModeIndicator()
                 statusLabel.text = "Branch: ${branch.title}"
@@ -494,9 +491,9 @@ class ChatPanel(
         promptsButton.addActionListener { promptService.openOrCreatePrompts(); statusLabel.text = "Prompts opened" }
 
         contextFilesButton.addActionListener {
-            val result = ChatDialogsHelper.showContextFilesDialog(this, project, chatHistory)
+            val result = ChatDialogsHelper.showContextFilesDialog(this, project, chatTreeService)
             if (result != null) {
-                chatHistory.setGlobalContextFiles(result)
+                chatTreeService.setGlobalContextFiles(result)
                 updateContextIndicator(); statusLabel.text = "Context files: ${result.size}"
             }
         }
@@ -549,13 +546,15 @@ class ChatPanel(
         val trace = attachedTrace; clearAttachedTrace()
         val errs = attachedErrors; clearAttachedErrors()
         val isPlanOnly = planOnlyCheckbox.isSelected
-        MaxVibesLogger.info("ChatPanel", "sendMessage", mapOf(
-            "mode" to currentMode.name,
-            "msgLen" to userInput.length,
-            "isPlanOnly" to isPlanOnly,
-            "hasTrace" to (trace != null),
-            "hasErrors" to (errs != null)
-        ))
+        MaxVibesLogger.info(
+            "ChatPanel", "sendMessage", mapOf(
+                "mode" to currentMode.name,
+                "msgLen" to userInput.length,
+                "isPlanOnly" to isPlanOnly,
+                "hasTrace" to (trace != null),
+                "hasErrors" to (errs != null)
+            )
+        )
         when (currentMode) {
             InteractionMode.API -> sendApiMessage(userInput, trace, errs)
             InteractionMode.CLIPBOARD -> sendClipboardMessage(userInput, trace, errs, isPlanOnly)
@@ -564,7 +563,7 @@ class ChatPanel(
     }
 
     private fun sendApiMessage(msg: String, trace: String?, errs: String?) {
-        var session = chatHistory.getActiveSession()
+        var session = chatTreeService.getActiveSession()
         val isPlanOnly = planOnlyCheckbox.isSelected
         conversationPanel.addUserBubble(msg)
         val fullTask = buildString {
@@ -574,24 +573,22 @@ class ChatPanel(
             if (isPlanOnly) append("\n[plan-only]")
         }
         val history = session.messages.map { it.toChatMessageDTO() }
-        session = session.withMessage(ChatMessage(role = MessageRole.USER, content = fullTask))
-        chatHistory.saveSession(session)
+        session = chatTreeService.addMessage(session.id, MessageRole.USER, fullTask)
         inputArea.text = ""; setInputEnabled(false)
         statusLabel.text = if (isPlanOnly) "Planning..." else "Thinking..."
         messageController.sendApiMessage(
             fullTask, session, history, dryRunCheckbox.isSelected,
-            isPlanOnly, chatHistory.getGlobalContextFiles(), errs
+            isPlanOnly, chatTreeService.getGlobalContextFiles(), errs
         )
     }
 
     private fun sendClipboardMessage(userInput: String, trace: String?, errs: String?, isPlanOnly: Boolean) {
         val cs = service.clipboardService
-        var session = chatHistory.getActiveSession()
-        val globalContextFiles = chatHistory.getGlobalContextFiles()
+        var session = chatTreeService.getActiveSession()
+        val globalContextFiles = chatTreeService.getGlobalContextFiles()
         inputArea.text = ""
         when {
             cs.isWaitingForResponse() -> {
-                // Do NOT save [Pasted LLM response] to session — UI-only marker
                 conversationPanel.appendIconToLastBubble("\uD83D\uDCE5")
                 setInputEnabled(false); statusLabel.text = "Processing..."
                 messageController.runClipboardBg("Processing response...", session) {
@@ -607,8 +604,7 @@ class ChatPanel(
                     if (!errs.isNullOrBlank()) append("\n[attached ide errors]")
                     if (isPlanOnly) append("\n[plan-only]")
                 }
-                session = session.withMessage(ChatMessage(role = MessageRole.USER, content = fullMsg))
-                chatHistory.saveSession(session)
+                session = chatTreeService.addMessage(session.id, MessageRole.USER, fullMsg)
                 setInputEnabled(false); statusLabel.text = "Continuing..."
                 messageController.runClipboardBg("Continuing...", session) {
                     cs.continueDialog(userInput, trace, isPlanOnly, errs, globalContextFiles)
@@ -624,8 +620,7 @@ class ChatPanel(
                     if (isPlanOnly) append("\n[plan-only]")
                 }
                 val dtos = session.messages.map { it.toChatMessageDTO() }
-                session = session.withMessage(ChatMessage(role = MessageRole.USER, content = fullMsg))
-                chatHistory.saveSession(session)
+                session = chatTreeService.addMessage(session.id, MessageRole.USER, fullMsg)
                 setInputEnabled(false); statusLabel.text = "Generating JSON..."
                 messageController.runClipboardBg("Generating request...", session) {
                     cs.startTask(userInput, dtos, trace, isPlanOnly, errs, globalContextFiles)
@@ -635,18 +630,17 @@ class ChatPanel(
     }
 
     private fun sendCheapApiMessage(msg: String, trace: String?, errs: String?) {
-        var session = chatHistory.getActiveSession()
+        var session = chatTreeService.getActiveSession()
         val isPlanOnly = planOnlyCheckbox.isSelected
         conversationPanel.addUserBubble(msg)
         val fullTask = ChatMessageController.buildTaskWithContext(msg, trace, errs)
         val history = session.messages.map { it.toChatMessageDTO() }
-        session = session.withMessage(ChatMessage(role = MessageRole.USER, content = fullTask))
-        chatHistory.saveSession(session)
+        session = chatTreeService.addMessage(session.id, MessageRole.USER, fullTask)
         inputArea.text = ""; setInputEnabled(false); statusLabel.text = "Thinking (cheap)..."
         service.ensureCheapLLMService()
         messageController.sendCheapApiMessage(
             fullTask, session, history, dryRunCheckbox.isSelected,
-            isPlanOnly, chatHistory.getGlobalContextFiles(), errs
+            isPlanOnly, chatTreeService.getGlobalContextFiles(), errs
         )
     }
 
@@ -680,7 +674,7 @@ class ChatPanel(
         if (newMode == InteractionMode.CHEAP_API) service.ensureCheapLLMService()
         val label = MaxVibesSettings.INTERACTION_MODES.find { it.first == newMode.name }?.second ?: newMode.name
         statusLabel.text = "Mode: $label"
-        conversationPanel.addSystemBubble("⚙️ Switched to $label")
+        conversationPanel.addSystemBubble("\u2699\uFE0F Switched to $label")
     }
 
     private fun attachTraceFromClipboard() {
@@ -737,7 +731,7 @@ class ChatPanel(
         val hasTrace = !trace.isNullOrBlank()
         traceIndicator.isVisible = hasTrace
         clearTraceButton.isVisible = hasTrace
-        if (hasTrace) traceIndicator.text = "📎 Trace: ${trace!!.lines().size}L"
+        if (hasTrace) traceIndicator.text = "\uD83D\uDCCE Trace: ${trace!!.lines().size}L"
 
         val errs = attachedErrors
         val hasErrs = !errs.isNullOrBlank()
@@ -745,7 +739,7 @@ class ChatPanel(
         clearErrorsButton.isVisible = hasErrs
         if (hasErrs) {
             val count = errs!!.split("File:").size - 1
-            errorsIndicator.text = "🐞 Errors: $count"
+            errorsIndicator.text = "\uD83D\uDC1E Errors: $count"
         }
 
         val showBar = hasTrace || hasErrs
@@ -772,7 +766,7 @@ class ChatPanel(
             if (committed) return; committed = true
             val newTitle = textField.text.trim()
             if (newTitle.isNotBlank() && newTitle != currentTitle) {
-                chatHistory.renameSession(sessionId, newTitle); statusLabel.text = "Renamed to \"$newTitle\""
+                chatTreeService.renameSession(sessionId, newTitle); statusLabel.text = "Renamed to \"$newTitle\""
             }
             updateBreadcrumb()
         }
@@ -800,8 +794,8 @@ class ChatPanel(
     }
 
     private fun deleteCurrentChat() {
-        val session = chatHistory.getActiveSession()
-        val childCount = chatHistory.getChildCount(session.id)
+        val session = chatTreeService.getActiveSession()
+        val childCount = chatTreeService.getChildCount(session.id)
         val msg =
             if (childCount > 0) "Delete \"${session.title}\"?\n$childCount branch(es) will be re-attached to parent."
             else "Delete \"${session.title}\"?"
@@ -809,28 +803,28 @@ class ChatPanel(
             this, msg, "Delete Chat", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE
         )
         if (confirm != JOptionPane.YES_OPTION) return
-        resetClipboard(); clearAttachedTrace(); clearAttachedErrors(); chatHistory.deleteSession(session.id)
-        if (chatHistory.getAllSessions().isEmpty()) chatHistory.createNewSession()
+        resetClipboard(); clearAttachedTrace(); clearAttachedErrors(); chatTreeService.deleteSession(session.id)
+        if (chatTreeService.getAllSessions().isEmpty()) chatTreeService.createNewSession()
         loadCurrentSession(); updateModeIndicator(); statusLabel.text = "Chat deleted"
     }
 
     private fun updateContextIndicator() {
-        val count = chatHistory.getGlobalContextFiles().size
-        contextFilesButton.text = if (count > 0) "📎 Ctx($count)" else "📎 Ctx"
+        val count = chatTreeService.getGlobalContextFiles().size
+        contextFilesButton.text = if (count > 0) "\uD83D\uDCCE Ctx($count)" else "\uD83D\uDCCE Ctx"
     }
 
     private fun showWelcome() {
         val mode = when (currentMode) {
-            InteractionMode.API -> "API — direct LLM calls"
-            InteractionMode.CLIPBOARD -> "Clipboard — paste JSON into Claude/ChatGPT"
-            InteractionMode.CHEAP_API -> "Cheap API — budget model"
+            InteractionMode.API -> "API \u2014 direct LLM calls"
+            InteractionMode.CLIPBOARD -> "Clipboard \u2014 paste JSON into Claude/ChatGPT"
+            InteractionMode.CHEAP_API -> "Cheap API \u2014 budget model"
         }
-        val session = chatHistory.getActiveSession()
-        val ctxCount = chatHistory.getGlobalContextFiles().size
-        val lines = mutableListOf("MaxVibes  •  $mode")
-        if (session.depth > 0) lines += "└ Branch from: \"${chatHistory.getParent(session.id)?.title ?: "?\""}"
-        if (ctxCount > 0) lines += "📎 $ctxCount global context file(s) active"
-        lines += "Type your task • Ctrl+Enter to send"
+        val session = chatTreeService.getActiveSession()
+        val ctxCount = chatTreeService.getGlobalContextFiles().size
+        val lines = mutableListOf("MaxVibes  \u2022  $mode")
+        if (session.depth > 0) lines += "\u2514 Branch from: \"${chatTreeService.getParent(session.id)?.title ?: "?\""}"
+        if (ctxCount > 0) lines += "\uD83D\uDCCE $ctxCount global context file(s) active"
+        lines += "Type your task \u2022 Ctrl+Enter to send"
         lines.forEach { conversationPanel.addSystemBubble(it) }
     }
 
@@ -843,6 +837,7 @@ class ChatPanel(
         windowedButton.icon = AllIcons.Actions.MoveToWindow
         windowedButton.toolTipText = if (isFloating) "Dock Tool Window" else "Floating Mode"
     }
+
     private fun ChatMessage.toChatMessageDTO() = ChatMessageDTO(
         role = when (role) {
             MessageRole.USER -> ChatRole.USER

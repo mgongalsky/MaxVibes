@@ -5,7 +5,7 @@ import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.treeStructure.Tree
 import com.intellij.util.ui.JBUI
-import com.maxvibes.plugin.chat.ChatHistoryService
+import com.maxvibes.application.service.ChatTreeService
 import java.awt.*
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
@@ -27,7 +27,7 @@ import com.maxvibes.domain.model.chat.SessionTreeNode
  * Shows all dialogs as a tree with branches, allows opening, creating, deleting, renaming.
  */
 class SessionTreePanel(
-    private val chatHistory: ChatHistoryService,
+    private val chatTreeService: ChatTreeService,
     private val onOpenSession: (String) -> Unit,
     private val onNewRoot: () -> Unit,
     private val onNewBranch: (parentId: String) -> Unit,
@@ -102,7 +102,6 @@ class SessionTreePanel(
     private fun setupTree() {
         tree.cellRenderer = SessionCellRenderer(dateFormat)
 
-        // Delete key → удалить выбранные
         val deleteAction = object : AbstractAction() {
             override fun actionPerformed(e: java.awt.event.ActionEvent) {
                 deleteSelectedSessions()
@@ -116,7 +115,6 @@ class SessionTreePanel(
         )
         tree.actionMap.put("deleteSelected", deleteAction)
 
-        // Double click → open
         tree.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
                 if (e.clickCount == 2) {
@@ -127,7 +125,6 @@ class SessionTreePanel(
             }
         })
 
-        // Right click → context menu
         tree.addMouseListener(object : MouseAdapter() {
             override fun mousePressed(e: MouseEvent) {
                 showContextMenu(e)
@@ -205,11 +202,6 @@ class SessionTreePanel(
         add(hint, BorderLayout.SOUTH)
     }
 
-    /**
-     * Удаляет все выбранные в дереве сессии с одним подтверждением.
-     * Использует каскадное удаление — вся ветка сносится вместе с детьми.
-     * Сортирует от самых глубоких к корням, чтобы избежать двойного удаления.
-     */
     private fun deleteSelectedSessions() {
         val paths = tree.selectionPaths ?: return
         val items = paths.mapNotNull { path ->
@@ -234,9 +226,6 @@ class SessionTreePanel(
         )
         if (confirmed != JOptionPane.YES_OPTION) return
 
-        // Удаляем от самых глубоких к корням, чтобы не было двойного удаления
-        // (если выбраны и родитель, и ребёнок — родитель каскадно удалит ребёнка,
-        //  поэтому сначала убираем детей из списка)
         val sorted = items.sortedByDescending { it.depth }
         val deletedIds = mutableSetOf<String>()
         for (item in sorted) {
@@ -248,9 +237,6 @@ class SessionTreePanel(
         refresh()
     }
 
-    /**
-     * Shows an input dialog to rename a session.
-     */
     private fun renameSession(data: TreeNodeData) {
         val newTitle = JOptionPane.showInputDialog(
             this,
@@ -263,14 +249,14 @@ class SessionTreePanel(
         ) as? String
 
         if (newTitle != null && newTitle.isNotBlank() && newTitle != data.title) {
-            chatHistory.renameSession(data.sessionId, newTitle)
+            chatTreeService.renameSession(data.sessionId, newTitle)
             refresh()
         }
     }
 
     fun refresh() {
         treeRoot.removeAllChildren()
-        val sessionTree = chatHistory.buildTree()
+        val sessionTree = chatTreeService.buildTree()
         for (node in sessionTree) {
             treeRoot.add(buildNode(node))
         }
@@ -296,7 +282,7 @@ class SessionTreePanel(
     }
 
     private fun expandToActive() {
-        val activeId = chatHistory.getActiveSession().id
+        val activeId = chatTreeService.getActiveSession().id
         val target = findNode(treeRoot, activeId)
         if (target != null) {
             val path = TreePath(target.path)
@@ -304,7 +290,6 @@ class SessionTreePanel(
             tree.selectionPath = path
             tree.scrollPathToVisible(path)
         } else {
-            // Expand first level
             for (i in 0 until treeRoot.childCount) {
                 tree.expandRow(i)
             }
@@ -337,18 +322,11 @@ data class TreeNodeData(
     override fun toString(): String = title
 }
 
-/**
- * Simple HTML-based tree cell renderer.
- * Uses a single JLabel with HTML — JTree handles sizing correctly.
- * Line 1: icon + title (bold)
- * Line 2: date • msg count • branch count (small, gray)
- */
 class SessionCellRenderer(
     private val dateFormat: SimpleDateFormat
 ) : DefaultTreeCellRenderer() {
 
     init {
-        // Remove default icons — we use text icons
         leafIcon = null
         openIcon = null
         closedIcon = null
@@ -396,6 +374,7 @@ class SessionCellRenderer(
 
     private fun escapeHtml(text: String): String =
         text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
     private fun formatTok(n: Int): String = when {
         n >= 1_000_000 -> "${n / 1_000_000}.${(n % 1_000_000) / 100_000}M"
         n >= 1_000 -> "${n / 1_000}k"
