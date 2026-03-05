@@ -8,6 +8,7 @@ import com.intellij.util.xmlb.annotations.Tag
 import com.intellij.util.xmlb.annotations.XCollection
 import com.maxvibes.application.port.output.ChatMessageDTO
 import com.maxvibes.application.port.output.ChatRole
+import com.maxvibes.application.port.output.ChatSessionRepository
 import com.maxvibes.domain.model.chat.ChatMessage
 import com.maxvibes.domain.model.chat.ChatSession
 import com.maxvibes.domain.model.chat.MessageRole
@@ -172,13 +173,16 @@ class ChatHistoryState {
  * Сервис хранения истории чатов (per-project).
  * Публичный API работает с доменным ChatSession.
  * Внутри — XmlChatSession для персистентности.
+ *
+ * Реализует ChatSessionRepository — порт application layer.
+ * UI пока обращается к этому сервису напрямую (до шага 8).
  */
 @Service(Service.Level.PROJECT)
 @State(
     name = "MaxVibesChatHistory",
     storages = [Storage("maxvibes-chat-history.xml")]
 )
-class ChatHistoryService : PersistentStateComponent<ChatHistoryState> {
+class ChatHistoryService : PersistentStateComponent<ChatHistoryState>, ChatSessionRepository {
 
     private var state = ChatHistoryState()
 
@@ -196,18 +200,61 @@ class ChatHistoryService : PersistentStateComponent<ChatHistoryState> {
         )
     }
 
-    // ==================== Basic Operations ====================
+    // ==================== ChatSessionRepository (port) ====================
 
-    fun getAllSessions(): List<ChatSession> {
+    override fun getAllSessions(): List<ChatSession> {
         return state.sessions.map { it.toDomain() }
     }
 
-    fun getSessions(): List<ChatSession> {
-        return state.sessions.sortedByDescending { it.updatedAt }.map { it.toDomain() }
+    override fun getSessionById(id: String): ChatSession? {
+        return state.sessions.find { it.id == id }?.toDomain()
     }
 
-    fun getSessionById(id: String): ChatSession? {
-        return state.sessions.find { it.id == id }?.toDomain()
+    override fun getActiveSessionId(): String? = state.activeSessionId
+
+    override fun setActiveSessionId(sessionId: String) {
+        state.activeSessionId = sessionId
+    }
+
+    override fun saveSession(session: ChatSession) {
+        val index = state.sessions.indexOfFirst { it.id == session.id }
+        val xml = XmlChatSession.fromDomain(session)
+        if (index >= 0) state.sessions[index] = xml
+        else state.sessions.add(0, xml)
+    }
+
+    override fun deleteSession(sessionId: String) {
+        val session = state.sessions.find { it.id == sessionId } ?: return
+        val parentId = session.parentId
+
+        val children = state.sessions.filter { it.parentId == sessionId }
+        for (child in children) {
+            child.parentId = parentId
+            child.depth = (parentId?.let { pid -> state.sessions.find { it.id == pid }?.depth?.plus(1) }) ?: 0
+            recalculateChildDepths(child.id)
+        }
+
+        state.sessions.removeIf { it.id == sessionId }
+
+        if (state.activeSessionId == sessionId) {
+            state.activeSessionId = parentId
+                ?: children.firstOrNull()?.id
+                        ?: state.sessions.firstOrNull()?.id
+        }
+    }
+
+    override fun getGlobalContextFiles(): List<String> {
+        return state.globalContextFiles.toList()
+    }
+
+    override fun setGlobalContextFiles(files: List<String>) {
+        state.globalContextFiles = files.distinct().toMutableList()
+    }
+
+    // ==================== Extended UI API (used by UI directly) ====================
+
+    fun getSessions(): List<ChatSession> {
+        return state.sessions.sortedByDescending { it.updatedAt }.map { it.toDomain() }
     }
 
     fun getActiveSession(): ChatSession {
@@ -218,16 +265,6 @@ class ChatHistoryService : PersistentStateComponent<ChatHistoryState> {
 
     fun setActiveSession(sessionId: String) {
         state.activeSessionId = sessionId
-    }
-
-    /**
-     * Сохраняет доменную сессию в состояние (upsert по id).
-     */
-    fun saveSession(session: ChatSession) {
-        val index = state.sessions.indexOfFirst { it.id == session.id }
-        val xml = XmlChatSession.fromDomain(session)
-        if (index >= 0) state.sessions[index] = xml
-        else state.sessions.add(0, xml)
     }
 
     // ==================== Rename ====================
@@ -348,30 +385,6 @@ class ChatHistoryService : PersistentStateComponent<ChatHistoryState> {
     }
 
     /**
-     * Удаляет сессию.
-     * Стратегия: дети переподвешиваются к родителю удалённой сессии.
-     */
-    fun deleteSession(sessionId: String) {
-        val session = state.sessions.find { it.id == sessionId } ?: return
-        val parentId = session.parentId
-
-        val children = state.sessions.filter { it.parentId == sessionId }
-        for (child in children) {
-            child.parentId = parentId
-            child.depth = (parentId?.let { pid -> state.sessions.find { it.id == pid }?.depth?.plus(1) }) ?: 0
-            recalculateChildDepths(child.id)
-        }
-
-        state.sessions.removeIf { it.id == sessionId }
-
-        if (state.activeSessionId == sessionId) {
-            state.activeSessionId = parentId
-                ?: children.firstOrNull()?.id
-                        ?: state.sessions.firstOrNull()?.id
-        }
-    }
-
-    /**
      * Удаляет сессию вместе со всеми потомками (каскадное удаление).
      */
     fun deleteSessionCascade(sessionId: String) {
@@ -389,15 +402,7 @@ class ChatHistoryService : PersistentStateComponent<ChatHistoryState> {
         saveSession(session.cleared())
     }
 
-    // ==================== Global Context Files ====================
-
-    fun getGlobalContextFiles(): List<String> {
-        return state.globalContextFiles.toList()
-    }
-
-    fun setGlobalContextFiles(files: List<String>) {
-        state.globalContextFiles = files.distinct().toMutableList()
-    }
+    // ==================== Global Context Files (extended) ====================
 
     fun addGlobalContextFile(relativePath: String) {
         val normalized = relativePath.replace('\\', '/')
