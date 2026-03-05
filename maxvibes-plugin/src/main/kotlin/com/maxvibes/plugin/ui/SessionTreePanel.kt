@@ -6,7 +6,6 @@ import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.treeStructure.Tree
 import com.intellij.util.ui.JBUI
 import com.maxvibes.plugin.chat.ChatHistoryService
-import com.maxvibes.plugin.chat.SessionTreeNode
 import java.awt.*
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
@@ -21,6 +20,7 @@ import javax.swing.tree.TreeSelectionModel
 import javax.swing.AbstractAction
 import javax.swing.JComponent
 import javax.swing.KeyStroke
+import com.maxvibes.domain.model.chat.SessionTreeNode
 
 /**
  * Full-window panel for browsing the session tree.

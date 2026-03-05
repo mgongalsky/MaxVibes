@@ -1,5 +1,7 @@
-package com.maxvibes.domain.model.code
+package com.maxvibes.domain.model.chat
 
+import com.maxvibes.domain.model.code.ElementPath
+import com.maxvibes.domain.model.code.PathSegment
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.*
 

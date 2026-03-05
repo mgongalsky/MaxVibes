@@ -15,6 +15,7 @@ import com.maxvibes.domain.model.chat.TokenUsage
 import com.maxvibes.plugin.service.MaxVibesLogger
 import java.time.Instant
 import java.util.UUID
+import com.maxvibes.domain.model.chat.SessionTreeNode
 
 /**
  * XML persistence DTO для сообщения в чате.
@@ -168,21 +169,6 @@ class ChatHistoryState {
 }
 
 /**
- * Узел дерева сессий для навигации.
- * Не сериализуется — строится динамически.
- * session — доменный ChatSession (иммутабельный).
- */
-data class SessionTreeNode(
-    val session: ChatSession,
-    val children: MutableList<SessionTreeNode> = mutableListOf()
-) {
-    val id: String get() = session.id
-    val title: String get() = session.title
-    val depth: Int get() = session.depth
-    val hasChildren: Boolean get() = children.isNotEmpty()
-}
-
-/**
  * Сервис хранения истории чатов (per-project).
  * Публичный API работает с доменным ChatSession.
  * Внутри — XmlChatSession для персистентности.
@@ -309,25 +295,21 @@ class ChatHistoryService : PersistentStateComponent<ChatHistoryState> {
         return state.sessions.find { it.id == sessionId }?.parentId == null
     }
 
-    /**
-     * Строит полное дерево сессий для навигации.
-     * Возвращает список корневых узлов с рекурсивно заполненными children.
-     */
     fun buildTree(): List<SessionTreeNode> {
-        val nodeMap = state.sessions.associate { it.id to SessionTreeNode(it.toDomain()) }.toMutableMap()
+        val domainSessions = state.sessions.map { it.toDomain() }
 
-        for (xmlSession in state.sessions) {
-            val parentId = xmlSession.parentId ?: continue
-            nodeMap[parentId]?.children?.add(nodeMap[xmlSession.id]!!)
+        fun buildNode(session: ChatSession): SessionTreeNode {
+            val children = domainSessions
+                .filter { it.parentId == session.id }
+                .sortedByDescending { it.updatedAt }
+                .map { buildNode(it) }
+            return SessionTreeNode(session, children)
         }
 
-        for (node in nodeMap.values) {
-            node.children.sortByDescending { it.session.updatedAt }
-        }
-
-        return nodeMap.values
-            .filter { it.session.parentId == null }
-            .sortedByDescending { it.session.updatedAt }
+        return domainSessions
+            .filter { it.isRoot }
+            .sortedByDescending { it.updatedAt }
+            .map { buildNode(it) }
     }
 
     // ==================== Create / Delete ====================
