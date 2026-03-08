@@ -67,8 +67,6 @@ class ChatPanel(
         toolTipText = "Remove attached errors"; font = font.deriveFont(9f); preferredSize =
         Dimension(20, 20); isVisible = false
     }
-    private var attachedErrors: String? = null
-
     private val attachTraceButton = JButton("\uD83D\uDCCE Trace").apply {
         toolTipText = "Paste error/stacktrace/logs (Ctrl+Shift+V)"; font = font.deriveFont(11f)
     }
@@ -129,7 +127,6 @@ class ChatPanel(
         )
     }
 
-    private var attachedTrace: String? = null
     private var isWaitingForResponse: Boolean = false
     private val elementNavRegistry = mutableMapOf<String, String>()
 
@@ -436,6 +433,19 @@ class ChatPanel(
     }
 
     private fun setupListeners() {
+        fun attachFromClipboard() {
+            val content = try {
+                java.awt.Toolkit.getDefaultToolkit().systemClipboard
+                    .getData(java.awt.datatransfer.DataFlavor.stringFlavor) as? String
+            } catch (e: Exception) {
+                statusLabel.text = "Clipboard error: ${e.message}"; return
+            }
+            if (content.isNullOrBlank()) {
+                statusLabel.text = "Clipboard is empty"; return
+            }
+            messageController.attachTrace(content)
+        }
+
         sendButton.addActionListener { sendMessage() }
         copyJsonButton.addActionListener {
             if (service.clipboardService.recopyLastRequest()) {
@@ -447,7 +457,8 @@ class ChatPanel(
         sessionsButton.addActionListener { onShowSessions() }
 
         newChatButton.addActionListener {
-            resetClipboard(); chatTreeService.createNewSession(); clearAttachedTrace(); clearAttachedErrors()
+            resetClipboard(); chatTreeService.createNewSession()
+            messageController.clearAttachmentsAfterSend()
             loadCurrentSession(); updateModeIndicator(); statusLabel.text = "New dialog"
         }
 
@@ -460,7 +471,8 @@ class ChatPanel(
             resetClipboard()
             val branch = chatTreeService.createBranch(active.id, title)
             if (branch != null) {
-                clearAttachedTrace(); clearAttachedErrors(); loadCurrentSession(); updateModeIndicator()
+                messageController.clearAttachmentsAfterSend()
+                loadCurrentSession(); updateModeIndicator()
                 statusLabel.text = "Branch: ${branch.title}"
             }
         }
@@ -496,10 +508,10 @@ class ChatPanel(
             updateToolWindowIcons()
         }
 
-        attachTraceButton.addActionListener { attachTraceFromClipboard() }
-        clearTraceButton.addActionListener { clearAttachedTrace() }
-        attachErrorsButton.addActionListener { fetchIdeErrors() }
-        clearErrorsButton.addActionListener { clearAttachedErrors() }
+        attachTraceButton.addActionListener { attachFromClipboard() }
+        clearTraceButton.addActionListener { messageController.clearTrace() }
+        attachErrorsButton.addActionListener { messageController.fetchIdeErrors() }
+        clearErrorsButton.addActionListener { messageController.clearErrors() }
 
         modeComboBox.addActionListener {
             val selected = modeComboBox.selectedItem as? ModeItem ?: return@addActionListener
@@ -536,7 +548,7 @@ class ChatPanel(
                 if (e.keyCode == KeyEvent.VK_ENTER && e.isControlDown) {
                     sendMessage(); e.consume()
                 } else if (e.keyCode == KeyEvent.VK_V && e.isControlDown && e.isShiftDown) {
-                    attachTraceFromClipboard(); e.consume()
+                    attachFromClipboard(); e.consume()
                 }
             }
         })
@@ -545,8 +557,9 @@ class ChatPanel(
     private fun sendMessage() {
         val userInput = inputArea.text.trim()
         if (userInput.isBlank()) return
-        val trace = attachedTrace; clearAttachedTrace()
-        val errs = attachedErrors; clearAttachedErrors()
+        val trace = messageController.attachedTrace
+        val errs = messageController.attachedErrors
+        messageController.clearAttachmentsAfterSend()
         val isPlanOnly = planOnlyCheckbox.isSelected
         MaxVibesLogger.info(
             "ChatPanel", "sendMessage", mapOf(
@@ -707,63 +720,14 @@ class ChatPanel(
         }
     }
 
-    private fun attachTraceFromClipboard() {
-        try {
-            val clipboard = Toolkit.getDefaultToolkit().systemClipboard
-            val content = clipboard.getData(java.awt.datatransfer.DataFlavor.stringFlavor) as? String
-            if (content.isNullOrBlank()) {
-                statusLabel.text = "Clipboard is empty"; return
-            }
-            attachedTrace = content; updateIndicators()
-            statusLabel.text = "Trace attached (${content.lines().size} lines)"
-        } catch (e: Exception) {
-            statusLabel.text = "Clipboard error: ${e.message}"
-        }
-    }
-
-    private fun fetchIdeErrors() {
-        statusLabel.text = "Fetching IDE errors..."
-        com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
-            kotlinx.coroutines.runBlocking {
-                val result = service.ideErrorsPort.getCompilerErrors()
-                com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
-                    if (result is com.maxvibes.shared.result.Result.Success) {
-                        val errors = result.value
-                        if (errors.isEmpty()) {
-                            statusLabel.text = "No IDE errors found in open files"
-                        } else {
-                            attachedErrors = errors.joinToString("\n") { it.formatForLlm() }
-                            statusLabel.text = "Attached ${errors.size} IDE errors"
-                            updateIndicators()
-                        }
-                    } else {
-                        statusLabel.text = "Failed to fetch errors"
-                    }
-                }
-            }
-        }
-    }
-
-    private fun clearAttachedTrace() {
-        if (attachedTrace != null) {
-            attachedTrace = null; updateIndicators(); statusLabel.text = "Trace removed"
-        }
-    }
-
-    private fun clearAttachedErrors() {
-        if (attachedErrors != null) {
-            attachedErrors = null; updateIndicators(); statusLabel.text = "Errors removed"
-        }
-    }
-
     private fun updateIndicators() {
-        val trace = attachedTrace
+        val trace = messageController.attachedTrace
         val hasTrace = !trace.isNullOrBlank()
         traceIndicator.isVisible = hasTrace
         clearTraceButton.isVisible = hasTrace
         if (hasTrace) traceIndicator.text = "\uD83D\uDCCE Trace: ${trace!!.lines().size}L"
 
-        val errs = attachedErrors
+        val errs = messageController.attachedErrors
         val hasErrs = !errs.isNullOrBlank()
         errorsIndicator.isVisible = hasErrs
         clearErrorsButton.isVisible = hasErrs
@@ -833,7 +797,9 @@ class ChatPanel(
             this, msg, "Delete Chat", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE
         )
         if (confirm != JOptionPane.YES_OPTION) return
-        resetClipboard(); clearAttachedTrace(); clearAttachedErrors(); chatTreeService.deleteSession(session.id)
+        resetClipboard()
+        messageController.clearAttachmentsAfterSend()
+        chatTreeService.deleteSession(session.id)
         if (chatTreeService.getAllSessions().isEmpty()) chatTreeService.createNewSession()
         loadCurrentSession(); updateModeIndicator(); statusLabel.text = "Chat deleted"
     }
@@ -905,10 +871,6 @@ class ChatPanel(
         updateToolWindowIcons()
     }
 
-    /**
-     * Собирает текущее состояние ChatPanel из полей и сервисов.
-     * Используется как аргумент для render().
-     */
     private fun buildState(): ChatPanelState {
         val session = chatTreeService.getActiveSession()
         return ChatPanelState(
@@ -916,10 +878,16 @@ class ChatPanel(
             sessionPath = chatTreeService.getSessionPath(session.id),
             mode = modeManager.currentMode,
             isWaitingResponse = isWaitingForResponse,
-            attachedTrace = attachedTrace,
-            attachedErrors = attachedErrors,
+            attachedTrace = messageController.attachedTrace,
+            attachedErrors = messageController.attachedErrors,
             contextFilesCount = chatTreeService.getGlobalContextFiles().size,
             tokenUsage = session.tokenUsage.takeIf { !it.isEmpty() }
         )
+    }
+    override fun onAttachmentsChanged(trace: String?, errors: String?) {
+        render(buildState())
+    }
+    override fun onError(message: String) {
+        setStatus(message)
     }
 }

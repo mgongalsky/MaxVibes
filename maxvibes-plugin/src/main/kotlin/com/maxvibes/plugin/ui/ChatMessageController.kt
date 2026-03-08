@@ -17,6 +17,7 @@ import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.plugin.service.MaxVibesLogger
 import com.maxvibes.plugin.service.MaxVibesService
 import kotlinx.coroutines.runBlocking
+import com.maxvibes.shared.result.Result
 
 interface ChatPanelCallbacks {
     fun appendToChat(text: String)
@@ -43,6 +44,12 @@ interface ChatPanelCallbacks {
 
     /** Sets the commit message in the IDE VCS commit dialog. */
     fun setCommitMessage(message: String)
+
+    /** Called when attached trace or errors change. */
+    fun onAttachmentsChanged(trace: String?, errors: String?)
+
+    /** Called when a background operation encounters an error. */
+    fun onError(message: String)
 }
 
 /**
@@ -72,6 +79,10 @@ class ChatMessageController(
 
     private var lastApiContext: ApiRequestContext? = null
     private var autoRetryCount = 0
+    var attachedTrace: String? = null
+        private set
+    var attachedErrors: String? = null
+        private set
 
     companion object {
         private const val MAX_AUTO_RETRIES = 1
@@ -499,4 +510,49 @@ Check:
     }
 
     private fun fmt(n: Int) = if (n >= 1000) "${n / 1000}k" else n.toString()
+    fun attachTrace(traceContent: String) {
+        attachedTrace = traceContent
+        callbacks.onAttachmentsChanged(attachedTrace, attachedErrors)
+    }
+    fun clearTrace() {
+        attachedTrace = null
+        callbacks.onAttachmentsChanged(attachedTrace, attachedErrors)
+    }
+    fun clearErrors() {
+        attachedErrors = null
+        callbacks.onAttachmentsChanged(attachedTrace, attachedErrors)
+    }
+    fun fetchIdeErrors() {
+        callbacks.setStatus("Fetching IDE errors...")
+        object : Task.Backgroundable(project, "Fetching IDE errors", false) {
+            override fun run(indicator: ProgressIndicator) {
+                runBlocking {
+                    val result = service.ideErrorsPort.getCompilerErrors()
+                    ApplicationManager.getApplication().invokeLater {
+                        when (result) {
+                            is Result.Success -> {
+                                val errors = result.value
+                                if (errors.isEmpty()) {
+                                    callbacks.setStatus("No IDE errors found in open files")
+                                } else {
+                                    attachedErrors = errors.joinToString("\n") { it.formatForLlm() }
+                                    callbacks.setStatus("Attached ${errors.size} IDE errors")
+                                    callbacks.onAttachmentsChanged(attachedTrace, attachedErrors)
+                                }
+                            }
+
+                            is Result.Failure -> {
+                                callbacks.onError("Failed to fetch IDE errors: ${result.error}")
+                            }
+                        }
+                    }
+                }
+            }
+        }.queue()
+    }
+    fun clearAttachmentsAfterSend() {
+        attachedTrace = null
+        attachedErrors = null
+        callbacks.onAttachmentsChanged(null, null)
+    }
 }
