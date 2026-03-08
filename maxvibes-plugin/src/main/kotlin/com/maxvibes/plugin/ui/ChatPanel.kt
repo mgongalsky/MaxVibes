@@ -119,6 +119,10 @@ class ChatPanel(
     private var attachedTrace: String? = null
     private val elementNavRegistry = mutableMapOf<String, String>()
 
+    // ConversationRenderer handles all message filtering and formatting for display.
+// Extracted here to keep ChatPanel free from knowledge of the internal message storage format.
+    private val conversationRenderer = ConversationRenderer()
+
     private val messageController: ChatMessageController by lazy {
         ChatMessageController(project, service, this)
     }
@@ -340,23 +344,18 @@ class ChatPanel(
         if (session.messages.isEmpty()) {
             showWelcome()
         } else {
+            // Show branch ancestry as a system bubble at the top of the conversation.
             val path = chatTreeService.getSessionPath(session.id)
             if (path.size > 1) {
                 val chain = path.dropLast(1).joinToString(" \u203A ") { it.title.take(25) }
                 conversationPanel.addSystemBubble("\u2514 Branch of: $chain")
             }
-            session.messages.forEach { msg ->
-                when (msg.role) {
-                    MessageRole.USER -> {
-                        if (msg.content.trim() == "[Pasted LLM response]") return@forEach
-                        val displayText = msg.content
-                            .replace(Regex("\\n\\[trace: \\d+ lines]"), "")
-                            .replace(Regex("\\n\\[attached ide errors]"), "")
-                            .replace(Regex("\\n\\[plan-only]"), "")
-                            .trim()
-                        if (displayText.isNotBlank()) conversationPanel.addUserBubble(displayText)
-                    }
 
+            // Delegate filtering and formatting to ConversationRenderer.
+            // This replaces the inline when/filter logic that previously lived here.
+            conversationRenderer.render(session.messages).forEach { msg ->
+                when (msg.role) {
+                    MessageRole.USER -> conversationPanel.addUserBubble(msg.content)
                     MessageRole.ASSISTANT -> conversationPanel.addAssistantBubble(msg.content)
                     MessageRole.SYSTEM -> conversationPanel.addSystemBubble(msg.content)
                 }
