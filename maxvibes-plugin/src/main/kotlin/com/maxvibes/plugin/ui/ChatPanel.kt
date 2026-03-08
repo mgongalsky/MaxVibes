@@ -115,12 +115,24 @@ class ChatPanel(
     private val promptService: PromptService by lazy { PromptService.getInstance(project) }
     private val settings: MaxVibesSettings by lazy { MaxVibesSettings.getInstance() }
 
-    private var currentMode: InteractionMode = InteractionMode.API
+    // Manages interaction mode state (API / Clipboard / CheapAPI).
+    // Extracted from ChatPanel to separate state logic from UI.
+    private val modeManager: InteractionModeManager by lazy {
+        InteractionModeManager(
+            settings = settings,
+            onModeChanged = { mode ->
+                settings.interactionMode = mode.name
+                updateModeUI(mode)
+                if (mode == InteractionMode.CHEAP_API) service.ensureCheapLLMService()
+            }
+        )
+    }
+
     private var attachedTrace: String? = null
     private val elementNavRegistry = mutableMapOf<String, String>()
 
     // ConversationRenderer handles all message filtering and formatting for display.
-// Extracted here to keep ChatPanel free from knowledge of the internal message storage format.
+    // Extracted here to keep ChatPanel free from knowledge of the internal message storage format.
     private val conversationRenderer = ConversationRenderer()
 
     private val messageController: ChatMessageController by lazy {
@@ -129,7 +141,9 @@ class ChatPanel(
 
     init {
         setupUI(); setupListeners()
-        loadCurrentSession(); syncModeFromSettings()
+        loadCurrentSession()
+        modeManager.syncFromSettings()
+        syncComboBoxToMode()
     }
 
     override fun appendToChat(text: String) {
@@ -185,48 +199,9 @@ class ChatPanel(
         statusLabel.text = text
     }
 
+    // Interface method (no-arg) — delegates to private implementation with current mode.
     override fun updateModeIndicator() {
-        when (currentMode) {
-            InteractionMode.API -> {
-                modeIndicator.isVisible = false; sendButton.text = "Send"; dryRunCheckbox.isVisible = true
-                copyJsonButton.isVisible = false
-            }
-
-            InteractionMode.CLIPBOARD -> {
-                val cs = service.clipboardService
-                when {
-                    cs.isWaitingForResponse() -> {
-                        val phase = cs.getCurrentPhase()
-                        modeIndicator.text = when (phase) {
-                            ClipboardPhase.PLANNING -> "\u23F3 Paste response (planning)"
-                            ClipboardPhase.CHAT -> "\u23F3 Paste response (chat)"
-                            else -> "\u23F3 Paste response"
-                        }
-                        modeIndicator.isVisible = true; sendButton.text = "Paste"
-                        copyJsonButton.isVisible = true
-                    }
-
-                    cs.hasActiveSession() -> {
-                        modeIndicator.text = "\uD83D\uDCCB Active"
-                        modeIndicator.isVisible = true; sendButton.text = "Send / Paste"
-                        copyJsonButton.isVisible = false
-                    }
-
-                    else -> {
-                        modeIndicator.text = "\uD83D\uDCCB"
-                        modeIndicator.isVisible = true; sendButton.text = "Generate"
-                        copyJsonButton.isVisible = false
-                    }
-                }
-                dryRunCheckbox.isVisible = false
-            }
-
-            InteractionMode.CHEAP_API -> {
-                modeIndicator.text = "\uD83D\uDCB0"; modeIndicator.isVisible = true
-                sendButton.text = "Send"; dryRunCheckbox.isVisible = true
-                copyJsonButton.isVisible = false
-            }
-        }
+        updateModeUI(modeManager.currentMode)
     }
 
     override fun updateBreadcrumb() {
@@ -524,8 +499,32 @@ class ChatPanel(
 
         modeComboBox.addActionListener {
             val selected = modeComboBox.selectedItem as? ModeItem ?: return@addActionListener
-            val newMode = InteractionMode.valueOf(selected.id)
-            if (newMode != currentMode) switchMode(newMode)
+            val newMode = try {
+                InteractionMode.valueOf(selected.id)
+            } catch (_: Exception) {
+                return@addActionListener
+            }
+            if (newMode == modeManager.currentMode) return@addActionListener
+            // Confirm before leaving an active clipboard session
+            if (modeManager.currentMode == InteractionMode.CLIPBOARD && service.clipboardService.isWaitingForResponse()) {
+                val confirm = JOptionPane.showConfirmDialog(
+                    this, "Active clipboard session will be reset. Continue?",
+                    "Switch Mode", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE
+                )
+                if (confirm != JOptionPane.YES_OPTION) {
+                    syncComboBoxToMode(); return@addActionListener
+                }
+                service.clipboardService.reset()
+            }
+            MaxVibesLogger.info(
+                "ChatPanel",
+                "switchMode",
+                mapOf("from" to modeManager.currentMode.name, "to" to newMode.name)
+            )
+            modeManager.switchMode(newMode)  // triggers onModeChanged: saves settings, updates UI, ensureCheapLLM
+            val label = MaxVibesSettings.INTERACTION_MODES.find { it.first == newMode.name }?.second ?: newMode.name
+            statusLabel.text = "Mode: $label"
+            conversationPanel.addSystemBubble("\u2699\uFE0F Switched to $label")
         }
 
         inputArea.addKeyListener(object : KeyAdapter() {
@@ -547,14 +546,14 @@ class ChatPanel(
         val isPlanOnly = planOnlyCheckbox.isSelected
         MaxVibesLogger.info(
             "ChatPanel", "sendMessage", mapOf(
-                "mode" to currentMode.name,
+                "mode" to modeManager.currentMode.name,
                 "msgLen" to userInput.length,
                 "isPlanOnly" to isPlanOnly,
                 "hasTrace" to (trace != null),
                 "hasErrors" to (errs != null)
             )
         )
-        when (currentMode) {
+        when (modeManager.currentMode) {
             InteractionMode.API -> sendApiMessage(userInput, trace, errs)
             InteractionMode.CLIPBOARD -> sendClipboardMessage(userInput, trace, errs, isPlanOnly)
             InteractionMode.CHEAP_API -> sendCheapApiMessage(userInput, trace, errs)
@@ -643,37 +642,65 @@ class ChatPanel(
         )
     }
 
-    private fun syncModeFromSettings() {
-        currentMode = try {
-            InteractionMode.valueOf(settings.interactionMode)
-        } catch (_: Exception) {
-            InteractionMode.API
-        }
+    /**
+     * Syncs the combo box selection to match modeManager.currentMode.
+     * Called after syncFromSettings to keep UI in sync without triggering the listener.
+     */
+    private fun syncComboBoxToMode() {
+        val mode = modeManager.currentMode
         for (i in 0 until modeComboBox.itemCount) {
-            if (modeComboBox.getItemAt(i).id == currentMode.name) {
+            if (modeComboBox.getItemAt(i).id == mode.name) {
                 modeComboBox.selectedIndex = i; break
             }
         }
-        updateModeIndicator()
     }
 
-    private fun switchMode(newMode: InteractionMode) {
-        if (currentMode == InteractionMode.CLIPBOARD && service.clipboardService.isWaitingForResponse()) {
-            val confirm = JOptionPane.showConfirmDialog(
-                this, "Active clipboard session will be reset. Continue?",
-                "Switch Mode", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE
-            )
-            if (confirm != JOptionPane.YES_OPTION) {
-                syncModeFromSettings(); return
+    /**
+     * Updates the mode indicator UI components based on the given mode.
+     * Called via the InteractionModeManager.onModeChanged callback.
+     */
+    private fun updateModeUI(mode: InteractionMode) {
+        when (mode) {
+            InteractionMode.API -> {
+                modeIndicator.isVisible = false; sendButton.text = "Send"; dryRunCheckbox.isVisible = true
+                copyJsonButton.isVisible = false
             }
-            service.clipboardService.reset()
+
+            InteractionMode.CLIPBOARD -> {
+                val cs = service.clipboardService
+                when {
+                    cs.isWaitingForResponse() -> {
+                        val phase = cs.getCurrentPhase()
+                        modeIndicator.text = when (phase) {
+                            ClipboardPhase.PLANNING -> "\u23F3 Paste response (planning)"
+                            ClipboardPhase.CHAT -> "\u23F3 Paste response (chat)"
+                            else -> "\u23F3 Paste response"
+                        }
+                        modeIndicator.isVisible = true; sendButton.text = "Paste"
+                        copyJsonButton.isVisible = true
+                    }
+
+                    cs.hasActiveSession() -> {
+                        modeIndicator.text = "\uD83D\uDCCB Active"
+                        modeIndicator.isVisible = true; sendButton.text = "Send / Paste"
+                        copyJsonButton.isVisible = false
+                    }
+
+                    else -> {
+                        modeIndicator.text = "\uD83D\uDCCB"
+                        modeIndicator.isVisible = true; sendButton.text = "Generate"
+                        copyJsonButton.isVisible = false
+                    }
+                }
+                dryRunCheckbox.isVisible = false
+            }
+
+            InteractionMode.CHEAP_API -> {
+                modeIndicator.text = "\uD83D\uDCB0"; modeIndicator.isVisible = true
+                sendButton.text = "Send"; dryRunCheckbox.isVisible = true
+                copyJsonButton.isVisible = false
+            }
         }
-        MaxVibesLogger.info("ChatPanel", "switchMode", mapOf("from" to currentMode.name, "to" to newMode.name))
-        currentMode = newMode; settings.interactionMode = newMode.name; updateModeIndicator()
-        if (newMode == InteractionMode.CHEAP_API) service.ensureCheapLLMService()
-        val label = MaxVibesSettings.INTERACTION_MODES.find { it.first == newMode.name }?.second ?: newMode.name
-        statusLabel.text = "Mode: $label"
-        conversationPanel.addSystemBubble("\u2699\uFE0F Switched to $label")
     }
 
     private fun attachTraceFromClipboard() {
@@ -813,7 +840,7 @@ class ChatPanel(
     }
 
     private fun showWelcome() {
-        val mode = when (currentMode) {
+        val mode = when (modeManager.currentMode) {
             InteractionMode.API -> "API \u2014 direct LLM calls"
             InteractionMode.CLIPBOARD -> "Clipboard \u2014 paste JSON into Claude/ChatGPT"
             InteractionMode.CHEAP_API -> "Cheap API \u2014 budget model"

@@ -13,6 +13,9 @@ dependencies {
     implementation(project(path = ":maxvibes-adapter-llm"))
 
     testImplementation(kotlin("test"))
+    testImplementation("io.mockk:mockk:1.13.10")
+    testImplementation("org.junit.jupiter:junit-jupiter-api:5.10.2")
+    testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.10.2")
 }
 
 intellij {
@@ -22,6 +25,10 @@ intellij {
 }
 
 tasks {
+    test {
+        useJUnitPlatform()
+    }
+
     buildSearchableOptions {
         enabled = false
     }
