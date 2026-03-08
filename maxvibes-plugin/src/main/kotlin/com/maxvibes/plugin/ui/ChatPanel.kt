@@ -116,7 +116,7 @@ class ChatPanel(
     private val settings: MaxVibesSettings by lazy { MaxVibesSettings.getInstance() }
 
     // Manages interaction mode state (API / Clipboard / CheapAPI).
-    // Extracted from ChatPanel to separate state logic from UI.
+// Extracted from ChatPanel to separate state logic from UI.
     private val modeManager: InteractionModeManager by lazy {
         InteractionModeManager(
             settings = settings,
@@ -124,11 +124,13 @@ class ChatPanel(
                 settings.interactionMode = mode.name
                 updateModeUI(mode)
                 if (mode == InteractionMode.CHEAP_API) service.ensureCheapLLMService()
+                render(buildState())
             }
         )
     }
 
     private var attachedTrace: String? = null
+    private var isWaitingForResponse: Boolean = false
     private val elementNavRegistry = mutableMapOf<String, String>()
 
     // ConversationRenderer handles all message filtering and formatting for display.
@@ -183,6 +185,7 @@ class ChatPanel(
     }
 
     override fun setInputEnabled(enabled: Boolean) {
+        isWaitingForResponse = !enabled
         inputArea.isEnabled = enabled; sendButton.isEnabled = enabled
         dryRunCheckbox.isEnabled = enabled; planOnlyCheckbox.isEnabled = enabled
         copyJsonButton.isEnabled = enabled
@@ -336,6 +339,7 @@ class ChatPanel(
                 }
             }
         }
+        render(buildState())
     }
 
     fun resetClipboard() {
@@ -872,4 +876,50 @@ class ChatPanel(
         },
         content = content
     )
+
+    /**
+     * Обновляет все UI-компоненты на основе переданного состояния.
+     * Единая точка обновления View — фундамент для MVP-паттерна (Steps 4-5).
+     */
+    fun render(state: ChatPanelState) {
+        // Хлебные крошки / заголовок
+        updateBreadcrumb()
+
+        // Индикатор режима
+        updateModeUI(state.mode)
+
+        // Кнопка отправки и поле ввода
+        sendButton.isEnabled = !state.isWaitingResponse
+        inputArea.isEnabled = !state.isWaitingResponse
+
+        // Индикаторы прикреплений (trace / errors)
+        updateIndicators()
+
+        // Токены текущей сессии
+        updateTokenDisplay()
+
+        // Количество файлов контекста
+        updateContextIndicator()
+
+        // Иконки тулбара (maximize / windowed)
+        updateToolWindowIcons()
+    }
+
+    /**
+     * Собирает текущее состояние ChatPanel из полей и сервисов.
+     * Используется как аргумент для render().
+     */
+    private fun buildState(): ChatPanelState {
+        val session = chatTreeService.getActiveSession()
+        return ChatPanelState(
+            currentSession = session,
+            sessionPath = chatTreeService.getSessionPath(session.id),
+            mode = modeManager.currentMode,
+            isWaitingResponse = isWaitingForResponse,
+            attachedTrace = attachedTrace,
+            attachedErrors = attachedErrors,
+            contextFilesCount = chatTreeService.getGlobalContextFiles().size,
+            tokenUsage = session.tokenUsage.takeIf { !it.isEmpty() }
+        )
+    }
 }
