@@ -6,8 +6,9 @@
 ## 📊 Общий статус
 
 ```
-Chat Domain Refactoring: ██████████ 100% ✅
-MVP Overall:            ██████████ 98%
+Chat Domain Refactoring:   ██████████ 100% ✅
+ChatPanel Refactoring:     ██████████ 100% ✅
+MVP Overall:               ██████████ 98%
 ```
 
 | Компонент | Статус | Комментарий |
@@ -19,8 +20,38 @@ MVP Overall:            ██████████ 98%
 | LLM Adapter | ✅ 100% | LangChain4j интеграция готова |
 | Plugin UI | ✅ 100% | Переключён на ChatTreeService |
 | Chat Domain Refactoring | ✅ 100% | Шаги 1–9 завершены |
-| Тесты | ✅ 75% | Unit тесты есть, включая ChatTreeService |
-| Документация | ✅ 90% | Обновлена под новую архитектуру |
+| ChatPanel Refactoring | ✅ 100% | Шаги 1–6 завершены |
+| DTO Mapper | ✅ 100% | ChatMessageMapper централизован |
+| Тесты | ✅ 78% | Unit тесты, включая ChatMessageMapperTest |
+| Документация | ✅ 95% | Обновлена под новую архитектуру |
+
+---
+
+## ✅ ChatPanel Refactoring (Шаги 1–6) — ЗАВЕРШЁН
+
+### Шаг 1: ConversationRenderer
+- [x] Фильтрация и форматирование сообщений вынесены из ChatPanel
+
+### Шаг 2: InteractionModeManager
+- [x] State machine переключения режимов (API / Clipboard / CheapAPI)
+
+### Шаг 3: ChatPanelState + render()
+- [x] Data class для снимка UI-состояния
+- [x] Единый метод `render(state)` — единая точка обновления View
+
+### Шаг 4: Attachment Management → Controller
+- [x] `attachTrace`, `clearTrace`, `fetchIdeErrors`, `clearErrors` перенесены в ChatMessageController
+
+### Шаг 5: Session Operations → Controller
+- [x] `createNewSession`, `deleteCurrentSession`, `renameSession`, `branchSession` перенесены в ChatMessageController
+
+### Шаг 6: Final Cleanup
+- [x] `ChatMessageMapper.kt` создан — единственное место конвертации ChatMessage → ChatMessageDTO
+- [x] Дубликаты `toChatMessageDTO()` удалены из ChatPanel, ChatMessageController, XmlChatMessage
+- [x] `TokenUsageAccumulator.kt` удалён (заменён per-session хранением в ChatSession)
+- [x] `src/main/kotlin/IntellijIdeErrorsAdapter.kt` (корень) удалён как дубликат
+- [x] `ChatMessageMapperTest.kt` добавлен (6 тестов)
+- [x] Документация обновлена
 
 ---
 
@@ -59,7 +90,6 @@ MVP Overall:            ██████████ 98%
 
 ### Шаг 9: Финальная чистка
 - [x] `ChatHistoryService` — pure persistence adapter (~130 строк)
-- [x] Удалены: все tree/create/delete методы, приватные helpers (collectDescendantIds, trimOldSessions)
 - [x] `TokenUsageAccumulator` — удалён (не использовался)
 - [x] `plugin.xml` — добавлена регистрация `ChatHistoryService` как `projectService`
 - [x] Документация обновлена
@@ -85,14 +115,27 @@ test/
 ChatSessionRepositoryContractTest.kt
 ChatTreeServiceTest.kt
 
+maxvibes-adapter-llm/dto/
+ChatMessageMapper.kt    ← шаг 6a ChatPanel refactoring
+
 maxvibes-plugin/chat/
 ChatHistoryService.kt   ← только persistence (~130 строк)
 ```
 
-**Результат рефакторинга:**
-- ✅ **Тестируемый** — ChatTreeService тестируется без IntelliJ
-- ✅ **Чистый** — доменные объекты без инфраструктурных аннотаций
-- ✅ **Понятный** — каждый слой отвечает за своё
+---
+
+## ✅ Итоговая структура Plugin UI
+
+```
+plugin/ui/
+ChatPanel.kt              # View ~515 строк: UI + routing
+ChatMessageController.kt  # Presenter: messages + attachments + sessions
+ConversationRenderer.kt   # Message filtering
+InteractionModeManager.kt # Mode state machine
+ChatPanelState.kt         # State snapshot
+SessionTreePanel.kt       # без изменений
+ConversationPanel.kt      # без изменений
+```
 
 ---
 
@@ -112,6 +155,7 @@ ChatHistoryService.kt   ← только persistence (~130 строк)
 
 ### LLM Adapter
 - [x] OpenAI, Anthropic, Ollama через LangChain4j
+- [x] `ChatMessageMapper` — централизованный маппинг ChatMessage → ChatMessageDTO
 
 ### Plugin
 - [x] `ChatHistoryService` — pure persistence
@@ -127,7 +171,8 @@ ChatHistoryService.kt   ← только persistence (~130 строк)
 - [ ] Preview Dialog (diff перед применением)
 - [ ] Integration тесты для LLM Adapter
 - [ ] E2E тесты плагина
-- [ ] trimOldSessions перенести в ChatTreeService (сейчас удалён из ChatHistoryService)
+- [ ] Перенести sendApiMessage/sendClipboardMessage/sendCheapApiMessage в ChatMessageController (ChatPanel → ≤250 строк)
+- [ ] trimOldSessions перенести в ChatTreeService
 
 ---
 

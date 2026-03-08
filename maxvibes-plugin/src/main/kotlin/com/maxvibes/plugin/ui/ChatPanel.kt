@@ -27,8 +27,7 @@ import com.intellij.ide.DataManager
 import com.intellij.openapi.vcs.VcsDataKeys
 import com.maxvibes.domain.model.chat.MessageRole
 import com.maxvibes.domain.model.chat.ChatMessage
-import com.maxvibes.application.port.output.ChatMessageDTO
-import com.maxvibes.application.port.output.ChatRole
+import com.maxvibes.domain.model.chat.ChatSession
 
 class ChatPanel(
     private val project: Project,
@@ -457,9 +456,10 @@ class ChatPanel(
         sessionsButton.addActionListener { onShowSessions() }
 
         newChatButton.addActionListener {
-            resetClipboard(); chatTreeService.createNewSession()
+            resetClipboard()
             messageController.clearAttachmentsAfterSend()
-            loadCurrentSession(); updateModeIndicator(); statusLabel.text = "New dialog"
+            messageController.createNewSession()
+            statusLabel.text = "New dialog"
         }
 
         branchButton.addActionListener {
@@ -469,12 +469,9 @@ class ChatPanel(
                 null, null, "Branch: ${active.title.take(25)}"
             ) as? String ?: return@addActionListener
             resetClipboard()
-            val branch = chatTreeService.createBranch(active.id, title)
-            if (branch != null) {
-                messageController.clearAttachmentsAfterSend()
-                loadCurrentSession(); updateModeIndicator()
-                statusLabel.text = "Branch: ${branch.title}"
-            }
+            messageController.clearAttachmentsAfterSend()
+            messageController.branchSession(active.id, title)
+            statusLabel.text = "Branch: $title"
         }
 
         deleteButton.addActionListener { deleteCurrentChat() }
@@ -521,7 +518,6 @@ class ChatPanel(
                 return@addActionListener
             }
             if (newMode == modeManager.currentMode) return@addActionListener
-            // Confirm before leaving an active clipboard session
             if (modeManager.currentMode == InteractionMode.CLIPBOARD && service.clipboardService.isWaitingForResponse()) {
                 val confirm = JOptionPane.showConfirmDialog(
                     this, "Active clipboard session will be reset. Continue?",
@@ -537,7 +533,7 @@ class ChatPanel(
                 "switchMode",
                 mapOf("from" to modeManager.currentMode.name, "to" to newMode.name)
             )
-            modeManager.switchMode(newMode)  // triggers onModeChanged: saves settings, updates UI, ensureCheapLLM
+            modeManager.switchMode(newMode)
             val label = MaxVibesSettings.INTERACTION_MODES.find { it.first == newMode.name }?.second ?: newMode.name
             statusLabel.text = "Mode: $label"
             conversationPanel.addSystemBubble("\u2699\uFE0F Switched to $label")
@@ -557,105 +553,12 @@ class ChatPanel(
     private fun sendMessage() {
         val userInput = inputArea.text.trim()
         if (userInput.isBlank()) return
-        val trace = messageController.attachedTrace
-        val errs = messageController.attachedErrors
-        messageController.clearAttachmentsAfterSend()
-        val isPlanOnly = planOnlyCheckbox.isSelected
-        MaxVibesLogger.info(
-            "ChatPanel", "sendMessage", mapOf(
-                "mode" to modeManager.currentMode.name,
-                "msgLen" to userInput.length,
-                "isPlanOnly" to isPlanOnly,
-                "hasTrace" to (trace != null),
-                "hasErrors" to (errs != null)
-            )
-        )
-        when (modeManager.currentMode) {
-            InteractionMode.API -> sendApiMessage(userInput, trace, errs)
-            InteractionMode.CLIPBOARD -> sendClipboardMessage(userInput, trace, errs, isPlanOnly)
-            InteractionMode.CHEAP_API -> sendCheapApiMessage(userInput, trace, errs)
-        }
-    }
-
-    private fun sendApiMessage(msg: String, trace: String?, errs: String?) {
-        var session = chatTreeService.getActiveSession()
-        val isPlanOnly = planOnlyCheckbox.isSelected
-        conversationPanel.addUserBubble(msg)
-        val fullTask = buildString {
-            append(msg)
-            if (!trace.isNullOrBlank()) append("\n[trace: ${trace.lines().size} lines]")
-            if (!errs.isNullOrBlank()) append("\n[attached ide errors]")
-            if (isPlanOnly) append("\n[plan-only]")
-        }
-        val history = session.messages.map { it.toChatMessageDTO() }
-        session = chatTreeService.addMessage(session.id, MessageRole.USER, fullTask)
-        inputArea.text = ""; setInputEnabled(false)
-        statusLabel.text = if (isPlanOnly) "Planning..." else "Thinking..."
-        messageController.sendApiMessage(
-            fullTask, session, history, dryRunCheckbox.isSelected,
-            isPlanOnly, chatTreeService.getGlobalContextFiles(), errs
-        )
-    }
-
-    private fun sendClipboardMessage(userInput: String, trace: String?, errs: String?, isPlanOnly: Boolean) {
-        val cs = service.clipboardService
-        var session = chatTreeService.getActiveSession()
-        val globalContextFiles = chatTreeService.getGlobalContextFiles()
         inputArea.text = ""
-        when {
-            cs.isWaitingForResponse() -> {
-                conversationPanel.appendIconToLastBubble("\uD83D\uDCE5")
-                setInputEnabled(false); statusLabel.text = "Processing..."
-                messageController.runClipboardBg("Processing response...", session) {
-                    cs.handlePastedResponse(userInput)
-                }
-            }
-
-            cs.hasActiveSession() -> {
-                conversationPanel.addUserBubble(userInput)
-                val fullMsg = buildString {
-                    append(userInput)
-                    if (!trace.isNullOrBlank()) append("\n[trace: ${trace.lines().size} lines]")
-                    if (!errs.isNullOrBlank()) append("\n[attached ide errors]")
-                    if (isPlanOnly) append("\n[plan-only]")
-                }
-                session = chatTreeService.addMessage(session.id, MessageRole.USER, fullMsg)
-                setInputEnabled(false); statusLabel.text = "Continuing..."
-                messageController.runClipboardBg("Continuing...", session) {
-                    cs.continueDialog(userInput, trace, isPlanOnly, errs, globalContextFiles)
-                }
-            }
-
-            else -> {
-                conversationPanel.addUserBubble(userInput)
-                val fullMsg = buildString {
-                    append(userInput)
-                    if (!trace.isNullOrBlank()) append("\n[trace: ${trace.lines().size} lines]")
-                    if (!errs.isNullOrBlank()) append("\n[attached ide errors]")
-                    if (isPlanOnly) append("\n[plan-only]")
-                }
-                val dtos = session.messages.map { it.toChatMessageDTO() }
-                session = chatTreeService.addMessage(session.id, MessageRole.USER, fullMsg)
-                setInputEnabled(false); statusLabel.text = "Generating JSON..."
-                messageController.runClipboardBg("Generating request...", session) {
-                    cs.startTask(userInput, dtos, trace, isPlanOnly, errs, globalContextFiles)
-                }
-            }
-        }
-    }
-
-    private fun sendCheapApiMessage(msg: String, trace: String?, errs: String?) {
-        var session = chatTreeService.getActiveSession()
-        val isPlanOnly = planOnlyCheckbox.isSelected
-        conversationPanel.addUserBubble(msg)
-        val fullTask = ChatMessageController.buildTaskWithContext(msg, trace, errs)
-        val history = session.messages.map { it.toChatMessageDTO() }
-        session = chatTreeService.addMessage(session.id, MessageRole.USER, fullTask)
-        inputArea.text = ""; setInputEnabled(false); statusLabel.text = "Thinking (cheap)..."
-        service.ensureCheapLLMService()
-        messageController.sendCheapApiMessage(
-            fullTask, session, history, dryRunCheckbox.isSelected,
-            isPlanOnly, chatTreeService.getGlobalContextFiles(), errs
+        messageController.sendMessage(
+            userInput,
+            planOnlyCheckbox.isSelected,
+            dryRunCheckbox.isSelected,
+            modeManager.currentMode
         )
     }
 
@@ -760,9 +663,12 @@ class ChatPanel(
             if (committed) return; committed = true
             val newTitle = textField.text.trim()
             if (newTitle.isNotBlank() && newTitle != currentTitle) {
-                chatTreeService.renameSession(sessionId, newTitle); statusLabel.text = "Renamed to \"$newTitle\""
+                // Saving delegated to controller; onSessionRenamed callback updates breadcrumb via render()
+                messageController.renameSession(sessionId, newTitle)
+                statusLabel.text = "Renamed to \"$newTitle\""
+            } else {
+                updateBreadcrumb()
             }
-            updateBreadcrumb()
         }
 
         fun cancelRename() {
@@ -799,9 +705,8 @@ class ChatPanel(
         if (confirm != JOptionPane.YES_OPTION) return
         resetClipboard()
         messageController.clearAttachmentsAfterSend()
-        chatTreeService.deleteSession(session.id)
-        if (chatTreeService.getAllSessions().isEmpty()) chatTreeService.createNewSession()
-        loadCurrentSession(); updateModeIndicator(); statusLabel.text = "Chat deleted"
+        messageController.deleteCurrentSession(session.id)
+        statusLabel.text = "Chat deleted"
     }
 
     private fun updateContextIndicator() {
@@ -833,15 +738,6 @@ class ChatPanel(
         windowedButton.icon = AllIcons.Actions.MoveToWindow
         windowedButton.toolTipText = if (isFloating) "Dock Tool Window" else "Floating Mode"
     }
-
-    private fun ChatMessage.toChatMessageDTO() = ChatMessageDTO(
-        role = when (role) {
-            MessageRole.USER -> ChatRole.USER
-            MessageRole.ASSISTANT -> ChatRole.ASSISTANT
-            MessageRole.SYSTEM -> ChatRole.SYSTEM
-        },
-        content = content
-    )
 
     /**
      * Обновляет все UI-компоненты на основе переданного состояния.
@@ -889,5 +785,16 @@ class ChatPanel(
     }
     override fun onError(message: String) {
         setStatus(message)
+    }
+    override fun onSessionChanged(session: ChatSession?) {
+        // Delegate to loadCurrentSession which reads the active session via chatTreeService.
+        // The controller has already called setActiveSessionId before firing this callback.
+        loadCurrentSession()
+    }
+    override fun onSessionRenamed(session: ChatSession) {
+        render(buildState())
+    }
+    override fun onShowWelcome() {
+        showWelcome()
     }
 }

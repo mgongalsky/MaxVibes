@@ -126,21 +126,6 @@ fun setGlobalContextFiles(files: List<String>)
 
 Сервис application layer — вся бизнес-логика дерева сессий. **Не зависит от IntelliJ**, тестируется без IDE.
 
-```kotlin
-class ChatTreeService(private val repository: ChatSessionRepository) {
-fun getActiveSession(): ChatSession
-fun createNewSession(): ChatSession
-fun createBranch(parentId: String, title: String?): ChatSession?
-fun deleteSession(sessionId: String)
-fun deleteSessionCascade(sessionId: String)
-fun renameSession(sessionId: String, newTitle: String): Boolean
-fun addMessage(sessionId: String, role: MessageRole, content: String): ChatSession
-fun buildTree(): List<SessionTreeNode>
-fun getSessionPath(sessionId: String): List<ChatSession>
-// ...
-}
-```
-
 ---
 
 ### maxvibes-adapter-psi
@@ -151,6 +136,9 @@ fun getSessionPath(sessionId: String): List<ChatSession>
 maxvibes-adapter-psi/
 └── src/main/kotlin/com/maxvibes/adapter/psi/
 ├── PsiCodeRepository.kt
+├── context/
+│   ├── IntellijIdeErrorsAdapter.kt
+│   └── PsiProjectContextProvider.kt
 ├── mapper/
 │   └── PsiToDomainMapper.kt
 ├── operation/
@@ -165,6 +153,16 @@ maxvibes-adapter-psi/
 ### maxvibes-adapter-llm
 
 **Зависимости:** domain, application, shared, LangChain4j
+
+```
+maxvibes-adapter-llm/
+└── src/main/kotlin/com/maxvibes/adapter/llm/
+├── dto/
+│   ├── LLMResponseDTOs.kt
+│   └── ChatMessageMapper.kt    # ← Единственное место ChatMessage → ChatMessageDTO
+├── LangChainLLMService.kt
+└── LLMServiceFactory.kt
+```
 
 | Провайдер | Модели |
 |-----------|--------|
@@ -190,15 +188,27 @@ maxvibes-plugin/
 │   └── IdeNotificationService.kt
 ├── settings/
 └── ui/
-├── ChatPanel.kt
-├── ChatMessageController.kt
+├── ChatPanel.kt             # View: UI + event routing (~515 LOC) ✅
+├── ChatMessageController.kt # Presenter: messages + attachments + sessions
+├── ConversationRenderer.kt  # Message filtering and display formatting
+├── InteractionModeManager.kt # Mode state machine (API/Clipboard/CheapAPI)
+├── ChatPanelState.kt        # State snapshot for render()
 ├── SessionTreePanel.kt
-└── ...
+└── ConversationPanel.kt
 ```
+
+#### ChatPanel — статус: Хорошо ✅
+
+Thin View — отображает состояние и маршрутизирует события. Соответствует SRP.
+
+- `render(ChatPanelState)` — единая точка обновления UI
+- Не содержит бизнес-логики (attachment/session operations делегированы Controller)
+- Использует `ConversationRenderer` для отображения истории
+- Использует `InteractionModeManager` для state machine режимов
 
 #### ChatHistoryService
 
-Пure persistence adapter. Реализует `ChatSessionRepository`. Управляет только XML-сериализацией через IntelliJ `PersistentStateComponent`. Никакой бизнес-логики.
+Pure persistence adapter. Реализует `ChatSessionRepository`. Управляет только XML-сериализацией через IntelliJ `PersistentStateComponent`. Никакой бизнес-логики.
 
 ---
 
@@ -238,12 +248,14 @@ maxvibes-chat-history.xml
 | Unit | shared | Result |
 | Unit | application | ChatTreeService (без IntelliJ!) |
 | Contract | application | ChatSessionRepositoryContractTest |
+| Unit | adapter-llm | ChatMessageMapperTest |
 | Integration | adapter-psi | PsiToDomainMapper, PsiNavigator |
 
 ```bash
 ./gradlew :maxvibes-application:test   # ChatTreeService, ChatSessionRepository
 ./gradlew :maxvibes-domain:test
 ./gradlew :maxvibes-shared:test
+./gradlew :maxvibes-adapter-llm:test   # ChatMessageMapperTest
 ```
 
 ---
@@ -255,3 +267,5 @@ maxvibes-chat-history.xml
 3. **Testable Domain** — ChatTreeService тестируется без IntelliJ
 4. **Immutable Domain Models** — `data class`, иммутабельные
 5. **Result Type** — явная обработка ошибок вместо исключений
+6. **Single Responsibility** — ChatPanel отображает, ChatMessageController управляет
+7. **Single Source of Truth** — ChatMessageMapper единственное место маппинга ChatMessage → DTO

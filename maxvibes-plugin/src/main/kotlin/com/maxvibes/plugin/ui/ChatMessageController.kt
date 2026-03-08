@@ -8,7 +8,6 @@ import com.intellij.openapi.project.Project
 import com.maxvibes.application.port.input.ContextAwareRequest
 import com.maxvibes.application.port.input.ContextAwareResult
 import com.maxvibes.application.port.output.ChatMessageDTO
-import com.maxvibes.application.port.output.ChatRole
 import com.maxvibes.application.service.ClipboardStepResult
 import com.maxvibes.domain.model.chat.ChatMessage
 import com.maxvibes.domain.model.chat.ChatSession
@@ -18,6 +17,8 @@ import com.maxvibes.plugin.service.MaxVibesLogger
 import com.maxvibes.plugin.service.MaxVibesService
 import kotlinx.coroutines.runBlocking
 import com.maxvibes.shared.result.Result
+import com.maxvibes.adapter.llm.dto.toChatMessageDTO
+import com.maxvibes.domain.model.interaction.InteractionMode
 
 interface ChatPanelCallbacks {
     fun appendToChat(text: String)
@@ -50,6 +51,15 @@ interface ChatPanelCallbacks {
 
     /** Called when a background operation encounters an error. */
     fun onError(message: String)
+
+    /** Called when the active session changes (create, delete, branch, load). */
+    fun onSessionChanged(session: ChatSession?)
+
+    /** Called when a session is renamed. */
+    fun onSessionRenamed(session: ChatSession)
+
+    /** Called to show the welcome screen (e.g. no sessions). */
+    fun onShowWelcome()
 }
 
 /**
@@ -95,15 +105,6 @@ class ChatMessageController(
             }
         }
     }
-
-    private fun ChatMessage.toChatMessageDTO(): ChatMessageDTO = ChatMessageDTO(
-        role = when (role) {
-            MessageRole.USER -> ChatRole.USER
-            MessageRole.ASSISTANT -> ChatRole.ASSISTANT
-            MessageRole.SYSTEM -> ChatRole.SYSTEM
-        },
-        content = content
-    )
 
     // ==================== API Mode ====================
 
@@ -554,5 +555,152 @@ Check:
         attachedTrace = null
         attachedErrors = null
         callbacks.onAttachmentsChanged(null, null)
+    }
+    fun createNewSession() {
+        val newSession = chatTreeService.createNewSession()
+        callbacks.onSessionChanged(newSession)
+    }
+    fun deleteCurrentSession(sessionId: String) {
+        chatTreeService.deleteSession(sessionId)
+        // deleteSession() internally sets the next active session (parent / sibling / first remaining)
+        val next = chatTreeService.getActiveSession()
+        callbacks.onSessionChanged(next)
+    }
+    fun renameSession(sessionId: String, newTitle: String) {
+        val updated = chatTreeService.renameSession(sessionId, newTitle)
+        if (updated != null) {
+            callbacks.onSessionRenamed(updated)
+        }
+    }
+    fun branchSession(parentSessionId: String, title: String) {
+        val newSession = chatTreeService.createBranch(parentSessionId, title)
+        if (newSession != null) {
+            callbacks.onSessionChanged(newSession)
+        }
+    }
+    fun loadSession(sessionId: String) {
+        chatTreeService.setActiveSession(sessionId)
+        val session = chatTreeService.getSessionById(sessionId)
+        if (session != null) {
+            callbacks.onSessionChanged(session)
+        }
+    }
+    fun sendMessage(userInput: String, isPlanOnly: Boolean, isDryRun: Boolean, mode: InteractionMode) {
+        val trace = attachedTrace
+        val errs = attachedErrors
+        clearAttachmentsAfterSend()
+        MaxVibesLogger.info(
+            "Controller", "sendMessage", mapOf(
+                "mode" to mode.name,
+                "msgLen" to userInput.length,
+                "isPlanOnly" to isPlanOnly,
+                "hasTrace" to (trace != null),
+                "hasErrors" to (errs != null)
+            )
+        )
+        when (mode) {
+            InteractionMode.API -> dispatchApiMessage(userInput, trace, errs, isPlanOnly, isDryRun)
+            InteractionMode.CLIPBOARD -> dispatchClipboardMessage(userInput, trace, errs, isPlanOnly)
+            InteractionMode.CHEAP_API -> dispatchCheapApiMessage(userInput, trace, errs, isPlanOnly, isDryRun)
+        }
+    }
+    private fun dispatchApiMessage(msg: String, trace: String?, errs: String?, isPlanOnly: Boolean, isDryRun: Boolean) {
+        var session = chatTreeService.getActiveSession()
+        val fullTask = buildString {
+            append(msg)
+            if (!trace.isNullOrBlank()) append("\n[trace: ${trace.lines().size} lines]")
+            if (!errs.isNullOrBlank()) append("\n[attached ide errors]")
+            if (isPlanOnly) append("\n[plan-only]")
+        }
+        val history = session.messages.map { it.toChatMessageDTO() }
+        session = chatTreeService.addMessage(session.id, MessageRole.USER, fullTask)
+        callbacks.addUserMessageBubble(msg)
+        callbacks.setInputEnabled(false)
+        callbacks.setStatus(if (isPlanOnly) "Planning..." else "Thinking...")
+        sendApiMessage(fullTask, session, history, isDryRun, isPlanOnly, chatTreeService.getGlobalContextFiles(), errs)
+    }
+    private fun dispatchClipboardMessage(userInput: String, trace: String?, errs: String?, isPlanOnly: Boolean) {
+        val cs = service.clipboardService
+        var session = chatTreeService.getActiveSession()
+        val globalContextFiles = chatTreeService.getGlobalContextFiles()
+        when {
+            cs.isWaitingForResponse() -> {
+                callbacks.appendIconToLastBubble("\uD83D\uDCE5")
+                callbacks.setInputEnabled(false)
+                callbacks.setStatus("Processing...")
+                runClipboardBg("Processing response...", session) { cs.handlePastedResponse(userInput) }
+            }
+
+            cs.hasActiveSession() -> {
+                callbacks.addUserMessageBubble(userInput)
+                val fullMsg = buildString {
+                    append(userInput)
+                    if (!trace.isNullOrBlank()) append("\n[trace: ${trace.lines().size} lines]")
+                    if (!errs.isNullOrBlank()) append("\n[attached ide errors]")
+                    if (isPlanOnly) append("\n[plan-only]")
+                }
+                session = chatTreeService.addMessage(session.id, MessageRole.USER, fullMsg)
+                callbacks.setInputEnabled(false)
+                callbacks.setStatus("Continuing...")
+                runClipboardBg("Continuing...", session) {
+                    cs.continueDialog(
+                        userInput,
+                        trace,
+                        isPlanOnly,
+                        errs,
+                        globalContextFiles
+                    )
+                }
+            }
+
+            else -> {
+                callbacks.addUserMessageBubble(userInput)
+                val fullMsg = buildString {
+                    append(userInput)
+                    if (!trace.isNullOrBlank()) append("\n[trace: ${trace.lines().size} lines]")
+                    if (!errs.isNullOrBlank()) append("\n[attached ide errors]")
+                    if (isPlanOnly) append("\n[plan-only]")
+                }
+                val dtos = session.messages.map { it.toChatMessageDTO() }
+                session = chatTreeService.addMessage(session.id, MessageRole.USER, fullMsg)
+                callbacks.setInputEnabled(false)
+                callbacks.setStatus("Generating JSON...")
+                runClipboardBg("Generating request...", session) {
+                    cs.startTask(
+                        userInput,
+                        dtos,
+                        trace,
+                        isPlanOnly,
+                        errs,
+                        globalContextFiles
+                    )
+                }
+            }
+        }
+    }
+    private fun dispatchCheapApiMessage(
+        msg: String,
+        trace: String?,
+        errs: String?,
+        isPlanOnly: Boolean,
+        isDryRun: Boolean
+    ) {
+        var session = chatTreeService.getActiveSession()
+        val fullTask = buildTaskWithContext(msg, trace, errs)
+        val history = session.messages.map { it.toChatMessageDTO() }
+        session = chatTreeService.addMessage(session.id, MessageRole.USER, fullTask)
+        callbacks.addUserMessageBubble(msg)
+        callbacks.setInputEnabled(false)
+        callbacks.setStatus("Thinking (cheap)...")
+        service.ensureCheapLLMService()
+        sendCheapApiMessage(
+            fullTask,
+            session,
+            history,
+            isDryRun,
+            isPlanOnly,
+            chatTreeService.getGlobalContextFiles(),
+            errs
+        )
     }
 }

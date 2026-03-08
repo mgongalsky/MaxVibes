@@ -9,8 +9,6 @@ import com.intellij.util.xmlb.XmlSerializerUtil
 import com.intellij.util.xmlb.annotations.Attribute
 import com.intellij.util.xmlb.annotations.Tag
 import com.intellij.util.xmlb.annotations.XCollection
-import com.maxvibes.application.port.output.ChatMessageDTO
-import com.maxvibes.application.port.output.ChatRole
 import com.maxvibes.application.port.output.ChatSessionRepository
 import com.maxvibes.domain.model.chat.ChatMessage
 import com.maxvibes.domain.model.chat.ChatSession
@@ -48,15 +46,6 @@ class XmlChatMessage {
         role = role,
         content = content,
         timestamp = timestamp
-    )
-
-    fun toChatMessageDTO(): ChatMessageDTO = ChatMessageDTO(
-        role = when (role) {
-            MessageRole.USER -> ChatRole.USER
-            MessageRole.ASSISTANT -> ChatRole.ASSISTANT
-            MessageRole.SYSTEM -> ChatRole.SYSTEM
-        },
-        content = content
     )
 
     companion object {
