@@ -274,6 +274,7 @@ class LangChainLLMService(
             val systemPrompt = buildChatSystemPrompt(context)
             val contextBlock = buildContextBlock(context.gatheredFiles)
 
+            // Attempt structured output via AiServices; fall back to raw model on failure.
             val chatResponse = try {
                 withPluginClassLoader {
                     val chatService = createChatService(systemPrompt, history, contextBlock)
@@ -292,10 +293,11 @@ class LangChainLLMService(
                 chatViaRawModel(message, history, systemPrompt, contextBlock)
             }
 
+            // Attach per-call token stats reported by the provider listener.
             val tu = lastTokenUsagePair.getAndSet(null)
             val finalResponse = if (tu != null) {
                 log("[LangChainLLMService] Chat tokens: in=${tu.first}, out=${tu.second}")
-                chatResponse.copy(tokenUsage = TokenUsage(tu.first, tu.second))
+                chatResponse.copy(tokenUsage = LLMCallTokenUsage(tu.first, tu.second))
             } else chatResponse
 
             log("[LangChainLLMService] Final result: ${finalResponse.modifications.size} modifications")

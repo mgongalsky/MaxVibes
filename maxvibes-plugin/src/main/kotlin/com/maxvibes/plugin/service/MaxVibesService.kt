@@ -129,10 +129,24 @@ class MaxVibesService(private val project: Project) {
     @Volatile
     private var _cheapContextAwareModifyUseCase: ContextAwareModifyUseCase? = null
 
+    /**
+     * Lazy-initialized use case backed by the cheap LLM configuration.
+     * Creates the service on first access; returns null if creation fails
+     * (e.g. cheap provider is not configured in settings).
+     */
     val cheapContextAwareModifyUseCase: ContextAwareModifyUseCase?
-        get() = _cheapContextAwareModifyUseCase
+        get() {
+            if (_cheapContextAwareModifyUseCase == null) {
+                initCheapLLMService()
+            }
+            return _cheapContextAwareModifyUseCase
+        }
 
-    fun ensureCheapLLMService() {
+    /**
+     * Creates the cheap LLM service and its associated use case from current settings.
+     * Idempotent — skips creation if already initialized.
+     */
+    private fun initCheapLLMService() {
         if (_cheapContextAwareModifyUseCase != null) return
         val settings = MaxVibesSettings.getInstance()
         try {
@@ -174,6 +188,20 @@ class MaxVibesService(private val project: Project) {
             LOG.warn("Failed to create cheap LLM service: ${e.message}", e)
             MaxVibesLogger.error("Service", "cheapLLM creation failed", e)
         }
+    }
+
+    /**
+     * No-op. Kept for source compatibility while callers are migrated.
+     *
+     * Cheap LLM service now initializes lazily on the first access to
+     * [cheapContextAwareModifyUseCase] — no manual call required.
+     */
+    @Deprecated(
+        message = "Cheap LLM service is initialized lazily. Access cheapContextAwareModifyUseCase directly.",
+        replaceWith = ReplaceWith("cheapContextAwareModifyUseCase")
+    )
+    fun ensureCheapLLMService() {
+        // Intentional no-op: lazy init happens inside the cheapContextAwareModifyUseCase getter.
     }
 
     // ========== LLM Service Creation ==========
