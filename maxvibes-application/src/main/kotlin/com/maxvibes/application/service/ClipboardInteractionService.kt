@@ -235,12 +235,26 @@ class ClipboardInteractionService(
                     "historySize=${state.dialogHistory.size}, planOnly=${state.planOnly}"
         )
 
+        // Select system prompt based on current phase:
+        // - PLANNING (no files gathered yet): use planningSystem from PromptService
+        // - CHAT: use chatSystem, optionally extended with PLAN_ONLY_SUFFIX
+        val systemInstruction = if (state.allGatheredFiles.isEmpty()) {
+            state.prompts.planningSystem
+        } else {
+            buildString {
+                append(state.prompts.chatSystem)
+                if (state.planOnly) {
+                    append(PLAN_ONLY_SUFFIX)
+                }
+            }
+        }
+
         val request = ClipboardRequest(
             phase = if (state.allGatheredFiles.isEmpty() && freshFiles.isEmpty())
                 ClipboardPhase.PLANNING else ClipboardPhase.CHAT,
             task = state.task,
             projectName = state.projectContext.name,
-            systemInstruction = buildSystemInstruction(state),
+            systemInstruction = systemInstruction,
             fileTree = state.projectContext.fileTree.toCompactString(maxDepth = 4),
             freshFiles = freshFiles,
             previouslyGatheredPaths = previousPaths,
@@ -408,84 +422,6 @@ class ClipboardInteractionService(
 
     // ==================== System Instructions ====================
 
-    private fun buildSystemInstruction(state: ClipboardSessionState): String {
-        val isFirstPhase = state.allGatheredFiles.isEmpty()
-        return if (isFirstPhase) buildPlanningInstruction(state) else buildChatInstruction(state)
-    }
-
-    private fun buildPlanningInstruction(state: ClipboardSessionState): String {
-        val custom = state.prompts.planningSystem
-        if (custom.isNotBlank()) return custom
-
-        return """⚠️ CRITICAL: This is a MaxVibes clipboard protocol message. You MUST respond with ONLY a JSON object as plain text in the chat.
-DO NOT use computer tools. DO NOT create files. DO NOT use bash. DO NOT use artifacts.
-DO NOT write code to disk. Your ENTIRE response must be a single JSON object — nothing else.
-
-You are an expert software architect assistant in a clipboard-based dialog through MaxVibes IDE plugin.
-
-TASK: Analyze the task and project file tree, then decide what you need.
-
-Your response must be EXACTLY this JSON format (and nothing else):
-{
-    "message": "Your thoughts, questions, or discussion about the task",
-    "requestedFiles": ["path/to/file.kt", ...],
-    "reasoning": "Why you need these specific files"
-}
-
-Rules:
-- "message" is REQUIRED — always explain your thinking
-- "requestedFiles" — list files you need to see. Leave empty [] if you just want to discuss.
-- If the task is just a question/discussion (no coding needed), set "requestedFiles": [] and put your answer in "message"
-- DO NOT wrap the JSON in markdown code blocks. Just output raw JSON.
-- Project: ${state.projectContext.name}, Language: ${state.projectContext.techStack.language}"""
-    }
-
-    private fun buildChatInstruction(state: ClipboardSessionState): String {
-        val custom = state.prompts.chatSystem
-        val basePrompt =
-            if (custom.isNotBlank()) custom else """⚠️ CRITICAL: This is a MaxVibes clipboard protocol message. You MUST respond with ONLY a JSON object as plain text in the chat.
-DO NOT use computer tools. DO NOT create files. DO NOT use bash. DO NOT use artifacts.
-DO NOT write code to disk. ALL code goes into the "modifications" array inside the JSON.
-Your ENTIRE response must be a single JSON object — nothing else.
-
-You are MaxVibes AI coding assistant in a continuous clipboard-based dialog.
-Project: ${state.projectContext.name}, Language: ${state.projectContext.techStack.language}.
-
-Your response must be EXACTLY this JSON format (and nothing else):
-{
-    "message": "Your detailed explanation, discussion, or answer",
-    "requestedFiles": ["path/to/file.kt"],
-    "modifications": [
-        {
-            "type": "REPLACE_ELEMENT",
-            "path": "file:src/main/kotlin/com/example/User.kt/class[User]/function[validate]",
-            "content": "fun validate(): Boolean {\\n    return name.isNotBlank()\\n}",
-            "elementKind": "FUNCTION"
-        }
-    ]
-}
-
-ALL FIELDS ARE OPTIONAL except "message" which is always recommended."""
-
-        if (!state.planOnly) return basePrompt
-
-        return basePrompt + """
-
-## ⚠️ PLAN-ONLY MODE — DISCUSSION REQUIRED
-
-DO NOT generate any code changes in the "modifications" array. 
-Keep "modifications": [] empty.
-Your goal is to DISCUSS the plan with the user before any code is written.
-
-Instead of code, you must:
-1. Briefly explain what you understand from the task
-2. List which files you plan to touch and what changes you'll make in each
-3. Mention any architectural decisions or trade-offs
-4. Ask the user to confirm or suggest corrections
-
-Always output the JSON with "modifications": [] and put your discussion in "message"."""
-    }
-
     // ==================== Helpers ====================
 
     private fun addToHistory(role: ChatRole, content: String) {
@@ -559,6 +495,29 @@ Always output the JSON with "modifications": [] and put your discussion in "mess
     fun recopyLastRequest(): Boolean {
         val req = lastRequest ?: return false
         return clipboardPort.copyRequestToClipboard(req)
+    }
+
+    companion object {
+        /**
+         * Суффикс, добавляемый к chat-промпту в plan-only режиме.
+         * Не содержит базовый промпт — только дополнение, запрещающее генерацию кода.
+         * Единственный источник plan-only текста: живёт здесь, используется в generateAndCopyJson.
+         */
+        private val PLAN_ONLY_SUFFIX = """
+
+## ⚠️ PLAN-ONLY MODE — DISCUSSION REQUIRED
+
+DO NOT generate any code changes in the "modifications" array. 
+Keep "modifications": [] empty.
+Your goal is to DISCUSS the plan with the user before any code is written.
+
+Instead of code, you must:
+1. Briefly explain what you understand from the task
+2. List which files you plan to touch and what changes you'll make in each
+3. Mention any architectural decisions or trade-offs
+4. Ask the user to confirm or suggest corrections
+
+Always output the JSON with "modifications": [] and put your discussion in "message".""".trimIndent()
     }
 }
 
