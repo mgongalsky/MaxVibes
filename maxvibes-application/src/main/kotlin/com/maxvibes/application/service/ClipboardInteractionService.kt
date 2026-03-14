@@ -28,15 +28,33 @@ class ClipboardInteractionService(
 
     // ==================== Public API ====================
 
+    /**
+     * Starts a new clipboard task session.
+     *
+     * Gathers global context files, initialises session state, and copies the first
+     * JSON request to the clipboard for the user to paste into an external LLM.
+     *
+     * @param task        The user's task description.
+     * @param history     Pre-existing dialog history.
+     * @param attachedContext Additional context text attached by the user.
+     * @param planOnly    When true, the LLM is instructed not to generate code changes.
+     * @param ideErrors   IDE error output to include in the request.
+     * @param globalContextFiles Paths that should always be included as fresh files.
+     * @param addHistory  UI: "Add History" — when true, previously gathered file paths
+     *                    are included in [ClipboardRequest.previouslyGatheredPaths] so
+     *                    the LLM can request them again without re-uploading content.
+     *                    When false (default), that list is empty, minimising token usage.
+     */
     suspend fun startTask(
         task: String,
         history: List<ChatMessageDTO> = emptyList(),
         attachedContext: String? = null,
         planOnly: Boolean = false,
         ideErrors: String? = null,
-        globalContextFiles: List<String> = emptyList()
+        globalContextFiles: List<String> = emptyList(),
+        addHistory: Boolean = false
     ): ClipboardStepResult {
-        log("Starting new clipboard task: \"${task.take(60)}...\" (planOnly=$planOnly)")
+        log("Starting new clipboard task: \"${task.take(60)}...\" (planOnly=$planOnly, addHistory=$addHistory)")
 
         notificationPort.showProgress("Gathering project context...", 0.1)
         val projectContextResult = contextProvider.getProjectContext()
@@ -65,21 +83,35 @@ class ClipboardInteractionService(
 
         return generateAndCopyJson(
             freshFiles = freshFiles,
-            isFirstMessage = true
+            isFirstMessage = true,
+            addHistory = addHistory
         )
     }
 
+    /**
+     * Continues an existing clipboard dialog session with a new user message.
+     *
+     * @param message       The user's follow-up message.
+     * @param attachedContext Replaces (or inherits) the attached context for this turn.
+     * @param planOnly      Overrides plan-only mode for this turn; inherits previous value if null.
+     * @param ideErrors     IDE error output for this turn.
+     * @param globalContextFiles Paths to include as fresh files in this request.
+     * @param addHistory    UI: "Add History" — when true, the list of all previously gathered
+     *                      file paths is sent so the LLM can request them again if its context
+     *                      was lost. When false (default), the list is empty to save tokens.
+     */
     suspend fun continueDialog(
         message: String,
         attachedContext: String? = null,
         planOnly: Boolean? = null,
         ideErrors: String? = null,
-        globalContextFiles: List<String> = emptyList()
+        globalContextFiles: List<String> = emptyList(),
+        addHistory: Boolean = false
     ): ClipboardStepResult {
         val state = sessionState
             ?: return error("No active clipboard session. Start a new task first.")
 
-        log("Continuing dialog: \"${message.take(60)}...\" (new planOnly=$planOnly)")
+        log("Continuing dialog: \"${message.take(60)}...\" (new planOnly=$planOnly, addHistory=$addHistory)")
 
         sessionState = state.copy(
             attachedContext = attachedContext ?: state.attachedContext,
@@ -93,7 +125,8 @@ class ClipboardInteractionService(
 
         return generateAndCopyJson(
             freshFiles = freshFiles,
-            isFirstMessage = false
+            isFirstMessage = false,
+            addHistory = addHistory
         )
     }
 
@@ -220,24 +253,44 @@ class ClipboardInteractionService(
         )
     }
 
+    /**
+     * Builds a [ClipboardRequest], copies it to the clipboard, and transitions the
+     * session into [ClipboardStepResult.WaitingForResponse].
+     *
+     * @param freshFiles       Files gathered in this turn (path → content).
+     * @param isFirstMessage   True for the very first message in a session.
+     * @param assistantMessage Assistant message to display above the status (from file-gather step).
+     * @param llmReasoning     Reasoning snippet from the previous LLM response, shown in UI.
+     * @param addHistory       When true, [ClipboardRequest.previouslyGatheredPaths] is populated
+     *                         with all file paths gathered so far, giving the LLM a chance to
+     *                         request them again (useful when starting a fresh LLM chat).
+     *                         When false (default), the list is always empty — minimum tokens.
+     */
     private fun generateAndCopyJson(
         freshFiles: Map<String, String>,
         isFirstMessage: Boolean,
         assistantMessage: String? = null,
-        llmReasoning: String? = null
+        llmReasoning: String? = null,
+        addHistory: Boolean = false
     ): ClipboardStepResult {
         val state = sessionState ?: return error("No active session")
 
-        val previousPaths = state.allGatheredFiles.keys.toList()
+        // --- Token-saving policy ---
+        // By default we send NO previously-gathered paths: the LLM in the current chat
+        // already knows which files it has seen. The caller can set addHistory=true to
+        // populate the list, which is useful when opening a fresh LLM chat that has no
+        // memory of previous turns — the LLM can then re-request whatever it needs.
+        val previousPaths: List<String> =
+            if (addHistory) state.allGatheredFiles.keys.toList() else emptyList()
 
         log(
             "Generating JSON: freshFiles=${freshFiles.size}, previousPaths=${previousPaths.size}, " +
-                    "historySize=${state.dialogHistory.size}, planOnly=${state.planOnly}"
+                    "historySize=${state.dialogHistory.size}, planOnly=${state.planOnly}, addHistory=$addHistory"
         )
 
-        // Select system prompt based on current phase:
-        // - PLANNING (no files gathered yet): use planningSystem from PromptService
-        // - CHAT: use chatSystem, optionally extended with PLAN_ONLY_SUFFIX
+        // --- Select system prompt based on current session phase ---
+        // PLANNING phase (no files gathered yet): use the planning-specific prompt.
+        // CHAT phase: use the chat prompt, optionally extended with the plan-only suffix.
         val systemInstruction = if (state.allGatheredFiles.isEmpty()) {
             state.prompts.planningSystem
         } else {
