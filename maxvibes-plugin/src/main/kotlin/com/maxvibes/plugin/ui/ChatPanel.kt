@@ -52,6 +52,20 @@ class ChatPanel(
 
     private val dryRunCheckbox = JBCheckBox("Dry run").apply { toolTipText = "Show plan without applying changes" }
     private val planOnlyCheckbox = JBCheckBox("\uD83D\uDCAC Plan").apply { toolTipText = "Plan-only mode" }
+
+    /**
+     * "Add History" checkbox: when checked, the list of previously gathered file paths
+     * is included in the next Clipboard request (paths only, no content).
+     *
+     * Useful when starting a fresh LLM chat so the model knows which files were already
+     * in context and can re-request what it needs via [requestedFiles].
+     *
+     * Visible only in Clipboard mode; auto-resets to unchecked after each send (one-shot).
+     */
+    private val addHistoryCheckbox = JBCheckBox("Add History").apply {
+        toolTipText = "Share gathered file list with LLM (use when starting a new LLM chat)"
+        isVisible = false
+    }
     private val copyJsonButton =
         JButton("\uD83D\uDCCB Copy JSON").apply { toolTipText = "Re-copy last generated JSON"; isVisible = false }
 
@@ -184,6 +198,8 @@ class ChatPanel(
         isWaitingForResponse = !enabled
         inputArea.isEnabled = enabled; sendButton.isEnabled = enabled
         dryRunCheckbox.isEnabled = enabled; planOnlyCheckbox.isEnabled = enabled
+        // Keep "Add History" in sync with the rest of the input controls.
+        addHistoryCheckbox.isEnabled = enabled
         copyJsonButton.isEnabled = enabled
         attachTraceButton.isEnabled = enabled; clearTraceButton.isEnabled = enabled
         attachErrorsButton.isEnabled = enabled; clearErrorsButton.isEnabled = enabled
@@ -407,7 +423,8 @@ class ChatPanel(
                 background = JBColor.background()
                 add(attachErrorsButton.apply { preferredSize = Dimension(85, 26) })
                 add(attachTraceButton.apply { preferredSize = Dimension(80, 26) })
-                add(planOnlyCheckbox); add(dryRunCheckbox); add(copyJsonButton); add(sendButton)
+                // "Add History" is toggled visible/hidden by updateModeUI() per mode.
+                add(addHistoryCheckbox); add(planOnlyCheckbox); add(dryRunCheckbox); add(copyJsonButton); add(sendButton)
             }, BorderLayout.SOUTH)
         }
 
@@ -553,12 +570,16 @@ class ChatPanel(
     private fun sendMessage() {
         val userInput = inputArea.text.trim()
         if (userInput.isBlank()) return
+        // Capture checkbox state BEFORE clearing — one-shot: auto-resets after each send.
+        val addHistory = addHistoryCheckbox.isSelected
         inputArea.text = ""
+        addHistoryCheckbox.isSelected = false
         messageController.sendMessage(
             userInput,
             planOnlyCheckbox.isSelected,
             dryRunCheckbox.isSelected,
-            modeManager.currentMode
+            modeManager.currentMode,
+            addHistory
         )
     }
 
@@ -576,38 +597,44 @@ class ChatPanel(
     }
 
     /**
-     * Updates the mode indicator UI components based on the given mode.
-     * Called via the InteractionModeManager.onModeChanged callback.
+     * Updates mode-specific UI components based on [mode].
+     *
+     * Called via [InteractionModeManager.onModeChanged] callback and from [render].
+     * Controls button labels, indicator visibility, and checkbox availability per mode.
      */
     private fun updateModeUI(mode: InteractionMode) {
         when (mode) {
             InteractionMode.API -> {
                 modeIndicator.isVisible = false; sendButton.text = "Send"; dryRunCheckbox.isVisible = true
                 copyJsonButton.isVisible = false
+                // "Add History" is only meaningful in Clipboard mode.
+                addHistoryCheckbox.isVisible = false
             }
 
             InteractionMode.CLIPBOARD -> {
                 val cs = service.clipboardService
+                // Reveal "Add History" — only shown in Clipboard mode.
+                addHistoryCheckbox.isVisible = true
                 when {
                     cs.isWaitingForResponse() -> {
                         val phase = cs.getCurrentPhase()
                         modeIndicator.text = when (phase) {
-                            ClipboardPhase.PLANNING -> "\u23F3 Paste response (planning)"
-                            ClipboardPhase.CHAT -> "\u23F3 Paste response (chat)"
-                            else -> "\u23F3 Paste response"
+                            ClipboardPhase.PLANNING -> "⏳ Paste response (planning)"
+                            ClipboardPhase.CHAT -> "⏳ Paste response (chat)"
+                            else -> "⏳ Paste response"
                         }
                         modeIndicator.isVisible = true; sendButton.text = "Paste"
                         copyJsonButton.isVisible = true
                     }
 
                     cs.hasActiveSession() -> {
-                        modeIndicator.text = "\uD83D\uDCCB Active"
+                        modeIndicator.text = "📋 Active"
                         modeIndicator.isVisible = true; sendButton.text = "Send / Paste"
                         copyJsonButton.isVisible = false
                     }
 
                     else -> {
-                        modeIndicator.text = "\uD83D\uDCCB"
+                        modeIndicator.text = "📋"
                         modeIndicator.isVisible = true; sendButton.text = "Generate"
                         copyJsonButton.isVisible = false
                     }
@@ -616,9 +643,11 @@ class ChatPanel(
             }
 
             InteractionMode.CHEAP_API -> {
-                modeIndicator.text = "\uD83D\uDCB0"; modeIndicator.isVisible = true
+                modeIndicator.text = "💰"; modeIndicator.isVisible = true
                 sendButton.text = "Send"; dryRunCheckbox.isVisible = true
                 copyJsonButton.isVisible = false
+                // "Add History" is only meaningful in Clipboard mode.
+                addHistoryCheckbox.isVisible = false
             }
         }
     }

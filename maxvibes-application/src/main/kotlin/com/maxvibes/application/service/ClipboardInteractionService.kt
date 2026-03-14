@@ -95,7 +95,9 @@ class ClipboardInteractionService(
      * @param attachedContext Replaces (or inherits) the attached context for this turn.
      * @param planOnly      Overrides plan-only mode for this turn; inherits previous value if null.
      * @param ideErrors     IDE error output for this turn.
-     * @param globalContextFiles Paths to include as fresh files in this request.
+     * @param globalContextFiles Paths to include as fresh files — only honoured when [addHistory]=true.
+     *                      In minimal mode the LLM already has these files in its chat window, so
+     *                      re-sending them wastes tokens.
      * @param addHistory    UI: "Add History" — when true, the list of all previously gathered
      *                      file paths is sent so the LLM can request them again if its context
      *                      was lost. When false (default), the list is empty to save tokens.
@@ -121,7 +123,10 @@ class ClipboardInteractionService(
 
         addToHistory(ChatRole.USER, message)
 
-        val freshFiles = gatherRequestedFiles(globalContextFiles) ?: emptyMap()
+        // In minimal mode the LLM already has globalContextFiles in its chat window from the
+        // first message — passing them again wastes tokens. Only gather them in full-context mode.
+        val filesToGather = if (addHistory) globalContextFiles else emptyList()
+        val freshFiles = gatherRequestedFiles(filesToGather) ?: emptyMap()
 
         return generateAndCopyJson(
             freshFiles = freshFiles,
@@ -257,14 +262,30 @@ class ClipboardInteractionService(
      * Builds a [ClipboardRequest], copies it to the clipboard, and transitions the
      * session into [ClipboardStepResult.WaitingForResponse].
      *
+     * ## Token-saving policy (Minimal mode)
+     *
+     * When [isFirstMessage] is `false` AND [addHistory] is `false`, the request is
+     * **minimal**: only the current user message (`task`), freshly-requested file
+     * contents (`files`), and errors are included. Heavy context fields —
+     * `systemInstruction`, `fileTree`, `chatHistory`, `attachedContext` — are
+     * deliberately left blank/empty so the codec omits them from the JSON.
+     *
+     * This is safe because the LLM is in an ongoing chat and already has the full
+     * context from the previous message. Re-sending it wastes tokens and can
+     * confuse newer models with repeated system instructions.
+     *
+     * **Full context** is sent only:
+     * - On the very first message in a session ([isFirstMessage] = `true`), OR
+     * - When the user checks "Add History" ([addHistory] = `true`), which signals
+     *   that a fresh LLM chat is starting and needs all the context again.
+     *
      * @param freshFiles       Files gathered in this turn (path → content).
      * @param isFirstMessage   True for the very first message in a session.
      * @param assistantMessage Assistant message to display above the status (from file-gather step).
      * @param llmReasoning     Reasoning snippet from the previous LLM response, shown in UI.
      * @param addHistory       When true, [ClipboardRequest.previouslyGatheredPaths] is populated
-     *                         with all file paths gathered so far, giving the LLM a chance to
-     *                         request them again (useful when starting a fresh LLM chat).
-     *                         When false (default), the list is always empty — minimum tokens.
+     *                         with all file paths gathered so far, AND full context is included,
+     *                         giving a fresh LLM chat everything it needs to continue.
      */
     private fun generateAndCopyJson(
         freshFiles: Map<String, String>,
@@ -275,29 +296,38 @@ class ClipboardInteractionService(
     ): ClipboardStepResult {
         val state = sessionState ?: return error("No active session")
 
-        // --- Token-saving policy ---
-        // By default we send NO previously-gathered paths: the LLM in the current chat
-        // already knows which files it has seen. The caller can set addHistory=true to
-        // populate the list, which is useful when opening a fresh LLM chat that has no
-        // memory of previous turns — the LLM can then re-request whatever it needs.
+        // --- Minimal-mode flag ---
+        // Continuation without "Add History": LLM already has all context in its chat.
+        // Skip heavy fields to save tokens.
+        val isMinimal = !isFirstMessage && !addHistory
+
+        // Only populate previouslyGatheredPaths when addHistory is on (full-context mode).
         val previousPaths: List<String> =
             if (addHistory) state.allGatheredFiles.keys.toList() else emptyList()
 
         log(
             "Generating JSON: freshFiles=${freshFiles.size}, previousPaths=${previousPaths.size}, " +
-                    "historySize=${state.dialogHistory.size}, planOnly=${state.planOnly}, addHistory=$addHistory"
+                    "historySize=${state.dialogHistory.size}, planOnly=${state.planOnly}, " +
+                    "addHistory=$addHistory, isMinimal=$isMinimal"
         )
 
-        // --- Select system prompt based on current session phase ---
-        // PLANNING phase (no files gathered yet): use the planning-specific prompt.
-        // CHAT phase: use the chat prompt, optionally extended with the plan-only suffix.
-        val systemInstruction = if (state.allGatheredFiles.isEmpty()) {
-            state.prompts.planningSystem
+        // In minimal mode, carry only the current user message as the task so the LLM
+        // knows what follow-up action is requested without re-reading the full history.
+        val taskContent = if (isMinimal) {
+            state.dialogHistory.lastOrNull { it.role == ChatRole.USER }?.content ?: state.task
         } else {
-            buildString {
-                append(state.prompts.chatSystem)
-                if (state.planOnly) {
-                    append(PLAN_ONLY_SUFFIX)
+            state.task
+        }
+
+        // System prompt: omitted in minimal mode — codec skips blank strings.
+        val systemInstruction = if (isMinimal) "" else {
+            // Planning phase uses planning-specific prompt; chat phase uses chat prompt.
+            if (state.allGatheredFiles.isEmpty()) {
+                state.prompts.planningSystem
+            } else {
+                buildString {
+                    append(state.prompts.chatSystem)
+                    if (state.planOnly) append(PLAN_ONLY_SUFFIX)
                 }
             }
         }
@@ -305,13 +335,14 @@ class ClipboardInteractionService(
         val request = ClipboardRequest(
             phase = if (state.allGatheredFiles.isEmpty() && freshFiles.isEmpty())
                 ClipboardPhase.PLANNING else ClipboardPhase.CHAT,
-            task = state.task,
+            task = taskContent,
             projectName = state.projectContext.name,
+            // Blank/empty fields are omitted by JsonClipboardProtocolCodec.encode().
             systemInstruction = systemInstruction,
-            fileTree = state.projectContext.fileTree.toCompactString(maxDepth = 4),
+            fileTree = if (isMinimal) "" else state.projectContext.fileTree.toCompactString(maxDepth = 4),
             freshFiles = freshFiles,
             previouslyGatheredPaths = previousPaths,
-            chatHistory = state.dialogHistory.map { msg ->
+            chatHistory = if (isMinimal) emptyList() else state.dialogHistory.map { msg ->
                 ClipboardHistoryEntry(
                     role = when (msg.role) {
                         ChatRole.USER -> "user"
@@ -321,9 +352,10 @@ class ClipboardInteractionService(
                     content = msg.content
                 )
             },
-            attachedContext = state.attachedContext,
-            ideErrors = state.ideErrors,
-            planOnly = state.planOnly
+            // attachedContext and planOnly are only meaningful in full-context mode.
+            attachedContext = if (isMinimal) null else state.attachedContext,
+            ideErrors = state.ideErrors,   // always include — directly relevant to current message
+            planOnly = if (isMinimal) false else state.planOnly
         )
 
         lastRequest = request
@@ -334,7 +366,8 @@ class ClipboardInteractionService(
         val totalTokens = estimateTokens(request)
         state.lastInputTokens = totalTokens
 
-        val statusMessage = "📋 JSON $copyStatus\nPaste into Claude/ChatGPT, then paste the response back here."
+        val statusMessage =
+            "\uD83D\uDCCB JSON $copyStatus\nPaste into Claude/ChatGPT, then paste the response back here."
 
         log("JSON ready: $copyStatus, ~$totalTokens tokens")
 

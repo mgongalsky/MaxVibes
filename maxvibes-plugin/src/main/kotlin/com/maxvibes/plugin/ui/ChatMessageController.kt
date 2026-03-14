@@ -585,7 +585,24 @@ Check:
             callbacks.onSessionChanged(session)
         }
     }
-    fun sendMessage(userInput: String, isPlanOnly: Boolean, isDryRun: Boolean, mode: InteractionMode) {
+
+    /**
+     * Dispatches a user message to the appropriate mode handler.
+     *
+     * @param userInput raw text from the input field
+     * @param isPlanOnly whether plan-only mode is active
+     * @param isDryRun whether dry-run mode is active (API/CheapAPI only)
+     * @param mode current interaction mode
+     * @param addHistory when true, previously gathered file paths are included in the
+     *   Clipboard request so a fresh LLM chat can re-request context it needs
+     */
+    fun sendMessage(
+        userInput: String,
+        isPlanOnly: Boolean,
+        isDryRun: Boolean,
+        mode: InteractionMode,
+        addHistory: Boolean = false
+    ) {
         val trace = attachedTrace
         val errs = attachedErrors
         clearAttachmentsAfterSend()
@@ -595,12 +612,13 @@ Check:
                 "msgLen" to userInput.length,
                 "isPlanOnly" to isPlanOnly,
                 "hasTrace" to (trace != null),
-                "hasErrors" to (errs != null)
+                "hasErrors" to (errs != null),
+                "addHistory" to addHistory
             )
         )
         when (mode) {
             InteractionMode.API -> dispatchApiMessage(userInput, trace, errs, isPlanOnly, isDryRun)
-            InteractionMode.CLIPBOARD -> dispatchClipboardMessage(userInput, trace, errs, isPlanOnly)
+            InteractionMode.CLIPBOARD -> dispatchClipboardMessage(userInput, trace, errs, isPlanOnly, addHistory)
             InteractionMode.CHEAP_API -> dispatchCheapApiMessage(userInput, trace, errs, isPlanOnly, isDryRun)
         }
     }
@@ -619,13 +637,32 @@ Check:
         callbacks.setStatus(if (isPlanOnly) "Planning..." else "Thinking...")
         sendApiMessage(fullTask, session, history, isDryRun, isPlanOnly, chatTreeService.getGlobalContextFiles(), errs)
     }
-    private fun dispatchClipboardMessage(userInput: String, trace: String?, errs: String?, isPlanOnly: Boolean) {
+
+    /**
+     * Routes a Clipboard-mode message to the correct service call based on session state.
+     *
+     * - **Waiting for paste**: delegates to [ClipboardInteractionService.handlePastedResponse];
+     *   [addHistory] is ignored (session is already active).
+     * - **Active session**: calls [ClipboardInteractionService.continueDialog] with [addHistory].
+     * - **New session**: calls [ClipboardInteractionService.startTask] with [addHistory].
+     *
+     * @param addHistory when true, previously gathered file paths are forwarded to the service
+     *   so they appear in the `previouslyGatheredFiles` field of the Clipboard JSON
+     */
+    private fun dispatchClipboardMessage(
+        userInput: String,
+        trace: String?,
+        errs: String?,
+        isPlanOnly: Boolean,
+        addHistory: Boolean = false
+    ) {
         val cs = service.clipboardService
         var session = chatTreeService.getActiveSession()
         val globalContextFiles = chatTreeService.getGlobalContextFiles()
         when {
             cs.isWaitingForResponse() -> {
-                callbacks.appendIconToLastBubble("\uD83D\uDCE5")
+                // addHistory is irrelevant here — we are pasting a response, not starting a request.
+                callbacks.appendIconToLastBubble("📥")
                 callbacks.setInputEnabled(false)
                 callbacks.setStatus("Processing...")
                 runClipboardBg("Processing response...", session) { cs.handlePastedResponse(userInput) }
@@ -648,7 +685,8 @@ Check:
                         trace,
                         isPlanOnly,
                         errs,
-                        globalContextFiles
+                        globalContextFiles,
+                        addHistory = addHistory
                     )
                 }
             }
@@ -672,7 +710,8 @@ Check:
                         trace,
                         isPlanOnly,
                         errs,
-                        globalContextFiles
+                        globalContextFiles,
+                        addHistory = addHistory
                     )
                 }
             }
