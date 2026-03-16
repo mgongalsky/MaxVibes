@@ -139,15 +139,10 @@ class ClipboardMinimalModeTest {
 
     // ── Helpers ───────────────────────────────────────────────────────
 
-    /**
-     * Starts a session with a global context file so [allGatheredFiles] is populated.
-     * After this call the session is active and [isFirstMessage] will be `false` for
-     * the next [continueDialog] invocation.
-     */
     private fun startSessionWithContextFile(): ClipboardRequest {
         val result = runBlocking {
             service.startTask(
-                task = "initial task",
+                currentMessage = "initial task",
                 globalContextFiles = listOf("docs/README.md")
             )
         }
@@ -170,8 +165,8 @@ class ClipboardMinimalModeTest {
             "startTask must include fileTree"
         )
         assertTrue(
-            req.task.isNotBlank(),
-            "startTask must include a non-blank task"
+            req.currentMessage.isNotBlank(),
+            "startTask must include a non-blank currentMessage"
         )
     }
 
@@ -229,8 +224,8 @@ class ClipboardMinimalModeTest {
 
         // The user message must still be present.
         assertTrue(
-            req.task.contains("fix the bug"),
-            "task must contain the user's follow-up message"
+            req.currentMessage.contains("fix the bug"),
+            "currentMessage must contain the user's follow-up message"
         )
     }
 

@@ -41,7 +41,7 @@ class ClipboardAdapter(
 
             MaxVibesLogger.debug(
                 "Clipboard", "copied request", mapOf(
-                    "task" to request.task.take(60),
+                    "currentMessage" to request.currentMessage.take(60),
                     "freshFiles" to request.freshFiles.size,
                     "planOnly" to request.planOnly
                 )

@@ -17,9 +17,8 @@ class JsonClipboardProtocolCodecTest {
 
     // ── Helpers ───────────────────────────────────────────────────────
 
-    /** Builds a minimal [ClipboardRequest] with sensible defaults for encode tests. */
     private fun minimalRequest(
-        task: String = "do something",
+        currentMessage: String = "do something",
         systemInstruction: String = "",
         planOnly: Boolean = false,
         fileTree: String = "",
@@ -30,7 +29,7 @@ class JsonClipboardProtocolCodecTest {
         ideErrors: String? = null
     ) = ClipboardRequest(
         phase = ClipboardPhase.CHAT,
-        task = task,
+        currentMessage = currentMessage,
         projectName = "TestProject",
         systemInstruction = systemInstruction,
         planOnly = planOnly,

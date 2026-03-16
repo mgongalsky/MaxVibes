@@ -30,8 +30,8 @@ object ClipboardRequestSchema {
     /** System prompt / role instructions for the LLM. */
     const val FIELD_SYSTEM_INSTRUCTION = "systemInstruction"
 
-    /** The developer's task description. */
-    const val FIELD_TASK = "task"
+    /** The current user message sent to the LLM in this turn (formerly "task"). */
+    const val FIELD_CURRENT_MESSAGE = "current_message"
 
     /** IntelliJ project name, for context. */
     const val FIELD_PROJECT_NAME = "projectName"

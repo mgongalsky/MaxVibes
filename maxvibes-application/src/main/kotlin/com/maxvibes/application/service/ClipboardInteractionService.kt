@@ -34,19 +34,19 @@ class ClipboardInteractionService(
      * Gathers global context files, initialises session state, and copies the first
      * JSON request to the clipboard for the user to paste into an external LLM.
      *
-     * @param task        The user's task description.
-     * @param history     Pre-existing dialog history.
-     * @param attachedContext Additional context text attached by the user.
-     * @param planOnly    When true, the LLM is instructed not to generate code changes.
-     * @param ideErrors   IDE error output to include in the request.
+     * @param currentMessage     The current user message to send to the LLM.
+     * @param history            Pre-existing dialog history.
+     * @param attachedContext    Additional context text attached by the user.
+     * @param planOnly           When true, the LLM is instructed not to generate code changes.
+     * @param ideErrors          IDE error output to include in the request.
      * @param globalContextFiles Paths that should always be included as fresh files.
-     * @param addHistory  UI: "Add History" — when true, previously gathered file paths
-     *                    are included in [ClipboardRequest.previouslyGatheredPaths] so
-     *                    the LLM can request them again without re-uploading content.
-     *                    When false (default), that list is empty, minimising token usage.
+     * @param addHistory         When true, previously gathered file paths are included in
+     *                           [ClipboardRequest.previouslyGatheredPaths] so the LLM can
+     *                           request them again without re-uploading content.
+     *                           When false (default), that list is empty, minimising token usage.
      */
     suspend fun startTask(
-        task: String,
+        currentMessage: String,
         history: List<ChatMessageDTO> = emptyList(),
         attachedContext: String? = null,
         planOnly: Boolean = false,
@@ -54,7 +54,7 @@ class ClipboardInteractionService(
         globalContextFiles: List<String> = emptyList(),
         addHistory: Boolean = false
     ): ClipboardStepResult {
-        log("Starting new clipboard task: \"${task.take(60)}...\" (planOnly=$planOnly, addHistory=$addHistory)")
+        log("Starting new clipboard session: \"${currentMessage.take(60)}...\" (planOnly=$planOnly, addHistory=$addHistory)")
 
         notificationPort.showProgress("Gathering project context...", 0.1)
         val projectContextResult = contextProvider.getProjectContext()
@@ -67,7 +67,7 @@ class ClipboardInteractionService(
         log("Project: ${projectContext.name}, files in tree: ${projectContext.fileTree.totalFiles}")
 
         sessionState = ClipboardSessionState(
-            task = task,
+            currentMessage = currentMessage,
             projectContext = projectContext,
             dialogHistory = history.toMutableList(),
             prompts = prompts,
@@ -77,7 +77,7 @@ class ClipboardInteractionService(
             planOnly = planOnly
         )
 
-        addToHistory(ChatRole.USER, task)
+        addToHistory(ChatRole.USER, currentMessage)
 
         val freshFiles = gatherRequestedFiles(globalContextFiles) ?: emptyMap()
 
@@ -265,7 +265,7 @@ class ClipboardInteractionService(
      * ## Token-saving policy (Minimal mode)
      *
      * When [isFirstMessage] is `false` AND [addHistory] is `false`, the request is
-     * **minimal**: only the current user message (`task`), freshly-requested file
+     * **minimal**: only the current user message (`currentMessage`), freshly-requested file
      * contents (`files`), and errors are included. Heavy context fields —
      * `systemInstruction`, `fileTree`, `chatHistory`, `attachedContext` — are
      * deliberately left blank/empty so the codec omits them from the JSON.
@@ -279,7 +279,7 @@ class ClipboardInteractionService(
      * - When the user checks "Add History" ([addHistory] = `true`), which signals
      *   that a fresh LLM chat is starting and needs all the context again.
      *
-     * @param freshFiles       Files gathered in this turn (path → content).
+     * @param freshFiles       Files gathered in this turn (path -> content).
      * @param isFirstMessage   True for the very first message in a session.
      * @param assistantMessage Assistant message to display above the status (from file-gather step).
      * @param llmReasoning     Reasoning snippet from the previous LLM response, shown in UI.
@@ -311,12 +311,12 @@ class ClipboardInteractionService(
                     "addHistory=$addHistory, isMinimal=$isMinimal"
         )
 
-        // In minimal mode, carry only the current user message as the task so the LLM
+        // In minimal mode, carry only the current user message so the LLM
         // knows what follow-up action is requested without re-reading the full history.
         val taskContent = if (isMinimal) {
-            state.dialogHistory.lastOrNull { it.role == ChatRole.USER }?.content ?: state.task
+            state.dialogHistory.lastOrNull { it.role == ChatRole.USER }?.content ?: state.currentMessage
         } else {
-            state.task
+            state.currentMessage
         }
 
         // System prompt: omitted in minimal mode — codec skips blank strings.
@@ -335,7 +335,7 @@ class ClipboardInteractionService(
         val request = ClipboardRequest(
             phase = if (state.allGatheredFiles.isEmpty() && freshFiles.isEmpty())
                 ClipboardPhase.PLANNING else ClipboardPhase.CHAT,
-            task = taskContent,
+            currentMessage = taskContent,
             projectName = state.projectContext.name,
             // Blank/empty fields are omitted by JsonClipboardProtocolCodec.encode().
             systemInstruction = systemInstruction,
@@ -361,7 +361,7 @@ class ClipboardInteractionService(
         lastRequest = request
 
         val copied = clipboardPort.copyRequestToClipboard(request)
-        val copyStatus = if (copied) "copied to clipboard ✓" else "generated (copy manually)"
+        val copyStatus = if (copied) "copied to clipboard \u2713" else "generated (copy manually)"
 
         val totalTokens = estimateTokens(request)
         state.lastInputTokens = totalTokens
@@ -637,7 +637,8 @@ sealed class ClipboardStepResult {
 // ==================== Internal State ====================
 
 private data class ClipboardSessionState(
-    val task: String,
+    /** Текущее сообщение пользователя, с которого началась или продолжается сессия. */
+    val currentMessage: String,
     val projectContext: ProjectContext,
     val dialogHistory: MutableList<ChatMessageDTO>,
     val prompts: PromptTemplates,

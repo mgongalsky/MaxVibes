@@ -4,15 +4,17 @@ package com.maxvibes.domain.model.interaction
  * Фаза clipboard-протокола — используется внутренне для трекинга.
  */
 enum class ClipboardPhase {
-    /** Фаза 1: задача + file tree → список нужных файлов */
+    /** Фаза 1: задача + file tree -> список нужных файлов */
     PLANNING,
-    /** Фаза 2+: задача + контекст файлов → ответ + модификации */
+
+    /** Фаза 2+: задача + контекст файлов -> ответ + модификации */
     CHAT
 }
 
 data class ClipboardRequest(
     val phase: ClipboardPhase,
-    val task: String,
+    /** Текущее сообщение пользователя в этом ходу диалога. */
+    val currentMessage: String,
     val projectName: String,
     /** Системный промпт (формат ответа) */
     val systemInstruction: String = "",

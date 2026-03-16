@@ -21,7 +21,10 @@ class ContextAwareModifyService(
 ) : ContextAwareModifyUseCase {
 
     override suspend fun execute(request: ContextAwareRequest): ContextAwareResult {
-        logger?.info(TAG, "execute() started, task='${request.task.take(80)}', planOnly=${request.planOnly}")
+        logger?.info(
+            TAG,
+            "execute() started, currentMessage='${request.currentMessage.take(80)}', planOnly=${request.planOnly}"
+        )
         notificationPort.showProgress("Starting...", 0.0)
 
         val prompts = promptPort?.getPrompts() ?: PromptTemplates.EMPTY
@@ -39,7 +42,7 @@ class ContextAwareModifyService(
 
         notificationPort.showProgress("Analyzing task...", 0.2)
         logger?.debug(TAG, "Starting LLM planContext call")
-        val planResult = llmService.planContext(request.task, projectContext, prompts)
+        val planResult = llmService.planContext(request.currentMessage, projectContext, prompts)
         if (planResult is Result.Failure) {
             val errMsg = "Planning failed: ${planResult.error.message}"
             logger?.error(TAG, errMsg)
@@ -97,7 +100,7 @@ class ContextAwareModifyService(
         )
 
         val chatResult = llmService.chat(
-            message = request.task,
+            message = request.currentMessage,
             history = request.history,
             context = chatContext
         )

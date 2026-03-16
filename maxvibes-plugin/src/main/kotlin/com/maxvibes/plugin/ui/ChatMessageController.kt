@@ -141,7 +141,7 @@ class ChatMessageController(
                     service.notificationService.setProgressIndicator(indicator)
                     runBlocking {
                         val req = ContextAwareRequest(
-                            task = task, history = history, dryRun = isDryRun,
+                            currentMessage = task, history = history, dryRun = isDryRun,
                             planOnly = isPlanOnly, globalContextFiles = globalContextFiles,
                             ideErrors = ideErrors
                         )
@@ -434,7 +434,7 @@ class ChatMessageController(
                     service.notificationService.setProgressIndicator(indicator)
                     runBlocking {
                         val req = ContextAwareRequest(
-                            task = task, history = history, dryRun = isDryRun,
+                            currentMessage = task, history = history, dryRun = isDryRun,
                             planOnly = isPlanOnly, globalContextFiles = globalContextFiles,
                             ideErrors = ideErrors
                         )

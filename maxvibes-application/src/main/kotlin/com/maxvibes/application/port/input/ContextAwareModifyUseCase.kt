@@ -4,7 +4,7 @@ import com.maxvibes.application.port.output.ChatMessageDTO
 import com.maxvibes.domain.model.modification.ModificationResult
 
 /**
- * Use case для чата с автоматическим сбором контекста и применением модификаций
+ * Use case для чата с автоматическим сбором контекста и применением модификаций.
  */
 interface ContextAwareModifyUseCase {
 
@@ -20,7 +20,8 @@ interface ContextAwareModifyUseCase {
 }
 
 data class ContextAwareRequest(
-    val task: String,
+    /** Текущее сообщение пользователя, отправляемое LLM в этом ходу диалога. */
+    val currentMessage: String,
     val history: List<ChatMessageDTO> = emptyList(),
     val additionalFiles: List<String> = emptyList(),
     val excludeFiles: List<String> = emptyList(),

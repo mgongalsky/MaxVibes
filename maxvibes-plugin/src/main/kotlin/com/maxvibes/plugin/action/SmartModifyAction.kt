@@ -56,7 +56,7 @@ class SmartModifyAction : AnAction() {
 
                 runBlocking {
                     val request = ContextAwareRequest(
-                        task = task,
+                        currentMessage = task,
                         dryRun = dryRun
                     )
 

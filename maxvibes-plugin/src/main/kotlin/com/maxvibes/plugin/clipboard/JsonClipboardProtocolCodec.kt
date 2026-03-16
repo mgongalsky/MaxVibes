@@ -51,8 +51,8 @@ class JsonClipboardProtocolCodec : ClipboardProtocolCodec {
                 put(ClipboardRequestSchema.FIELD_SYSTEM_INSTRUCTION, request.systemInstruction)
             }
 
-            // Core task fields (always present)
-            put(ClipboardRequestSchema.FIELD_TASK, request.task)
+            // Current user message for this turn (always present)
+            put(ClipboardRequestSchema.FIELD_CURRENT_MESSAGE, request.currentMessage)
             put(ClipboardRequestSchema.FIELD_PROJECT_NAME, request.projectName)
 
             // Optional flags
