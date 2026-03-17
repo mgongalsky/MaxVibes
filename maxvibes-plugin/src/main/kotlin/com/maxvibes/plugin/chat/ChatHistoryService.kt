@@ -17,6 +17,7 @@ import com.maxvibes.domain.model.chat.TokenUsage
 import com.maxvibes.plugin.service.MaxVibesLogger
 import java.time.Instant
 import java.util.UUID
+import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 
 @Tag("message")
 class XmlChatMessage {
@@ -93,6 +94,11 @@ class XmlChatSession {
     @Attribute("chatOutputTokens")
     var chatOutputTokens: Int = 0
 
+    /** Статус clipboard-сессии, сохраняется как строка для надёжной XML-сериализации.
+     *  Дефолт "IDLE" обеспечивает backward compatibility со старыми XML без этого поля. */
+    @Attribute("clipboardStatus")
+    var clipboardStatus: String = "IDLE"
+
     constructor()
 
     fun toTokenUsage(): TokenUsage = TokenUsage(
@@ -102,6 +108,9 @@ class XmlChatSession {
         chatOutput = chatOutputTokens
     )
 
+    /** Конвертирует XML-объект в доменную модель ChatSession.
+     *  clipboardStatus десериализуется с защитным fallback на IDLE —
+     *  на случай если в XML окажется устаревшее/неизвестное значение. */
     fun toDomain(): ChatSession = ChatSession(
         id = id,
         title = title,
@@ -110,10 +119,18 @@ class XmlChatSession {
         messages = messages.map { it.toDomain() },
         tokenUsage = toTokenUsage(),
         createdAt = createdAt,
-        updatedAt = updatedAt
+        updatedAt = updatedAt,
+        clipboardStatus = try {
+            ClipboardSessionStatus.valueOf(clipboardStatus)
+        } catch (_: IllegalArgumentException) {
+            // Защита от неизвестных значений из старых версий плагина
+            ClipboardSessionStatus.IDLE
+        }
     )
 
     companion object {
+        /** Создаёт XML-объект из доменной модели ChatSession для сериализации.
+         *  clipboardStatus сохраняется как строковое имя enum-константы. */
         fun fromDomain(session: ChatSession): XmlChatSession {
             val xml = XmlChatSession()
             xml.id = session.id
@@ -127,6 +144,8 @@ class XmlChatSession {
             xml.chatOutputTokens = session.tokenUsage.chatOutput
             xml.createdAt = session.createdAt
             xml.updatedAt = session.updatedAt
+            // Сериализуем статус как строку — IntelliJ XML-сериализатор работает с примитивами надёжнее
+            xml.clipboardStatus = session.clipboardStatus.name
             return xml
         }
     }

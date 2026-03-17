@@ -83,13 +83,13 @@ class ClipboardInteractionServiceTest {
      * After this the session is still active and NOT waiting for paste.
      */
     private suspend fun startAndComplete(
-        task: String = "Fix the bug",
+        currentMessage: String = "Fix the bug",
         globalContextFiles: List<String> = emptyList(),
         gatheredFiles: Map<String, String> = emptyMap()
     ) {
         stubProjectContext()
         stubGatherFiles(gatheredFiles)
-        service.startTask(task = task, globalContextFiles = globalContextFiles)
+        service.startTask(currentMessage = currentMessage, globalContextFiles = globalContextFiles)
         every { clipboardPort.parseResponse(any()) } returns simpleResponse()
         service.handlePastedResponse("{\"message\": \"ok\"}")
     }
@@ -162,7 +162,7 @@ class ClipboardInteractionServiceTest {
         stubProjectContext()
         stubGatherFiles(emptyMap())
 
-        service.startTask(task = "Task", addHistory = true)
+        service.startTask(currentMessage = "Task", addHistory = true)
 
         assertEquals(emptyList<String>(), capturedRequest.captured.previouslyGatheredPaths)
     }
@@ -226,7 +226,7 @@ class ClipboardInteractionServiceTest {
         stubProjectContext()
         stubGatherFiles(emptyMap())
 
-        val result = service.startTask(task = "Do X")
+        val result = service.startTask(currentMessage = "Do X")
 
         assertInstanceOf(ClipboardStepResult.WaitingForResponse::class.java, result)
         assertEquals(ClipboardPhase.PLANNING, (result as ClipboardStepResult.WaitingForResponse).phase)
@@ -237,17 +237,17 @@ class ClipboardInteractionServiceTest {
         stubProjectContext()
         stubGatherFiles(mapOf("src/Foo.kt" to "foo-content"))
 
-        service.startTask(task = "Task", globalContextFiles = listOf("src/Foo.kt"))
+        service.startTask(currentMessage = "Task", globalContextFiles = listOf("src/Foo.kt"))
 
         assertEquals(mapOf("src/Foo.kt" to "foo-content"), capturedRequest.captured.freshFiles)
     }
 
     @Test
-    fun `startTask propagates project context failure as Error`() = runBlocking {
+    fun `startTask propagates project context failure as Error`(): Unit = runBlocking {
         coEvery { contextProvider.getProjectContext() } returns
                 Result.Failure(ContextError.FileReadError("project", "network error"))
 
-        val result = service.startTask(task = "Task")
+        val result = service.startTask(currentMessage = "Task")
 
         assertInstanceOf(ClipboardStepResult.Error::class.java, result)
     }
@@ -257,7 +257,7 @@ class ClipboardInteractionServiceTest {
         stubProjectContext()
         stubGatherFiles(emptyMap())
 
-        service.startTask(task = "My important task")
+        service.startTask(currentMessage = "My important task")
 
         assertTrue(
             capturedRequest.captured.chatHistory.any { it.role == "user" && it.content == "My important task" }
@@ -289,15 +289,15 @@ class ClipboardInteractionServiceTest {
     // ==================== handlePastedResponse ====================
 
     @Test
-    fun `handlePastedResponse without active session returns Error`() = runBlocking {
+    fun `handlePastedResponse without active session returns Error`(): Unit = runBlocking {
         assertInstanceOf(ClipboardStepResult.Error::class.java, service.handlePastedResponse("{}"))
     }
 
     @Test
-    fun `handlePastedResponse when parseResponse returns null returns Error`() = runBlocking {
+    fun `handlePastedResponse when parseResponse returns null returns Error`(): Unit = runBlocking {
         stubProjectContext()
         stubGatherFiles(emptyMap())
-        service.startTask(task = "Task")
+        service.startTask(currentMessage = "Task")
 
         every { clipboardPort.parseResponse(any()) } returns null
 
@@ -308,7 +308,7 @@ class ClipboardInteractionServiceTest {
     fun `handlePastedResponse with requestedFiles triggers another WaitingForResponse`() = runBlocking {
         stubProjectContext()
         stubGatherFiles(emptyMap())
-        service.startTask(task = "Task")
+        service.startTask(currentMessage = "Task")
 
         stubGatherFiles(mapOf("src/Foo.kt" to "foo-content"))
         every { clipboardPort.parseResponse(any()) } returns ClipboardResponse(
@@ -326,7 +326,7 @@ class ClipboardInteractionServiceTest {
     fun `handlePastedResponse with no requestedFiles and no mods returns Completed`() = runBlocking {
         stubProjectContext()
         stubGatherFiles(emptyMap())
-        service.startTask(task = "Task")
+        service.startTask(currentMessage = "Task")
         every { clipboardPort.parseResponse(any()) } returns simpleResponse("All done!")
 
         val result = service.handlePastedResponse("{...}")
@@ -339,7 +339,7 @@ class ClipboardInteractionServiceTest {
     fun `handlePastedResponse propagates commitMessage`() = runBlocking {
         stubProjectContext()
         stubGatherFiles(emptyMap())
-        service.startTask(task = "Task")
+        service.startTask(currentMessage = "Task")
         every { clipboardPort.parseResponse(any()) } returns
                 ClipboardResponse(message = "Done", commitMessage = "feat: add X")
 
@@ -355,15 +355,15 @@ class ClipboardInteractionServiceTest {
         assertFalse(service.hasActiveSession())
         stubProjectContext()
         stubGatherFiles(emptyMap())
-        service.startTask(task = "Task")
+        service.startTask(currentMessage = "Task")
         assertTrue(service.hasActiveSession())
     }
 
     @Test
-    fun `reset clears session`() = runBlocking {
+    fun `reset clears session`(): Unit = runBlocking {
         stubProjectContext()
         stubGatherFiles(emptyMap())
-        service.startTask(task = "Task")
+        service.startTask(currentMessage = "Task")
         service.reset()
         assertFalse(service.hasActiveSession())
         assertInstanceOf(ClipboardStepResult.Error::class.java, service.continueDialog(message = "after reset"))
@@ -373,7 +373,7 @@ class ClipboardInteractionServiceTest {
     fun `isWaitingForResponse becomes false after handlePastedResponse`() = runBlocking {
         stubProjectContext()
         stubGatherFiles(emptyMap())
-        service.startTask(task = "Task")
+        service.startTask(currentMessage = "Task")
         assertTrue(service.isWaitingForResponse())
 
         every { clipboardPort.parseResponse(any()) } returns simpleResponse()
@@ -386,7 +386,7 @@ class ClipboardInteractionServiceTest {
     fun `getCurrentPhase returns CHAT after globalContextFiles are gathered`() = runBlocking {
         stubProjectContext()
         stubGatherFiles(mapOf("src/Foo.kt" to "content"))
-        service.startTask(task = "Task", globalContextFiles = listOf("src/Foo.kt"))
+        service.startTask(currentMessage = "Task", globalContextFiles = listOf("src/Foo.kt"))
 
         assertEquals(ClipboardPhase.CHAT, service.getCurrentPhase())
     }
