@@ -74,7 +74,6 @@ class MaxVibesToolPanel(private val project: Project, private val toolWindow: To
     }
 
     private fun createNewRoot() {
-        chatPanel.resetClipboard()
         chatTreeService.createNewSession()
         chatPanel.loadCurrentSession()
         showChat()
@@ -91,7 +90,6 @@ class MaxVibesToolPanel(private val project: Project, private val toolWindow: To
             "Branch: ${parent.title.take(25)}"
         ) as? String ?: return
 
-        chatPanel.resetClipboard()
         val branch = chatTreeService.createBranch(parentId, title)
         if (branch != null) {
             chatPanel.loadCurrentSession()
@@ -101,7 +99,6 @@ class MaxVibesToolPanel(private val project: Project, private val toolWindow: To
 
     private fun deleteSession(sessionId: String) {
         val session = chatTreeService.getSessionById(sessionId) ?: return
-        chatPanel.resetClipboard()
         chatTreeService.deleteSessionCascade(sessionId)
         if (chatTreeService.getAllSessions().isEmpty()) chatTreeService.createNewSession()
         sessionTreePanel.refresh()

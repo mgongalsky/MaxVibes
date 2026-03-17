@@ -19,6 +19,7 @@ import kotlinx.coroutines.runBlocking
 import com.maxvibes.shared.result.Result
 import com.maxvibes.adapter.llm.dto.toChatMessageDTO
 import com.maxvibes.domain.model.interaction.InteractionMode
+import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 
 interface ChatPanelCallbacks {
     fun appendToChat(text: String)
@@ -641,15 +642,19 @@ Check:
     }
 
     /**
-     * Routes a Clipboard-mode message to the correct service call based on session state.
+     * Routes a Clipboard-mode message via [ClipboardInteractionService.handleUserInput].
      *
-     * - **Waiting for paste**: delegates to [ClipboardInteractionService.handlePastedResponse];
-     *   [addHistory] is ignored (session is already active).
-     * - **Active session**: calls [ClipboardInteractionService.continueDialog] with [addHistory].
-     * - **New session**: calls [ClipboardInteractionService.startTask] with [addHistory].
+     * The service handles state-based routing (IDLE / SESSION_ACTIVE / AWAITING_PASTE) internally,
+     * so UI no longer needs to inspect service flags directly.
+     *
+     * UI responsibilities:
+     * - Show a user bubble for new tasks and continuations (not for paste responses)
+     * - Record message in domain session history (not for paste — that is the LLM's reply)
+     * - Append a paste icon on the last bubble when processing a pasted LLM response
+     * - Disable input controls and show a context-aware status label
      *
      * @param addHistory when true, previously gathered file paths are forwarded to the service
-     *   so they appear in the `previouslyGatheredFiles` field of the Clipboard JSON
+     *   so they appear in the Clipboard JSON payload
      */
     private fun dispatchClipboardMessage(
         userInput: String,
@@ -661,69 +666,53 @@ Check:
         val cs = service.clipboardService
         var session = chatTreeService.getActiveSession()
         val globalContextFiles = chatTreeService.getGlobalContextFiles()
-        when {
-            cs.isWaitingForResponse() -> {
-                // addHistory is irrelevant here — we are pasting a response, not starting a request.
-                callbacks.appendIconToLastBubble("\uD83D\uDCE5")
-                callbacks.setInputEnabled(false)
-                callbacks.setStatus("Processing...")
-                runClipboardBg("Processing response...", session) {
-                    cs.handlePastedResponse(
-                        sessionId = session.id,
-                        rawText = userInput
-                    )
-                }
-            }
+        val currentStatus = session.clipboardStatus
 
-            cs.hasActiveSession() -> {
-                callbacks.addUserMessageBubble(userInput)
-                val fullMsg = buildString {
-                    append(userInput)
-                    if (!trace.isNullOrBlank()) append("\n[trace: ${trace.lines().size} lines]")
-                    if (!errs.isNullOrBlank()) append("\n[attached ide errors]")
-                    if (isPlanOnly) append("\n[plan-only]")
-                }
-                session = chatTreeService.addMessage(session.id, MessageRole.USER, fullMsg)
-                callbacks.setInputEnabled(false)
-                callbacks.setStatus("Continuing...")
-                runClipboardBg("Continuing...", session) {
-                    cs.continueDialog(
-                        sessionId = session.id,
-                        message = userInput,
-                        attachedContext = trace,
-                        planOnly = isPlanOnly,
-                        ideErrors = errs,
-                        globalContextFiles = globalContextFiles,
-                        addHistory = addHistory
-                    )
-                }
+        // Capture history BEFORE mutating session (passed to startTask / continueDialog)
+        val history = session.messages.map { it.toChatMessageDTO() }
+
+        // UI update: differentiate between pasting an LLM response and user-initiated messages
+        when (currentStatus) {
+            ClipboardSessionStatus.AWAITING_PASTE -> {
+                // Pasting an LLM response — decorate the last bubble with a paste icon, no user bubble
+                callbacks.appendIconToLastBubble("\uD83D\uDCE5")
             }
 
             else -> {
-                callbacks.addUserMessageBubble(userInput)
+                // New task or continuation — record message in domain session and show user bubble
                 val fullMsg = buildString {
                     append(userInput)
                     if (!trace.isNullOrBlank()) append("\n[trace: ${trace.lines().size} lines]")
                     if (!errs.isNullOrBlank()) append("\n[attached ide errors]")
                     if (isPlanOnly) append("\n[plan-only]")
                 }
-                val dtos = session.messages.map { it.toChatMessageDTO() }
                 session = chatTreeService.addMessage(session.id, MessageRole.USER, fullMsg)
-                callbacks.setInputEnabled(false)
-                callbacks.setStatus("Generating JSON...")
-                runClipboardBg("Generating request...", session) {
-                    cs.startTask(
-                        sessionId = session.id,
-                        currentMessage = userInput,
-                        history = dtos,
-                        attachedContext = trace,
-                        planOnly = isPlanOnly,
-                        ideErrors = errs,
-                        globalContextFiles = globalContextFiles,
-                        addHistory = addHistory
-                    )
-                }
+                callbacks.addUserMessageBubble(userInput)
             }
+        }
+
+        // Disable input and show a context-aware status label for the operation type
+        callbacks.setInputEnabled(false)
+        val statusText = when (currentStatus) {
+            ClipboardSessionStatus.AWAITING_PASTE -> "Processing response..."
+            ClipboardSessionStatus.SESSION_ACTIVE -> "Continuing..."
+            ClipboardSessionStatus.IDLE -> "Generating JSON..."
+        }
+        callbacks.setStatus(statusText)
+
+        // Single unified service call — routing logic lives inside handleUserInput()
+        val capturedSession = session
+        runClipboardBg(statusText, capturedSession) {
+            cs.handleUserInput(
+                sessionId = capturedSession.id,
+                userInput = userInput,
+                history = history,
+                attachedContext = trace,
+                planOnly = isPlanOnly,
+                ideErrors = errs,
+                globalContextFiles = globalContextFiles,
+                addHistory = addHistory
+            )
         }
     }
     private fun dispatchCheapApiMessage(

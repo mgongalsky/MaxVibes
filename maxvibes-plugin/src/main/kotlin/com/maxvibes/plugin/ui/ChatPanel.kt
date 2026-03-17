@@ -5,7 +5,6 @@ import com.intellij.openapi.ui.ComboBox
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.*
 import com.intellij.util.ui.JBUI
-import com.maxvibes.domain.model.interaction.ClipboardPhase
 import com.maxvibes.domain.model.interaction.InteractionMode
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.plugin.service.MaxVibesService
@@ -134,8 +133,8 @@ class ChatPanel(
             settings = settings,
             onModeChanged = { mode ->
                 settings.interactionMode = mode.name
-                updateModeUI(mode)
                 if (mode == InteractionMode.CHEAP_API) service.ensureCheapLLMService()
+                // render() calls updateModeUI(state) internally — no need to call it separately
                 render(buildState())
             }
         )
@@ -222,9 +221,9 @@ class ChatPanel(
         statusLabel.text = text
     }
 
-    // Interface method (no-arg) — delegates to private implementation with current mode.
+    // Interface method (no-arg) — rebuilds state snapshot and delegates to updateModeUI(state).
     override fun updateModeIndicator() {
-        updateModeUI(modeManager.currentMode)
+        updateModeUI(buildState())
     }
 
     override fun updateBreadcrumb() {
@@ -362,8 +361,12 @@ class ChatPanel(
         render(buildState())
     }
 
-    fun resetClipboard() {
-        val sessionId = chatTreeService.getActiveSession().id
+    /**
+     * Explicitly resets the clipboard session for the given [sessionId].
+     * Retained for cases where an explicit reset is desired (e.g. manual mode switch cancel).
+     * After STEP 7, session switches no longer call this — each session owns its own clipboard state.
+     */
+    fun resetClipboard(sessionId: String) {
         service.clipboardService.reset(sessionId)
     }
 
@@ -481,20 +484,20 @@ class ChatPanel(
         }
         sessionsButton.addActionListener { onShowSessions() }
 
+        // Clipboard state is now per-session in the domain — no resetClipboard() on session switch.
         newChatButton.addActionListener {
-            resetClipboard()
             messageController.clearAttachmentsAfterSend()
             messageController.createNewSession()
             statusLabel.text = "New dialog"
         }
 
+        // Branching preserves the parent session's clipboard state.
         branchButton.addActionListener {
             val active = chatTreeService.getActiveSession()
             val title = JOptionPane.showInputDialog(
                 this, "Name for the new branch:", "New Branch", JOptionPane.PLAIN_MESSAGE,
                 null, null, "Branch: ${active.title.take(25)}"
             ) as? String ?: return@addActionListener
-            resetClipboard()
             messageController.clearAttachmentsAfterSend()
             messageController.branchSession(active.id, title)
             statusLabel.text = "Branch: $title"
@@ -544,7 +547,10 @@ class ChatPanel(
                 return@addActionListener
             }
             if (newMode == modeManager.currentMode) return@addActionListener
-            if (modeManager.currentMode == InteractionMode.CLIPBOARD && service.clipboardService.isWaitingForResponse()) {
+            // Read clipboard status from state snapshot — no direct service query
+            if (modeManager.currentMode == InteractionMode.CLIPBOARD &&
+                buildState().clipboardStatus == ClipboardSessionStatus.AWAITING_PASTE
+            ) {
                 val confirm = JOptionPane.showConfirmDialog(
                     this, "Active clipboard session will be reset. Continue?",
                     "Switch Mode", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE
@@ -608,45 +614,45 @@ class ChatPanel(
     }
 
     /**
-     * Updates mode-specific UI components based on [mode].
+     * Updates mode-specific UI components based on the provided panel state.
      *
-     * Called via [InteractionModeManager.onModeChanged] callback and from [render].
-     * Controls button labels, indicator visibility, and checkbox availability per mode.
+     * Reads [ChatPanelState.clipboardStatus] instead of querying the clipboard service directly,
+     * completing the decoupling of UI from service internal state.
      */
-    private fun updateModeUI(mode: InteractionMode) {
-        when (mode) {
+    private fun updateModeUI(state: ChatPanelState) {
+        when (state.mode) {
             InteractionMode.API -> {
-                modeIndicator.isVisible = false; sendButton.text = "Send"; dryRunCheckbox.isVisible = true
+                modeIndicator.isVisible = false
+                sendButton.text = "Send"
+                dryRunCheckbox.isVisible = true
                 copyJsonButton.isVisible = false
                 // "Add History" is only meaningful in Clipboard mode.
                 addHistoryCheckbox.isVisible = false
             }
 
             InteractionMode.CLIPBOARD -> {
-                val cs = service.clipboardService
                 // Reveal "Add History" — only shown in Clipboard mode.
                 addHistoryCheckbox.isVisible = true
-                when {
-                    cs.isWaitingForResponse() -> {
-                        val phase = cs.getCurrentPhase()
-                        modeIndicator.text = when (phase) {
-                            ClipboardPhase.PLANNING -> "⏳ Paste response (planning)"
-                            ClipboardPhase.CHAT -> "⏳ Paste response (chat)"
-                            else -> "⏳ Paste response"
-                        }
-                        modeIndicator.isVisible = true; sendButton.text = "Paste"
+                // Switch button label and indicator based on domain status snapshot
+                when (state.clipboardStatus) {
+                    ClipboardSessionStatus.AWAITING_PASTE -> {
+                        modeIndicator.text = "\u23F3 Paste response"
+                        modeIndicator.isVisible = true
+                        sendButton.text = "Paste"
                         copyJsonButton.isVisible = true
                     }
 
-                    cs.hasActiveSession() -> {
-                        modeIndicator.text = "📋 Active"
-                        modeIndicator.isVisible = true; sendButton.text = "Send / Paste"
+                    ClipboardSessionStatus.SESSION_ACTIVE -> {
+                        modeIndicator.text = "\uD83D\uDCCB Active"
+                        modeIndicator.isVisible = true
+                        sendButton.text = "Send / Paste"
                         copyJsonButton.isVisible = false
                     }
 
-                    else -> {
-                        modeIndicator.text = "📋"
-                        modeIndicator.isVisible = true; sendButton.text = "Generate"
+                    ClipboardSessionStatus.IDLE -> {
+                        modeIndicator.text = "\uD83D\uDCCB"
+                        modeIndicator.isVisible = true
+                        sendButton.text = "Generate"
                         copyJsonButton.isVisible = false
                     }
                 }
@@ -654,8 +660,10 @@ class ChatPanel(
             }
 
             InteractionMode.CHEAP_API -> {
-                modeIndicator.text = "💰"; modeIndicator.isVisible = true
-                sendButton.text = "Send"; dryRunCheckbox.isVisible = true
+                modeIndicator.text = "\uD83D\uDCB0"
+                modeIndicator.isVisible = true
+                sendButton.text = "Send"
+                dryRunCheckbox.isVisible = true
                 copyJsonButton.isVisible = false
                 // "Add History" is only meaningful in Clipboard mode.
                 addHistoryCheckbox.isVisible = false
@@ -743,7 +751,7 @@ class ChatPanel(
             this, msg, "Delete Chat", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE
         )
         if (confirm != JOptionPane.YES_OPTION) return
-        resetClipboard()
+        // Clipboard state is per-session in the domain — no explicit reset needed on delete
         messageController.clearAttachmentsAfterSend()
         messageController.deleteCurrentSession(session.id)
         statusLabel.text = "Chat deleted"
@@ -781,19 +789,18 @@ class ChatPanel(
 
     /**
      * Обновляет все UI-компоненты на основе переданного состояния.
-     * Единая точка обновления View — фундамент для MVP-паттерна (Steps 4-5).
+     * Единая точка обновления View — фундамент для MVP-паттерна.
+     *
+     * Важно: управление isEnabled инпута и кнопки НЕ выполняется здесь.
+     * Это делается через setInputEnabled(), вызываемый контроллером до и после фоновой задачи.
+     * render() только обновляет лейблы, индикаторы и видимость контролов.
      */
     fun render(state: ChatPanelState) {
         // Хлебные крошки / заголовок
         updateBreadcrumb()
 
-        // Индикатор режима
-        updateModeUI(state.mode)
-
-        // Кнопка отправки и поле ввода: блокируются только пока ждём вставку ответа из буфера обмена.
-        val waiting = state.clipboardStatus == ClipboardSessionStatus.AWAITING_PASTE
-        sendButton.isEnabled = !waiting
-        inputArea.isEnabled = !waiting
+        // Индикатор режима и лейбл кнопки — читает clipboardStatus из снапшота, не из сервиса
+        updateModeUI(state)
 
         // Индикаторы прикреплений (trace / errors)
         updateIndicators()
