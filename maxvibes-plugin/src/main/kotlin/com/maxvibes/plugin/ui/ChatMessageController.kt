@@ -180,7 +180,7 @@ class ChatMessageController(
 
             override fun onCancel() {
                 ApplicationManager.getApplication().invokeLater {
-                    service.clipboardService.reset()
+                    service.clipboardService.reset(session.id)
                     callbacks.appendToChat("\u26A0\uFE0F Cancelled")
                     callbacks.setInputEnabled(true)
                     callbacks.updateModeIndicator()
@@ -365,6 +365,8 @@ class ChatMessageController(
 
                     callbacks.setInputEnabled(true)
                     callbacks.updateModeIndicator()
+                    // hasActiveSession() is deprecated but safe to call here until STEP 8
+                    @Suppress("DEPRECATION")
                     val hint = if (service.clipboardService.hasActiveSession()) " \u2022 Session active" else ""
                     callbacks.setStatus((if (result.success) "Ready" else "Errors") + hint)
                     callbacks.updateBreadcrumb()
@@ -662,10 +664,15 @@ Check:
         when {
             cs.isWaitingForResponse() -> {
                 // addHistory is irrelevant here — we are pasting a response, not starting a request.
-                callbacks.appendIconToLastBubble("📥")
+                callbacks.appendIconToLastBubble("\uD83D\uDCE5")
                 callbacks.setInputEnabled(false)
                 callbacks.setStatus("Processing...")
-                runClipboardBg("Processing response...", session) { cs.handlePastedResponse(userInput) }
+                runClipboardBg("Processing response...", session) {
+                    cs.handlePastedResponse(
+                        sessionId = session.id,
+                        rawText = userInput
+                    )
+                }
             }
 
             cs.hasActiveSession() -> {
@@ -681,11 +688,12 @@ Check:
                 callbacks.setStatus("Continuing...")
                 runClipboardBg("Continuing...", session) {
                     cs.continueDialog(
-                        userInput,
-                        trace,
-                        isPlanOnly,
-                        errs,
-                        globalContextFiles,
+                        sessionId = session.id,
+                        message = userInput,
+                        attachedContext = trace,
+                        planOnly = isPlanOnly,
+                        ideErrors = errs,
+                        globalContextFiles = globalContextFiles,
                         addHistory = addHistory
                     )
                 }
@@ -705,12 +713,13 @@ Check:
                 callbacks.setStatus("Generating JSON...")
                 runClipboardBg("Generating request...", session) {
                     cs.startTask(
-                        userInput,
-                        dtos,
-                        trace,
-                        isPlanOnly,
-                        errs,
-                        globalContextFiles,
+                        sessionId = session.id,
+                        currentMessage = userInput,
+                        history = dtos,
+                        attachedContext = trace,
+                        planOnly = isPlanOnly,
+                        ideErrors = errs,
+                        globalContextFiles = globalContextFiles,
                         addHistory = addHistory
                     )
                 }

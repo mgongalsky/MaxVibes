@@ -11,22 +11,107 @@ import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.shared.result.Result
 import com.maxvibes.application.port.output.LoggerPort
 
+/**
+ * Application-layer service that orchestrates the clipboard-mode LLM dialog.
+ *
+ * Builds JSON requests, copies them to the system clipboard, parses pasted LLM responses,
+ * and applies resulting code modifications via [codeRepository].
+ *
+ * State transitions are delegated to [ClipboardSessionManager] when provided.
+ * Until STEP 5 wires the manager, it defaults to null and all transitions are no-ops.
+ *
+ * @param contextProvider   Provides project file tree and file content.
+ * @param clipboardPort     Copies requests to and parses responses from the system clipboard.
+ * @param codeRepository    Applies PSI-level code modifications.
+ * @param notificationPort  Displays progress/success/warning notifications in the IDE.
+ * @param promptPort        Supplies system prompt templates; falls back to [PromptTemplates.EMPTY].
+ * @param logger            Optional logger; pass null in unit tests to suppress output.
+ * @param sessionManager    Optional state-machine manager; null until STEP 5 wires it in.
+ */
 class ClipboardInteractionService(
     private val contextProvider: ProjectContextPort,
     private val clipboardPort: ClipboardPort,
     private val codeRepository: CodeRepository,
     private val notificationPort: NotificationPort,
     private val promptPort: PromptPort? = null,
-    private val logger: LoggerPort? = null
+    private val logger: LoggerPort? = null,
+    private val sessionManager: ClipboardSessionManager? = null
 ) {
-    /** Текущее состояние clipboard-сессии */
+    /** In-memory session state: messages, gathered files, prompts, etc. */
     private var sessionState: ClipboardSessionState? = null
 
-    /** Ждём ли мы вставки ответа от LLM */
-    private var waitingForPaste: Boolean = false
+    /** Last generated request — used by [recopyLastRequest]. */
     private var lastRequest: ClipboardRequest? = null
 
+    /**
+     * Backing field for the deprecated [isWaitingForResponse] compat API.
+     * Set to true by [generateAndCopyJson], cleared by [handlePastedResponseInternal] and [reset].
+     * Will be removed in STEP 8.
+     */
+    private var waitingForPaste: Boolean = false
+
+    // ==================== Status Routing ====================
+
+    /**
+     * Returns the current clipboard status for the given session.
+     * Falls back to [ClipboardSessionStatus.IDLE] when no manager is wired (pre-STEP 5).
+     */
+    private fun currentStatus(sessionId: String): ClipboardSessionStatus =
+        sessionManager?.statusFor(sessionId) ?: ClipboardSessionStatus.IDLE
+
     // ==================== Public API ====================
+
+    /**
+     * Unified entry point for clipboard-mode UI interactions.
+     *
+     * Routes to [startTask], [continueDialog], or [handlePastedResponse] based on the
+     * current session status, so UI code does not need to track internal states.
+     *
+     * @param sessionId          The ID of the current chat session.
+     * @param userInput          Raw user input or pasted LLM response.
+     * @param history            Pre-existing dialog history (used by [startTask] only).
+     * @param attachedContext    Additional context text attached by the user.
+     * @param planOnly           When true, instructs the LLM not to generate code changes.
+     * @param ideErrors          IDE error output to include in the request.
+     * @param globalContextFiles Paths to always include as fresh files.
+     * @param addHistory         When true, full context and previously gathered paths are sent.
+     */
+    suspend fun handleUserInput(
+        sessionId: String,
+        userInput: String,
+        history: List<ChatMessageDTO> = emptyList(),
+        attachedContext: String? = null,
+        planOnly: Boolean = false,
+        ideErrors: String? = null,
+        globalContextFiles: List<String> = emptyList(),
+        addHistory: Boolean = false
+    ): ClipboardStepResult = when (currentStatus(sessionId)) {
+        // Waiting for a pasted LLM response — treat input as the paste content
+        ClipboardSessionStatus.AWAITING_PASTE -> handlePastedResponse(sessionId, userInput)
+
+        // Session live — continue the conversation with a new user message
+        ClipboardSessionStatus.SESSION_ACTIVE -> continueDialog(
+            sessionId = sessionId,
+            message = userInput,
+            attachedContext = attachedContext,
+            planOnly = planOnly,
+            ideErrors = ideErrors,
+            globalContextFiles = globalContextFiles,
+            addHistory = addHistory
+        )
+
+        // No active session — start a fresh task
+        ClipboardSessionStatus.IDLE -> startTask(
+            sessionId = sessionId,
+            currentMessage = userInput,
+            history = history,
+            attachedContext = attachedContext,
+            planOnly = planOnly,
+            ideErrors = ideErrors,
+            globalContextFiles = globalContextFiles,
+            addHistory = addHistory
+        )
+    }
 
     /**
      * Starts a new clipboard task session.
@@ -34,18 +119,17 @@ class ClipboardInteractionService(
      * Gathers global context files, initialises session state, and copies the first
      * JSON request to the clipboard for the user to paste into an external LLM.
      *
-     * @param currentMessage     The current user message to send to the LLM.
+     * @param sessionId          The ID of the current chat session.
+     * @param currentMessage     The user message to send to the LLM.
      * @param history            Pre-existing dialog history.
-     * @param attachedContext    Additional context text attached by the user.
+     * @param attachedContext    Additional context text.
      * @param planOnly           When true, the LLM is instructed not to generate code changes.
-     * @param ideErrors          IDE error output to include in the request.
+     * @param ideErrors          IDE error output to include.
      * @param globalContextFiles Paths that should always be included as fresh files.
-     * @param addHistory         When true, previously gathered file paths are included in
-     *                           [ClipboardRequest.previouslyGatheredPaths] so the LLM can
-     *                           request them again without re-uploading content.
-     *                           When false (default), that list is empty, minimising token usage.
+     * @param addHistory         When true, previously gathered paths are included in the request.
      */
     suspend fun startTask(
+        sessionId: String,
         currentMessage: String,
         history: List<ChatMessageDTO> = emptyList(),
         attachedContext: String? = null,
@@ -54,7 +138,10 @@ class ClipboardInteractionService(
         globalContextFiles: List<String> = emptyList(),
         addHistory: Boolean = false
     ): ClipboardStepResult {
-        log("Starting new clipboard session: \"${currentMessage.take(60)}...\" (planOnly=$planOnly, addHistory=$addHistory)")
+        log("Starting clipboard session: planOnly=$planOnly, addHistory=$addHistory")
+
+        // Transition IDLE -> SESSION_ACTIVE; no-op when manager is null (pre-STEP 5)
+        sessionManager?.transition(sessionId, ClipboardEvent.StartSession)
 
         notificationPort.showProgress("Gathering project context...", 0.1)
         val projectContextResult = contextProvider.getProjectContext()
@@ -66,6 +153,7 @@ class ClipboardInteractionService(
 
         log("Project: ${projectContext.name}, files in tree: ${projectContext.fileTree.totalFiles}")
 
+        // Initialise in-memory session state for this dialog
         sessionState = ClipboardSessionState(
             currentMessage = currentMessage,
             projectContext = projectContext,
@@ -78,10 +166,9 @@ class ClipboardInteractionService(
         )
 
         addToHistory(ChatRole.USER, currentMessage)
-
         val freshFiles = gatherRequestedFiles(globalContextFiles) ?: emptyMap()
-
         return generateAndCopyJson(
+            sessionId = sessionId,
             freshFiles = freshFiles,
             isFirstMessage = true,
             addHistory = addHistory
@@ -91,18 +178,16 @@ class ClipboardInteractionService(
     /**
      * Continues an existing clipboard dialog session with a new user message.
      *
-     * @param message       The user's follow-up message.
-     * @param attachedContext Replaces (or inherits) the attached context for this turn.
-     * @param planOnly      Overrides plan-only mode for this turn; inherits previous value if null.
-     * @param ideErrors     IDE error output for this turn.
+     * @param sessionId          The ID of the current chat session.
+     * @param message            The user's follow-up message.
+     * @param attachedContext    Replaces (or inherits) the attached context for this turn.
+     * @param planOnly           Overrides plan-only mode; inherits previous value if null.
+     * @param ideErrors          IDE error output for this turn.
      * @param globalContextFiles Paths to include as fresh files — only honoured when [addHistory]=true.
-     *                      In minimal mode the LLM already has these files in its chat window, so
-     *                      re-sending them wastes tokens.
-     * @param addHistory    UI: "Add History" — when true, the list of all previously gathered
-     *                      file paths is sent so the LLM can request them again if its context
-     *                      was lost. When false (default), the list is empty to save tokens.
+     * @param addHistory         When true, full context and all previously gathered paths are sent.
      */
     suspend fun continueDialog(
+        sessionId: String,
         message: String,
         attachedContext: String? = null,
         planOnly: Boolean? = null,
@@ -113,7 +198,7 @@ class ClipboardInteractionService(
         val state = sessionState
             ?: return error("No active clipboard session. Start a new task first.")
 
-        log("Continuing dialog: \"${message.take(60)}...\" (new planOnly=$planOnly, addHistory=$addHistory)")
+        log("Continuing dialog: addHistory=$addHistory")
 
         sessionState = state.copy(
             attachedContext = attachedContext ?: state.attachedContext,
@@ -123,92 +208,128 @@ class ClipboardInteractionService(
 
         addToHistory(ChatRole.USER, message)
 
-        // In minimal mode the LLM already has globalContextFiles in its chat window from the
-        // first message — passing them again wastes tokens. Only gather them in full-context mode.
+        // In minimal mode the LLM already has globalContextFiles — re-sending them wastes tokens
         val filesToGather = if (addHistory) globalContextFiles else emptyList()
         val freshFiles = gatherRequestedFiles(filesToGather) ?: emptyMap()
-
         return generateAndCopyJson(
+            sessionId = sessionId,
             freshFiles = freshFiles,
             isFirstMessage = false,
             addHistory = addHistory
         )
     }
 
-    suspend fun handlePastedResponse(rawText: String): ClipboardStepResult {
+    /**
+     * Handles a raw LLM response pasted by the user.
+     *
+     * Wraps [handlePastedResponseInternal] in a top-level exception handler so unexpected
+     * parse errors are surfaced as [ClipboardStepResult.Error] rather than crashing.
+     *
+     * @param sessionId The ID of the current chat session.
+     * @param rawText   The raw text pasted from the external LLM interface.
+     */
+    suspend fun handlePastedResponse(sessionId: String, rawText: String): ClipboardStepResult {
         return try {
-            handlePastedResponseInternal(rawText)
+            handlePastedResponseInternal(sessionId, rawText)
         } catch (e: Exception) {
             val msg = "Unexpected error processing response: ${e.javaClass.simpleName}: ${e.message}"
             println("[MaxVibes Clipboard] FATAL: $msg")
             logger?.error("Clipboard", msg, e)
-            ClipboardStepResult.Error("⚠️ $msg\n\nThe session is still active — you can try pasting the response again.")
+            ClipboardStepResult.Error(msg)
         }
     }
 
-    private suspend fun handlePastedResponseInternal(rawText: String): ClipboardStepResult {
+    private suspend fun handlePastedResponseInternal(sessionId: String, rawText: String): ClipboardStepResult {
+        // Guard: state-machine transition check BEFORE touching in-memory state.
+        // Returns false only when the manager explicitly rejects (invalid state).
+        // Returns null when no manager is present (pre-STEP 5) — treat as accepted.
+        val transitioned = sessionManager?.transition(sessionId, ClipboardEvent.ResponsePasted)
+        if (transitioned == false) {
+            return error("Cannot accept response paste: session is not in AWAITING_PASTE state.")
+        }
+
+        // Clear compat backing field
+        waitingForPaste = false
+
         val state = sessionState
             ?: return error("No active clipboard session. Start a new task first.")
 
         log("Parsing pasted response (${rawText.length} chars)...")
 
-        waitingForPaste = false
-
         val outputTokens = rawText.length / 4
         val inputTokens = state.lastInputTokens
 
+        // Parse the raw clipboard text into a structured response
         val response = try {
             clipboardPort.parseResponse(rawText)
         } catch (e: Exception) {
             log("ERROR: Exception during JSON parse: ${e.message}")
-            return error("Failed to parse response JSON: ${e.message}\n\nMake sure you pasted the complete raw JSON (no markdown backticks).")
+            return error("Failed to parse response JSON: ${e.message}")
         }
 
         if (response == null) {
             log("ERROR: Failed to parse response — null returned")
-            return error(
-                "Failed to parse LLM response.\n\n" +
-                        "Expected JSON format:\n" +
-                        "{\n" +
-                        "  \"message\": \"explanation text\",\n" +
-                        "  \"requestedFiles\": [\"path/file.kt\"],  // optional\n" +
-                        "  \"modifications\": [...]                  // optional\n" +
-                        "}\n\n" +
-                        "Tip: make sure you pasted the complete response without markdown code blocks."
-            )
+            return error("Failed to parse LLM response. Make sure you pasted complete raw JSON without markdown code blocks.")
         }
 
+        val reasoningDisplay = response.reasoning?.take(40) ?: "none"
         log(
-            "Parsed: message=${response.message.take(50)}..., " +
+            "Parsed: message=${response.message.take(50)}, " +
                     "requestedFiles=${response.requestedFiles.size}, " +
                     "modifications=${response.modifications.size}, " +
-                    "reasoning=${response.reasoning?.take(40) ?: "none"}"
+                    "reasoning=$reasoningDisplay"
         )
 
         if (response.message.isNotBlank()) {
             addToHistory(ChatRole.ASSISTANT, response.message)
         }
 
-        return processUnifiedResponse(response, inputTokens, outputTokens)
+        return processUnifiedResponse(sessionId, response, inputTokens, outputTokens)
     }
 
-    fun isWaitingForResponse(): Boolean = waitingForPaste
+    /**
+     * Returns the current clipboard phase for the active session, or null if no session is open.
+     * Phase is PLANNING until the first files are gathered; CHAT afterwards.
+     */
     fun getCurrentPhase(): ClipboardPhase? {
         val state = sessionState ?: return null
         return if (state.allGatheredFiles.isEmpty()) ClipboardPhase.PLANNING else ClipboardPhase.CHAT
     }
 
-    fun hasActiveSession(): Boolean = sessionState != null
-    fun reset() {
-        log("Session reset")
+    /**
+     * Returns the current [ClipboardSessionStatus] for the given session.
+     * Delegates to [ClipboardSessionManager.statusFor]; falls back to IDLE when no manager is wired.
+     */
+    fun status(sessionId: String): ClipboardSessionStatus = currentStatus(sessionId)
+
+    /**
+     * Resets the clipboard session: clears in-memory state and transitions the session to IDLE.
+     *
+     * @param sessionId The ID of the session to reset.
+     */
+    fun reset(sessionId: String) {
+        log("Session reset (sessionId=$sessionId)")
         sessionState = null
-        waitingForPaste = false
         lastRequest = null
+        waitingForPaste = false
+        sessionManager?.transition(sessionId, ClipboardEvent.Reset)
     }
+
+    // ==================== Deprecated Legacy API ====================
+    // Preserved for backward-compatibility during STEP 4 -> STEP 8 transition.
+
+    /** @suppress Use [status] with an explicit sessionId instead. */
+    @Deprecated("Use status(sessionId) instead", ReplaceWith("status(sessionId)"))
+    fun isWaitingForResponse(): Boolean = waitingForPaste
+
+    /** @suppress Use [status] with an explicit sessionId instead. */
+    @Deprecated("Use status(sessionId) instead", ReplaceWith("status(sessionId)"))
+    fun hasActiveSession(): Boolean = sessionState != null
 
     // ==================== Core Logic ====================
 
     private suspend fun processUnifiedResponse(
+        sessionId: String,
         response: ClipboardResponse,
         inputTokens: Int = 0,
         outputTokens: Int = 0
@@ -221,31 +342,29 @@ class ClipboardInteractionService(
 
         log("Processing: hasFiles=$hasFiles, hasMods=$hasMods, hasMessage=$hasMessage")
 
-        val modResults = if (hasMods) {
-            applyModifications(response.modifications)
-        } else {
-            emptyList<ModificationResult>()
-        }
+        // Apply modifications before gathering additional files
+        val modResults = if (hasMods) applyModifications(response.modifications)
+        else emptyList<ModificationResult>()
 
+        // If the LLM requested more files, gather them and send a follow-up request
         if (hasFiles) {
             val gatheredFilesMap = gatherRequestedFiles(response.requestedFiles)
             if (gatheredFilesMap == null) {
                 return buildCompletedResult(
                     response = response,
                     modResults = modResults,
-                    extraMessage = "\n\n⚠️ Failed to gather some requested files.",
+                    extraMessage = "Failed to gather some requested files.",
                     inputTokens = inputTokens,
                     outputTokens = outputTokens
                 )
             }
-
-            val assistantDisplayMessage = response.message.trim()
-            val reasoningStr: String? = response.reasoning?.takeIf { it.isNotBlank() }
-
+            val assistantMsg = response.message.trim().takeIf { it.isNotBlank() }
+            val reasoningStr = response.reasoning?.takeIf { it.isNotBlank() }
             return generateAndCopyJson(
+                sessionId = sessionId,
                 freshFiles = gatheredFilesMap,
                 isFirstMessage = false,
-                assistantMessage = if (assistantDisplayMessage.isNotBlank()) assistantDisplayMessage else null,
+                assistantMessage = assistantMsg,
                 llmReasoning = reasoningStr
             )
         }
@@ -259,35 +378,24 @@ class ClipboardInteractionService(
     }
 
     /**
-     * Builds a [ClipboardRequest], copies it to the clipboard, and transitions the
-     * session into [ClipboardStepResult.WaitingForResponse].
+     * Builds a [ClipboardRequest], copies it to the clipboard, and returns
+     * [ClipboardStepResult.WaitingForResponse].
      *
      * ## Token-saving policy (Minimal mode)
      *
-     * When [isFirstMessage] is `false` AND [addHistory] is `false`, the request is
-     * **minimal**: only the current user message (`currentMessage`), freshly-requested file
-     * contents (`files`), and errors are included. Heavy context fields —
-     * `systemInstruction`, `fileTree`, `chatHistory`, `attachedContext` — are
-     * deliberately left blank/empty so the codec omits them from the JSON.
+     * When [isFirstMessage] is false AND [addHistory] is false, the request is minimal:
+     * only the current user message, freshly-requested files, and errors are included.
+     * Heavy context fields are left blank so the codec omits them from JSON.
      *
-     * This is safe because the LLM is in an ongoing chat and already has the full
-     * context from the previous message. Re-sending it wastes tokens and can
-     * confuse newer models with repeated system instructions.
-     *
-     * **Full context** is sent only:
-     * - On the very first message in a session ([isFirstMessage] = `true`), OR
-     * - When the user checks "Add History" ([addHistory] = `true`), which signals
-     *   that a fresh LLM chat is starting and needs all the context again.
-     *
-     * @param freshFiles       Files gathered in this turn (path -> content).
+     * @param sessionId        Session ID — used to fire the [ClipboardEvent.JsonCopied] transition.
+     * @param freshFiles       Files gathered in this turn (path to content).
      * @param isFirstMessage   True for the very first message in a session.
-     * @param assistantMessage Assistant message to display above the status (from file-gather step).
-     * @param llmReasoning     Reasoning snippet from the previous LLM response, shown in UI.
-     * @param addHistory       When true, [ClipboardRequest.previouslyGatheredPaths] is populated
-     *                         with all file paths gathered so far, AND full context is included,
-     *                         giving a fresh LLM chat everything it needs to continue.
+     * @param assistantMessage Optional message to show above the status.
+     * @param llmReasoning     Reasoning snippet from the previous LLM response.
+     * @param addHistory       When true, full context and previously gathered paths are populated.
      */
     private fun generateAndCopyJson(
+        sessionId: String,
         freshFiles: Map<String, String>,
         isFirstMessage: Boolean,
         assistantMessage: String? = null,
@@ -296,32 +404,25 @@ class ClipboardInteractionService(
     ): ClipboardStepResult {
         val state = sessionState ?: return error("No active session")
 
-        // --- Minimal-mode flag ---
-        // Continuation without "Add History": LLM already has all context in its chat.
-        // Skip heavy fields to save tokens.
+        // Minimal-mode: LLM already has all context in its chat window
         val isMinimal = !isFirstMessage && !addHistory
-
-        // Only populate previouslyGatheredPaths when addHistory is on (full-context mode).
         val previousPaths: List<String> =
             if (addHistory) state.allGatheredFiles.keys.toList() else emptyList()
 
         log(
             "Generating JSON: freshFiles=${freshFiles.size}, previousPaths=${previousPaths.size}, " +
-                    "historySize=${state.dialogHistory.size}, planOnly=${state.planOnly}, " +
-                    "addHistory=$addHistory, isMinimal=$isMinimal"
+                    "historySize=${state.dialogHistory.size}, isMinimal=$isMinimal"
         )
 
-        // In minimal mode, carry only the current user message so the LLM
-        // knows what follow-up action is requested without re-reading the full history.
+        // In minimal mode carry only the latest user message
         val taskContent = if (isMinimal) {
             state.dialogHistory.lastOrNull { it.role == ChatRole.USER }?.content ?: state.currentMessage
         } else {
             state.currentMessage
         }
 
-        // System prompt: omitted in minimal mode — codec skips blank strings.
+        // System prompt: omitted in minimal mode — codec skips blank strings
         val systemInstruction = if (isMinimal) "" else {
-            // Planning phase uses planning-specific prompt; chat phase uses chat prompt.
             if (state.allGatheredFiles.isEmpty()) {
                 state.prompts.planningSystem
             } else {
@@ -337,7 +438,7 @@ class ClipboardInteractionService(
                 ClipboardPhase.PLANNING else ClipboardPhase.CHAT,
             currentMessage = taskContent,
             projectName = state.projectContext.name,
-            // Blank/empty fields are omitted by JsonClipboardProtocolCodec.encode().
+            // Blank/empty fields are omitted by JsonClipboardProtocolCodec.encode()
             systemInstruction = systemInstruction,
             fileTree = if (isMinimal) "" else state.projectContext.fileTree.toCompactString(maxDepth = 4),
             freshFiles = freshFiles,
@@ -352,30 +453,29 @@ class ClipboardInteractionService(
                     content = msg.content
                 )
             },
-            // attachedContext and planOnly are only meaningful in full-context mode.
             attachedContext = if (isMinimal) null else state.attachedContext,
-            ideErrors = state.ideErrors,   // always include — directly relevant to current message
+            ideErrors = state.ideErrors,
             planOnly = if (isMinimal) false else state.planOnly
         )
 
         lastRequest = request
 
         val copied = clipboardPort.copyRequestToClipboard(request)
-        val copyStatus = if (copied) "copied to clipboard \u2713" else "generated (copy manually)"
+        val copyStatus = if (copied) "copied to clipboard" else "generated (copy manually)"
 
         val totalTokens = estimateTokens(request)
         state.lastInputTokens = totalTokens
 
-        val statusMessage =
-            "\uD83D\uDCCB JSON $copyStatus\nPaste into Claude/ChatGPT, then paste the response back here."
-
         log("JSON ready: $copyStatus, ~$totalTokens tokens")
 
+        // Transition SESSION_ACTIVE -> AWAITING_PASTE (or AWAITING_PASTE -> AWAITING_PASTE on retry)
+        sessionManager?.transition(sessionId, ClipboardEvent.JsonCopied)
+        // Drive the deprecated isWaitingForResponse() compat API
         waitingForPaste = true
 
         return ClipboardStepResult.WaitingForResponse(
             phase = request.phase,
-            statusMessage = statusMessage,
+            statusMessage = "JSON $copyStatus. Paste into Claude/ChatGPT, then paste the response back here.",
             assistantMessage = assistantMessage,
             jsonRequest = request,
             estimatedInputTokens = totalTokens,
@@ -387,9 +487,7 @@ class ClipboardInteractionService(
 
     // ==================== File Gathering ====================
 
-    private suspend fun gatherRequestedFiles(
-        requestedPaths: List<String>
-    ): Map<String, String>? {
+    private suspend fun gatherRequestedFiles(requestedPaths: List<String>): Map<String, String>? {
         val state = sessionState ?: return null
 
         val newPaths = requestedPaths.filter { it !in state.allGatheredFiles }
@@ -413,19 +511,14 @@ class ClipboardInteractionService(
             return null
         }
         val gathered = (gatherResult as Result.Success).value
-
         state.allGatheredFiles.putAll(gathered.files)
-
         log("Gathered ${gathered.files.size} files, total cached: ${state.allGatheredFiles.size}")
-
         return gathered.files
     }
 
     // ==================== Modifications ====================
 
-    private suspend fun applyModifications(
-        clipboardMods: List<ClipboardModification>
-    ): List<ModificationResult> {
+    private suspend fun applyModifications(clipboardMods: List<ClipboardModification>): List<ModificationResult> {
         val modifications = clipboardMods.mapNotNull { convertModification(it) }
         if (modifications.isEmpty()) return emptyList()
 
@@ -433,18 +526,12 @@ class ClipboardInteractionService(
         notificationPort.showProgress("Applying ${modifications.size} changes...", 0.8)
 
         val results = codeRepository.applyModifications(modifications)
-
         val successCount = results.count { it is ModificationResult.Success }
         val failCount = results.size - successCount
 
         log("Modifications: $successCount success, $failCount failed")
-
-        if (failCount > 0) {
-            notificationPort.showWarning("Applied $successCount changes, $failCount failed")
-        } else if (successCount > 0) {
-            notificationPort.showSuccess("Applied $successCount changes")
-        }
-
+        if (failCount > 0) notificationPort.showWarning("Applied $successCount changes, $failCount failed")
+        else if (successCount > 0) notificationPort.showSuccess("Applied $successCount changes")
         return results
     }
 
@@ -461,25 +548,16 @@ class ClipboardInteractionService(
         val failCount = modResults.size - successCount
 
         val messageText = buildString {
-            if (response.message.isNotBlank()) {
-                append(response.message)
-            }
+            if (response.message.isNotBlank()) append(response.message)
             if (extraMessage.isNotBlank()) {
                 if (isNotEmpty()) append("\n\n")
                 append(extraMessage)
             }
-            if (isEmpty()) {
-                append("Done.")
-            }
+            if (isEmpty()) append("Done.")
         }
 
-        if (modResults.isNotEmpty()) {
-            notificationPort.showSuccess("Done. Session active — you can continue the dialog.")
-        }
-
-        log("Completed: message=${response.message.take(40)}..., mods=$successCount ok/$failCount fail.")
-
-        val reasoningStr: String? = response.reasoning?.takeIf { it.isNotBlank() }
+        if (modResults.isNotEmpty()) notificationPort.showSuccess("Done. Session active — you can continue the dialog.")
+        log("Completed: mods=$successCount ok/$failCount fail.")
 
         return ClipboardStepResult.Completed(
             message = messageText.trim(),
@@ -487,26 +565,10 @@ class ClipboardInteractionService(
             success = failCount == 0,
             inputTokens = inputTokens,
             outputTokens = outputTokens,
-            llmReasoning = reasoningStr,
+            llmReasoning = response.reasoning?.takeIf { it.isNotBlank() },
             commitMessage = response.commitMessage?.takeIf { it.isNotBlank() }
         )
     }
-
-    private fun buildFileGatherMessage(
-        response: ClipboardResponse,
-        freshFiles: Map<String, String>
-    ): String = buildString {
-        if (response.reasoning?.isNotBlank() == true) {
-            appendLine("💭 ${response.reasoning}")
-            appendLine()
-        }
-        appendLine("📁 Gathered ${freshFiles.size} file(s):")
-        freshFiles.keys.forEach { path ->
-            appendLine("   • ${path.substringAfterLast('/')}")
-        }
-    }
-
-    // ==================== System Instructions ====================
 
     // ==================== Helpers ====================
 
@@ -554,30 +616,32 @@ class ClipboardInteractionService(
             "REPLACE_FILE" -> Modification.ReplaceFile(targetPath = elementPath, newContent = mod.content)
             "DELETE_FILE" -> Modification.DeleteFile(targetPath = elementPath)
             "CREATE_ELEMENT" -> Modification.CreateElement(
-                targetPath = elementPath,
-                elementKind = elementKind,
-                content = mod.content,
-                position = position
+                targetPath = elementPath, elementKind = elementKind,
+                content = mod.content, position = position
             )
 
             "REPLACE_ELEMENT" -> Modification.ReplaceElement(targetPath = elementPath, newContent = mod.content)
             "DELETE_ELEMENT" -> Modification.DeleteElement(targetPath = elementPath)
             "ADD_IMPORT" -> {
-                val importFqName = mod.importPath.ifBlank { mod.content.removePrefix("import ").trim() }
-                if (importFqName.isBlank()) null
-                else Modification.AddImport(targetPath = elementPath, importPath = importFqName)
+                val fqn = mod.importPath.ifBlank { mod.content.removePrefix("import ").trim() }
+                if (fqn.isBlank()) null else Modification.AddImport(targetPath = elementPath, importPath = fqn)
             }
 
             "REMOVE_IMPORT" -> {
-                val importFqName = mod.importPath.ifBlank { mod.content.removePrefix("import ").trim() }
-                if (importFqName.isBlank()) null
-                else Modification.RemoveImport(targetPath = elementPath, importPath = importFqName)
+                val fqn = mod.importPath.ifBlank { mod.content.removePrefix("import ").trim() }
+                if (fqn.isBlank()) null else Modification.RemoveImport(targetPath = elementPath, importPath = fqn)
             }
 
             else -> null
         }
     }
 
+    /**
+     * Re-copies the last generated request JSON to the system clipboard.
+     * Useful when the user accidentally dismissed the clipboard content before pasting.
+     *
+     * @return true if the content was successfully copied; false if there is no previous request.
+     */
     fun recopyLastRequest(): Boolean {
         val req = lastRequest ?: return false
         return clipboardPort.copyRequestToClipboard(req)
@@ -585,25 +649,21 @@ class ClipboardInteractionService(
 
     companion object {
         /**
-         * Суффикс, добавляемый к chat-промпту в plan-only режиме.
-         * Не содержит базовый промпт — только дополнение, запрещающее генерацию кода.
-         * Единственный источник plan-only текста: живёт здесь, используется в generateAndCopyJson.
+         * Suffix appended to the chat system prompt in plan-only mode.
+         * Instructs the LLM to discuss the plan without generating code changes.
+         * Single source of truth — used only inside [generateAndCopyJson].
          */
-        private val PLAN_ONLY_SUFFIX = """
-
-## ⚠️ PLAN-ONLY MODE — DISCUSSION REQUIRED
-
-DO NOT generate any code changes in the "modifications" array. 
-Keep "modifications": [] empty.
-Your goal is to DISCUSS the plan with the user before any code is written.
-
-Instead of code, you must:
-1. Briefly explain what you understand from the task
-2. List which files you plan to touch and what changes you'll make in each
-3. Mention any architectural decisions or trade-offs
-4. Ask the user to confirm or suggest corrections
-
-Always output the JSON with "modifications": [] and put your discussion in "message".""".trimIndent()
+        private val PLAN_ONLY_SUFFIX = "\n\n" +
+                "## PLAN-ONLY MODE — DISCUSSION REQUIRED\n\n" +
+                "DO NOT generate any code changes in the modifications array.\n" +
+                "Keep modifications empty.\n" +
+                "Your goal is to DISCUSS the plan with the user before any code is written.\n\n" +
+                "Instead of code, you must:\n" +
+                "1. Briefly explain what you understand from the task\n" +
+                "2. List which files you plan to touch and what changes you'll make in each\n" +
+                "3. Mention any architectural decisions or trade-offs\n" +
+                "4. Ask the user to confirm or suggest corrections\n\n" +
+                "Always output the JSON with empty modifications and put your discussion in message."
     }
 }
 

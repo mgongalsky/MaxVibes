@@ -355,7 +355,8 @@ class ChatPanel(
     }
 
     fun resetClipboard() {
-        service.clipboardService.reset()
+        val sessionId = chatTreeService.getActiveSession().id
+        service.clipboardService.reset(sessionId)
     }
 
     private fun setupUI() {
@@ -543,7 +544,9 @@ class ChatPanel(
                 if (confirm != JOptionPane.YES_OPTION) {
                     syncComboBoxToMode(); return@addActionListener
                 }
-                service.clipboardService.reset()
+                // Pass the active session ID to reset() — required after STEP 4 refactor
+                val sessionId = chatTreeService.getActiveSession().id
+                service.clipboardService.reset(sessionId)
             }
             MaxVibesLogger.info(
                 "ChatPanel",

@@ -18,10 +18,9 @@ import com.maxvibes.domain.model.modification.ModificationError
 /**
  * Verifies the minimal-mode payload policy introduced in [ClipboardInteractionService].
  *
- * **Rule under test**: when [ClipboardInteractionService.continueDialog] is called with
- * `addHistory = false`, the produced [ClipboardRequest] must NOT contain heavy context
- * fields (`systemInstruction`, `fileTree`, `chatHistory`, `attachedContext`, `planOnly`)
- * because the LLM already has all that information in its current chat window.
+ * When [ClipboardInteractionService.continueDialog] is called with `addHistory = false`,
+ * the produced [ClipboardRequest] must NOT contain heavy context fields because the LLM
+ * already has all that information in its current chat window.
  *
  * When `addHistory = true`, or on the very first [ClipboardInteractionService.startTask]
  * call, the full context must be present.
@@ -29,6 +28,9 @@ import com.maxvibes.domain.model.modification.ModificationError
  * These tests run in the `maxvibes-application` module without any IntelliJ Platform SDK.
  */
 class ClipboardMinimalModeTest {
+
+    /** Shared session ID used across all test scenarios. */
+    private val SESSION_ID = "test-session"
 
     // ── Fake ports ────────────────────────────────────────────────────
 
@@ -97,7 +99,6 @@ class ClipboardMinimalModeTest {
         ): Result<List<CodeElement>, CodeRepositoryError> = Result.Success(emptyList())
 
         override suspend fun applyModification(modification: Modification): ModificationResult =
-            // Return Failure — test fakes never exercise real modifications.
             ModificationResult.Failure(
                 modification = modification,
                 error = ModificationError.InvalidOperation("test fake")
@@ -139,9 +140,11 @@ class ClipboardMinimalModeTest {
 
     // ── Helpers ───────────────────────────────────────────────────────
 
+    /** Starts a session with a context file and returns the initial [ClipboardRequest]. */
     private fun startSessionWithContextFile(): ClipboardRequest {
         val result = runBlocking {
             service.startTask(
+                sessionId = SESSION_ID,
                 currentMessage = "initial task",
                 globalContextFiles = listOf("docs/README.md")
             )
@@ -155,7 +158,6 @@ class ClipboardMinimalModeTest {
     fun `startTask always sends full context regardless of addHistory`() {
         val req = startSessionWithContextFile()
 
-        // First message must always carry the full context so the LLM knows the project.
         assertTrue(
             req.systemInstruction.isNotBlank(),
             "startTask must include systemInstruction"
@@ -178,9 +180,10 @@ class ClipboardMinimalModeTest {
 
         val result = runBlocking {
             service.continueDialog(
+                sessionId = SESSION_ID,
                 message = "fix the bug",
                 globalContextFiles = listOf("docs/README.md"),
-                addHistory = false   // galochka off — LLM already has context in its chat
+                addHistory = false
             )
         }
 
@@ -190,29 +193,14 @@ class ClipboardMinimalModeTest {
         )
         val req = (result as ClipboardStepResult.WaitingForResponse).jsonRequest
 
-        // These fields must be blank/empty so JsonClipboardProtocolCodec omits them from JSON.
-        assertTrue(
-            req.systemInstruction.isBlank(),
-            "systemInstruction must be blank in minimal mode"
-        )
-        assertTrue(
-            req.fileTree.isBlank(),
-            "fileTree must be blank in minimal mode"
-        )
-        assertTrue(
-            req.chatHistory.isEmpty(),
-            "chatHistory must be empty in minimal mode"
-        )
-        assertNull(
-            req.attachedContext,
-            "attachedContext must be null in minimal mode"
-        )
-        assertFalse(
-            req.planOnly,
-            "planOnly must be false in minimal mode"
-        )
+        // Heavy fields must be blank/empty so JsonClipboardProtocolCodec omits them from JSON
+        assertTrue(req.systemInstruction.isBlank(), "systemInstruction must be blank in minimal mode")
+        assertTrue(req.fileTree.isBlank(), "fileTree must be blank in minimal mode")
+        assertTrue(req.chatHistory.isEmpty(), "chatHistory must be empty in minimal mode")
+        assertNull(req.attachedContext, "attachedContext must be null in minimal mode")
+        assertFalse(req.planOnly, "planOnly must be false in minimal mode")
 
-        // Global context file must NOT leak into previouslyGatheredPaths when addHistory=false.
+        // Global context file must NOT leak into previouslyGatheredPaths when addHistory=false
         assertFalse(
             req.previouslyGatheredPaths.contains("docs/README.md"),
             "global context file must not appear in previouslyGatheredPaths with addHistory=false"
@@ -221,8 +209,6 @@ class ClipboardMinimalModeTest {
             req.previouslyGatheredPaths.isEmpty(),
             "previouslyGatheredPaths must be empty when addHistory=false"
         )
-
-        // The user message must still be present.
         assertTrue(
             req.currentMessage.contains("fix the bug"),
             "currentMessage must contain the user's follow-up message"
@@ -233,30 +219,19 @@ class ClipboardMinimalModeTest {
     fun `continueDialog minimal mode omits heavy fields across multiple turns`() {
         startSessionWithContextFile()
 
-        // Second turn
         val result1 = runBlocking {
-            service.continueDialog(message = "turn 2", addHistory = false)
+            service.continueDialog(sessionId = SESSION_ID, message = "turn 2", addHistory = false)
         }
-        // Third turn
         val result2 = runBlocking {
-            service.continueDialog(message = "turn 3", addHistory = false)
+            service.continueDialog(sessionId = SESSION_ID, message = "turn 3", addHistory = false)
         }
 
         listOf(result1, result2).forEach { result ->
             assertTrue(result is ClipboardStepResult.WaitingForResponse)
             val req = (result as ClipboardStepResult.WaitingForResponse).jsonRequest
-            assertTrue(
-                req.systemInstruction.isBlank(),
-                "systemInstruction must always be blank in minimal mode"
-            )
-            assertTrue(
-                req.fileTree.isBlank(),
-                "fileTree must always be blank in minimal mode"
-            )
-            assertTrue(
-                req.chatHistory.isEmpty(),
-                "chatHistory must always be empty in minimal mode"
-            )
+            assertTrue(req.systemInstruction.isBlank(), "systemInstruction must always be blank in minimal mode")
+            assertTrue(req.fileTree.isBlank(), "fileTree must always be blank in minimal mode")
+            assertTrue(req.chatHistory.isEmpty(), "chatHistory must always be empty in minimal mode")
         }
     }
 
@@ -268,28 +243,19 @@ class ClipboardMinimalModeTest {
 
         val result = runBlocking {
             service.continueDialog(
+                sessionId = SESSION_ID,
                 message = "fix the bug",
                 globalContextFiles = listOf("docs/README.md"),
-                addHistory = true   // galochka on — starting fresh LLM chat
+                addHistory = true
             )
         }
 
         assertTrue(result is ClipboardStepResult.WaitingForResponse)
         val req = (result as ClipboardStepResult.WaitingForResponse).jsonRequest
 
-        // Full context must be present.
-        assertTrue(
-            req.systemInstruction.isNotBlank(),
-            "systemInstruction must be present when addHistory=true"
-        )
-        assertTrue(
-            req.fileTree.isNotBlank(),
-            "fileTree must be present when addHistory=true"
-        )
-        assertTrue(
-            req.chatHistory.isNotEmpty(),
-            "chatHistory must be present when addHistory=true"
-        )
+        assertTrue(req.systemInstruction.isNotBlank(), "systemInstruction must be present when addHistory=true")
+        assertTrue(req.fileTree.isNotBlank(), "fileTree must be present when addHistory=true")
+        assertTrue(req.chatHistory.isNotEmpty(), "chatHistory must be present when addHistory=true")
     }
 
     @Test
@@ -298,6 +264,7 @@ class ClipboardMinimalModeTest {
 
         val result = runBlocking {
             service.continueDialog(
+                sessionId = SESSION_ID,
                 message = "continue with history",
                 addHistory = true
             )
@@ -306,7 +273,6 @@ class ClipboardMinimalModeTest {
         assertTrue(result is ClipboardStepResult.WaitingForResponse)
         val req = (result as ClipboardStepResult.WaitingForResponse).jsonRequest
 
-        // Previously gathered file paths must be forwarded so LLM can re-request them.
         assertTrue(
             req.previouslyGatheredPaths.contains("docs/README.md"),
             "previouslyGatheredPaths must include files gathered in previous turns"
@@ -317,9 +283,8 @@ class ClipboardMinimalModeTest {
 
     @Test
     fun `continueDialog without active session returns Error`() {
-        // No startTask called — no active session.
         val result = runBlocking {
-            service.continueDialog(message = "orphan message", addHistory = false)
+            service.continueDialog(sessionId = SESSION_ID, message = "orphan message", addHistory = false)
         }
         assertTrue(
             result is ClipboardStepResult.Error,
@@ -333,6 +298,7 @@ class ClipboardMinimalModeTest {
 
         val result = runBlocking {
             service.continueDialog(
+                sessionId = SESSION_ID,
                 message = "fix errors",
                 ideErrors = "CompileError: unresolved reference 'foo'",
                 addHistory = false
@@ -342,11 +308,10 @@ class ClipboardMinimalModeTest {
         assertTrue(result is ClipboardStepResult.WaitingForResponse)
         val req = (result as ClipboardStepResult.WaitingForResponse).jsonRequest
 
-        // ideErrors are always relevant to the current message — must survive minimal mode.
         assertNotNull(req.ideErrors, "ideErrors must always be included, even in minimal mode")
         assertTrue(req.ideErrors!!.contains("unresolved reference"))
 
-        // But heavy fields are still blank.
+        // But heavy fields are still blank
         assertTrue(req.systemInstruction.isBlank())
         assertTrue(req.fileTree.isBlank())
     }
