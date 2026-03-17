@@ -18,6 +18,9 @@ import org.junit.jupiter.api.Test
  * Key design under test:
  * - addHistory=false (default): [ClipboardRequest.previouslyGatheredPaths] is ALWAYS empty.
  * - addHistory=true: previously gathered file paths ARE included.
+ *
+ * Session state transitions are mocked via [ClipboardSessionManager] — all [transition] calls
+ * return true so the service logic is exercised without a real repository.
  */
 class ClipboardInteractionServiceTest {
 
@@ -33,6 +36,12 @@ class ClipboardInteractionServiceTest {
     private val promptPort = mockk<PromptPort>()
     private val logger = mockk<LoggerPort>(relaxed = true)
 
+    /**
+     * Mock session manager: all transitions succeed by default.
+     * Individual tests stub [statusFor] to simulate specific lifecycle states.
+     */
+    private val sessionManager = mockk<ClipboardSessionManager>(relaxed = true)
+
     /** Captures every [ClipboardRequest] sent to the clipboard. */
     private val capturedRequest = slot<ClipboardRequest>()
 
@@ -46,13 +55,18 @@ class ClipboardInteractionServiceTest {
             codeRepository = codeRepository,
             notificationPort = notificationPort,
             promptPort = promptPort,
-            logger = logger
+            logger = logger,
+            sessionManager = sessionManager
         )
         every { clipboardPort.copyRequestToClipboard(capture(capturedRequest)) } returns true
         every { promptPort.getPrompts() } returns PromptTemplates(
             planningSystem = "planning-prompt",
             chatSystem = "chat-prompt"
         )
+        // All transitions succeed by default — tests that need specific status stub statusFor()
+        every { sessionManager.transition(any(), any()) } returns true
+        // Default status: IDLE unless overridden in a test
+        every { sessionManager.statusFor(any()) } returns ClipboardSessionStatus.IDLE
     }
 
     // ==================== Helpers ====================
@@ -81,7 +95,11 @@ class ClipboardInteractionServiceTest {
 
     /**
      * Runs a full startTask → handlePastedResponse cycle so files end up in allGatheredFiles.
-     * After this the session is active and NOT waiting for paste.
+     * After this the service has an active in-memory session (sessionState != null).
+     *
+     * Note: [sessionManager.statusFor] must return AWAITING_PASTE after startTask for
+     * handlePastedResponse to accept the transition. This is ensured by stubbing it to
+     * AWAITING_PASTE during the paste step.
      */
     private suspend fun startAndComplete(
         currentMessage: String = "Fix the bug",
@@ -95,8 +113,12 @@ class ClipboardInteractionServiceTest {
             currentMessage = currentMessage,
             globalContextFiles = globalContextFiles
         )
+        // Simulate AWAITING_PASTE so handlePastedResponse accepts the ResponsePasted transition
+        every { sessionManager.statusFor(SESSION_ID) } returns ClipboardSessionStatus.AWAITING_PASTE
         every { clipboardPort.parseResponse(any()) } returns simpleResponse()
         service.handlePastedResponse(sessionId = SESSION_ID, rawText = "{\"message\": \"ok\"}")
+        // After paste processing, status transitions to SESSION_ACTIVE
+        every { sessionManager.statusFor(SESSION_ID) } returns ClipboardSessionStatus.SESSION_ACTIVE
     }
 
     // ==================== Default behaviour (addHistory=false) ====================
@@ -179,10 +201,12 @@ class ClipboardInteractionServiceTest {
             requestedFiles = listOf("src/Bar.kt")
         )
         stubGatherFiles(mapOf("src/Bar.kt" to "bar"))
+        every { sessionManager.statusFor(SESSION_ID) } returns ClipboardSessionStatus.AWAITING_PASTE
         every { clipboardPort.parseResponse(any()) } returns responseWithFiles
         service.handlePastedResponse(sessionId = SESSION_ID, rawText = "{...}")
         every { clipboardPort.parseResponse(any()) } returns simpleResponse()
         service.handlePastedResponse(sessionId = SESSION_ID, rawText = "{...}")
+        every { sessionManager.statusFor(SESSION_ID) } returns ClipboardSessionStatus.SESSION_ACTIVE
 
         stubGatherFiles(emptyMap())
         service.continueDialog(sessionId = SESSION_ID, message = "new chat", addHistory = true)
@@ -204,8 +228,10 @@ class ClipboardInteractionServiceTest {
         service.continueDialog(sessionId = SESSION_ID, message = "with history", addHistory = true)
         assertTrue(capturedRequest.captured.previouslyGatheredPaths.contains("src/Foo.kt"))
 
+        every { sessionManager.statusFor(SESSION_ID) } returns ClipboardSessionStatus.AWAITING_PASTE
         every { clipboardPort.parseResponse(any()) } returns simpleResponse()
         service.handlePastedResponse(sessionId = SESSION_ID, rawText = "{...}")
+        every { sessionManager.statusFor(SESSION_ID) } returns ClipboardSessionStatus.SESSION_ACTIVE
 
         service.continueDialog(sessionId = SESSION_ID, message = "without history", addHistory = false)
         assertEquals(
@@ -289,6 +315,10 @@ class ClipboardInteractionServiceTest {
 
     @Test
     fun `handlePastedResponse without active session returns Error`(): Unit = runBlocking {
+        // AWAITING_PASTE status alone is not enough — in-memory sessionState must also be set
+        // (sessionState is null here because startTask was never called)
+        every { sessionManager.statusFor(SESSION_ID) } returns ClipboardSessionStatus.AWAITING_PASTE
+
         assertInstanceOf(
             ClipboardStepResult.Error::class.java,
             service.handlePastedResponse(sessionId = SESSION_ID, rawText = "{}")
@@ -300,6 +330,7 @@ class ClipboardInteractionServiceTest {
         stubProjectContext()
         stubGatherFiles(emptyMap())
         service.startTask(sessionId = SESSION_ID, currentMessage = "Task")
+        every { sessionManager.statusFor(SESSION_ID) } returns ClipboardSessionStatus.AWAITING_PASTE
 
         every { clipboardPort.parseResponse(any()) } returns null
 
@@ -314,6 +345,7 @@ class ClipboardInteractionServiceTest {
         stubProjectContext()
         stubGatherFiles(emptyMap())
         service.startTask(sessionId = SESSION_ID, currentMessage = "Task")
+        every { sessionManager.statusFor(SESSION_ID) } returns ClipboardSessionStatus.AWAITING_PASTE
 
         stubGatherFiles(mapOf("src/Foo.kt" to "foo-content"))
         every { clipboardPort.parseResponse(any()) } returns ClipboardResponse(
@@ -332,6 +364,7 @@ class ClipboardInteractionServiceTest {
         stubProjectContext()
         stubGatherFiles(emptyMap())
         service.startTask(sessionId = SESSION_ID, currentMessage = "Task")
+        every { sessionManager.statusFor(SESSION_ID) } returns ClipboardSessionStatus.AWAITING_PASTE
         every { clipboardPort.parseResponse(any()) } returns simpleResponse("All done!")
 
         val result = service.handlePastedResponse(sessionId = SESSION_ID, rawText = "{...}")
@@ -345,6 +378,7 @@ class ClipboardInteractionServiceTest {
         stubProjectContext()
         stubGatherFiles(emptyMap())
         service.startTask(sessionId = SESSION_ID, currentMessage = "Task")
+        every { sessionManager.statusFor(SESSION_ID) } returns ClipboardSessionStatus.AWAITING_PASTE
         every { clipboardPort.parseResponse(any()) } returns
                 ClipboardResponse(message = "Done", commitMessage = "feat: add X")
 
@@ -356,21 +390,36 @@ class ClipboardInteractionServiceTest {
     // ==================== Session lifecycle ====================
 
     @Test
-    fun `hasActiveSession is false initially and true after startTask`() = runBlocking {
-        assertFalse(service.hasActiveSession())
-        stubProjectContext()
-        stubGatherFiles(emptyMap())
-        service.startTask(sessionId = SESSION_ID, currentMessage = "Task")
-        assertTrue(service.hasActiveSession())
+    fun `session is inactive initially - continueDialog returns Error before startTask`() = runBlocking {
+        // No startTask called — in-memory sessionState is null
+        val result = service.continueDialog(sessionId = SESSION_ID, message = "premature")
+
+        assertInstanceOf(ClipboardStepResult.Error::class.java, result)
+        assertTrue((result as ClipboardStepResult.Error).message.contains("No active clipboard session"))
     }
 
     @Test
-    fun `reset clears session`(): Unit = runBlocking {
+    fun `after startTask - continueDialog succeeds (session is active)`() = runBlocking {
         stubProjectContext()
         stubGatherFiles(emptyMap())
         service.startTask(sessionId = SESSION_ID, currentMessage = "Task")
+        every { sessionManager.statusFor(SESSION_ID) } returns ClipboardSessionStatus.SESSION_ACTIVE
+
+        stubGatherFiles(emptyMap())
+        val result = service.continueDialog(sessionId = SESSION_ID, message = "follow-up")
+
+        // Session is active — continueDialog returns WaitingForResponse, not Error
+        assertInstanceOf(ClipboardStepResult.WaitingForResponse::class.java, result)
+    }
+
+    @Test
+    fun `reset clears in-memory session - continueDialog returns Error after reset`(): Unit = runBlocking {
+        stubProjectContext()
+        stubGatherFiles(emptyMap())
+        service.startTask(sessionId = SESSION_ID, currentMessage = "Task")
+
         service.reset(SESSION_ID)
-        assertFalse(service.hasActiveSession())
+
         assertInstanceOf(
             ClipboardStepResult.Error::class.java,
             service.continueDialog(sessionId = SESSION_ID, message = "after reset")
@@ -378,28 +427,44 @@ class ClipboardInteractionServiceTest {
     }
 
     @Test
-    fun `isWaitingForResponse becomes false after handlePastedResponse`() = runBlocking {
+    fun `status returns AWAITING_PASTE while waiting for LLM response`() = runBlocking {
         stubProjectContext()
         stubGatherFiles(emptyMap())
         service.startTask(sessionId = SESSION_ID, currentMessage = "Task")
-        assertTrue(service.isWaitingForResponse())
 
-        every { clipboardPort.parseResponse(any()) } returns simpleResponse()
-        service.handlePastedResponse(sessionId = SESSION_ID, rawText = "{\"message\": \"done\"}")
+        // Simulate manager tracking the JsonCopied transition
+        every { sessionManager.statusFor(SESSION_ID) } returns ClipboardSessionStatus.AWAITING_PASTE
 
-        assertFalse(service.isWaitingForResponse())
+        assertEquals(ClipboardSessionStatus.AWAITING_PASTE, service.status(SESSION_ID))
     }
 
     @Test
-    fun `getCurrentPhase returns CHAT after globalContextFiles are gathered`() = runBlocking {
+    fun `status returns SESSION_ACTIVE after handlePastedResponse`() = runBlocking {
+        stubProjectContext()
+        stubGatherFiles(emptyMap())
+        service.startTask(sessionId = SESSION_ID, currentMessage = "Task")
+        every { sessionManager.statusFor(SESSION_ID) } returns ClipboardSessionStatus.AWAITING_PASTE
+        every { clipboardPort.parseResponse(any()) } returns simpleResponse()
+        service.handlePastedResponse(sessionId = SESSION_ID, rawText = "{\"message\": \"done\"}")
+
+        // Simulate manager tracking the ResponsePasted transition
+        every { sessionManager.statusFor(SESSION_ID) } returns ClipboardSessionStatus.SESSION_ACTIVE
+
+        assertEquals(ClipboardSessionStatus.SESSION_ACTIVE, service.status(SESSION_ID))
+    }
+
+    @Test
+    fun `startTask with globalContextFiles produces CHAT phase in request`() = runBlocking {
         stubProjectContext()
         stubGatherFiles(mapOf("src/Foo.kt" to "content"))
+
         service.startTask(
             sessionId = SESSION_ID,
             currentMessage = "Task",
             globalContextFiles = listOf("src/Foo.kt")
         )
 
-        assertEquals(ClipboardPhase.CHAT, service.getCurrentPhase())
+        // Files were gathered — request phase must be CHAT, not PLANNING
+        assertEquals(ClipboardPhase.CHAT, capturedRequest.captured.phase)
     }
 }

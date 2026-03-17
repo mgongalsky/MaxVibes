@@ -19,6 +19,13 @@ import com.maxvibes.application.port.output.LoggerPort
  *
  * State transitions are delegated to [ClipboardSessionManager].
  *
+ * Public API surface:
+ * - [handleUserInput] — unified entry point; routes by session status.
+ * - [startTask] / [continueDialog] / [handlePastedResponse] — explicit stage calls.
+ * - [status] — current [ClipboardSessionStatus] for a session.
+ * - [reset] — clears in-memory state and sets session back to IDLE.
+ * - [recopyLastRequest] — re-copies the last generated JSON request to the clipboard.
+ *
  * @param contextProvider   Provides project file tree and file content.
  * @param clipboardPort     Copies requests to and parses responses from the system clipboard.
  * @param codeRepository    Applies PSI-level code modifications.
@@ -41,13 +48,6 @@ class ClipboardInteractionService(
 
     /** Last generated request — used by [recopyLastRequest]. */
     private var lastRequest: ClipboardRequest? = null
-
-    /**
-     * Backing field for the deprecated [isWaitingForResponse] compat API.
-     * Set to true by [generateAndCopyJson], cleared by [handlePastedResponseInternal] and [reset].
-     * Will be removed in STEP 8.
-     */
-    private var waitingForPaste: Boolean = false
 
     // ==================== Status Routing ====================
 
@@ -246,9 +246,6 @@ class ClipboardInteractionService(
             return error("Cannot accept response paste: session is not in AWAITING_PASTE state.")
         }
 
-        // Clear compat backing field
-        waitingForPaste = false
-
         val state = sessionState
             ?: return error("No active clipboard session. Start a new task first.")
 
@@ -286,15 +283,6 @@ class ClipboardInteractionService(
     }
 
     /**
-     * Returns the current clipboard phase for the active session, or null if no session is open.
-     * Phase is PLANNING until the first files are gathered; CHAT afterwards.
-     */
-    fun getCurrentPhase(): ClipboardPhase? {
-        val state = sessionState ?: return null
-        return if (state.allGatheredFiles.isEmpty()) ClipboardPhase.PLANNING else ClipboardPhase.CHAT
-    }
-
-    /**
      * Returns the current [ClipboardSessionStatus] for the given session.
      * Delegates to [ClipboardSessionManager.statusFor].
      */
@@ -309,20 +297,8 @@ class ClipboardInteractionService(
         log("Session reset (sessionId=$sessionId)")
         sessionState = null
         lastRequest = null
-        waitingForPaste = false
         sessionManager.transition(sessionId, ClipboardEvent.Reset)
     }
-
-    // ==================== Deprecated Legacy API ====================
-    // Preserved for backward-compatibility during STEP 4 -> STEP 8 transition.
-
-    /** @suppress Use [status] with an explicit sessionId instead. */
-    @Deprecated("Use status(sessionId) instead", ReplaceWith("status(sessionId)"))
-    fun isWaitingForResponse(): Boolean = waitingForPaste
-
-    /** @suppress Use [status] with an explicit sessionId instead. */
-    @Deprecated("Use status(sessionId) instead", ReplaceWith("status(sessionId)"))
-    fun hasActiveSession(): Boolean = sessionState != null
 
     // ==================== Core Logic ====================
 
@@ -468,8 +444,6 @@ class ClipboardInteractionService(
 
         // Transition SESSION_ACTIVE -> AWAITING_PASTE (or AWAITING_PASTE -> AWAITING_PASTE on retry)
         sessionManager.transition(sessionId, ClipboardEvent.JsonCopied)
-        // Drive the deprecated isWaitingForResponse() compat API
-        waitingForPaste = true
 
         return ClipboardStepResult.WaitingForResponse(
             phase = request.phase,

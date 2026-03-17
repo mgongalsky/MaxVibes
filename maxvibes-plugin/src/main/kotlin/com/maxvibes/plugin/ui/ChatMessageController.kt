@@ -366,9 +366,9 @@ class ChatMessageController(
 
                     callbacks.setInputEnabled(true)
                     callbacks.updateModeIndicator()
-                    // hasActiveSession() is deprecated but safe to call here until STEP 8
-                    @Suppress("DEPRECATION")
-                    val hint = if (service.clipboardService.hasActiveSession()) " \u2022 Session active" else ""
+                    // Show "Session active" hint when clipboard session is still live (not IDLE)
+                    val isSessionActive = service.clipboardService.status(session.id) != ClipboardSessionStatus.IDLE
+                    val hint = if (isSessionActive) " \u2022 Session active" else ""
                     callbacks.setStatus((if (result.success) "Ready" else "Errors") + hint)
                     callbacks.updateBreadcrumb()
                 }

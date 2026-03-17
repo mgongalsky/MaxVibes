@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import com.maxvibes.domain.model.modification.ModificationError
+import io.mockk.mockk
 
 /**
  * Verifies the minimal-mode payload policy introduced in [ClipboardInteractionService].
@@ -129,12 +130,16 @@ class ClipboardMinimalModeTest {
     @BeforeEach
     fun setup() {
         capturedRequests.clear()
+        // Relaxed mock: all transitions succeed silently; statusFor returns IDLE by default.
+        // continueDialog is called directly in these tests so statusFor routing is not exercised.
+        val sessionManager = mockk<ClipboardSessionManager>(relaxed = true)
         service = ClipboardInteractionService(
             contextProvider = projectContextPort,
             clipboardPort = clipboardPort,
             codeRepository = codeRepository,
             notificationPort = notificationPort,
-            promptPort = promptPort
+            promptPort = promptPort,
+            sessionManager = sessionManager
         )
     }
 

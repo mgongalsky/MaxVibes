@@ -361,15 +361,6 @@ class ChatPanel(
         render(buildState())
     }
 
-    /**
-     * Explicitly resets the clipboard session for the given [sessionId].
-     * Retained for cases where an explicit reset is desired (e.g. manual mode switch cancel).
-     * After STEP 7, session switches no longer call this — each session owns its own clipboard state.
-     */
-    fun resetClipboard(sessionId: String) {
-        service.clipboardService.reset(sessionId)
-    }
-
     private fun setupUI() {
         border = JBUI.Borders.empty(); background = JBColor.background()
 
@@ -822,8 +813,6 @@ class ChatPanel(
             currentSession = session,
             sessionPath = chatTreeService.getSessionPath(session.id),
             mode = modeManager.currentMode,
-            // Derived from domain status — no longer tracked as a separate local field.
-            isWaitingResponse = clipboardStatus == ClipboardSessionStatus.AWAITING_PASTE,
             attachedTrace = messageController.attachedTrace,
             attachedErrors = messageController.attachedErrors,
             contextFilesCount = chatTreeService.getGlobalContextFiles().size,
