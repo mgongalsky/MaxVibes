@@ -17,8 +17,7 @@ import com.maxvibes.application.port.output.LoggerPort
  * Builds JSON requests, copies them to the system clipboard, parses pasted LLM responses,
  * and applies resulting code modifications via [codeRepository].
  *
- * State transitions are delegated to [ClipboardSessionManager] when provided.
- * Until STEP 5 wires the manager, it defaults to null and all transitions are no-ops.
+ * State transitions are delegated to [ClipboardSessionManager].
  *
  * @param contextProvider   Provides project file tree and file content.
  * @param clipboardPort     Copies requests to and parses responses from the system clipboard.
@@ -26,7 +25,7 @@ import com.maxvibes.application.port.output.LoggerPort
  * @param notificationPort  Displays progress/success/warning notifications in the IDE.
  * @param promptPort        Supplies system prompt templates; falls back to [PromptTemplates.EMPTY].
  * @param logger            Optional logger; pass null in unit tests to suppress output.
- * @param sessionManager    Optional state-machine manager; null until STEP 5 wires it in.
+ * @param sessionManager    State-machine manager; wired in by MaxVibesService DI.
  */
 class ClipboardInteractionService(
     private val contextProvider: ProjectContextPort,
@@ -35,7 +34,7 @@ class ClipboardInteractionService(
     private val notificationPort: NotificationPort,
     private val promptPort: PromptPort? = null,
     private val logger: LoggerPort? = null,
-    private val sessionManager: ClipboardSessionManager? = null
+    private val sessionManager: ClipboardSessionManager
 ) {
     /** In-memory session state: messages, gathered files, prompts, etc. */
     private var sessionState: ClipboardSessionState? = null
@@ -54,10 +53,10 @@ class ClipboardInteractionService(
 
     /**
      * Returns the current clipboard status for the given session.
-     * Falls back to [ClipboardSessionStatus.IDLE] when no manager is wired (pre-STEP 5).
+     * Delegates directly to [ClipboardSessionManager.statusFor].
      */
     private fun currentStatus(sessionId: String): ClipboardSessionStatus =
-        sessionManager?.statusFor(sessionId) ?: ClipboardSessionStatus.IDLE
+        sessionManager.statusFor(sessionId)
 
     // ==================== Public API ====================
 
@@ -140,8 +139,8 @@ class ClipboardInteractionService(
     ): ClipboardStepResult {
         log("Starting clipboard session: planOnly=$planOnly, addHistory=$addHistory")
 
-        // Transition IDLE -> SESSION_ACTIVE; no-op when manager is null (pre-STEP 5)
-        sessionManager?.transition(sessionId, ClipboardEvent.StartSession)
+        // Transition IDLE -> SESSION_ACTIVE
+        sessionManager.transition(sessionId, ClipboardEvent.StartSession)
 
         notificationPort.showProgress("Gathering project context...", 0.1)
         val projectContextResult = contextProvider.getProjectContext()
@@ -240,11 +239,10 @@ class ClipboardInteractionService(
     }
 
     private suspend fun handlePastedResponseInternal(sessionId: String, rawText: String): ClipboardStepResult {
-        // Guard: state-machine transition check BEFORE touching in-memory state.
-        // Returns false only when the manager explicitly rejects (invalid state).
-        // Returns null when no manager is present (pre-STEP 5) — treat as accepted.
-        val transitioned = sessionManager?.transition(sessionId, ClipboardEvent.ResponsePasted)
-        if (transitioned == false) {
+        // Guard: transition check BEFORE touching in-memory state.
+        // Returns false when the manager rejects the transition (invalid state).
+        val transitioned = sessionManager.transition(sessionId, ClipboardEvent.ResponsePasted)
+        if (!transitioned) {
             return error("Cannot accept response paste: session is not in AWAITING_PASTE state.")
         }
 
@@ -298,7 +296,7 @@ class ClipboardInteractionService(
 
     /**
      * Returns the current [ClipboardSessionStatus] for the given session.
-     * Delegates to [ClipboardSessionManager.statusFor]; falls back to IDLE when no manager is wired.
+     * Delegates to [ClipboardSessionManager.statusFor].
      */
     fun status(sessionId: String): ClipboardSessionStatus = currentStatus(sessionId)
 
@@ -312,7 +310,7 @@ class ClipboardInteractionService(
         sessionState = null
         lastRequest = null
         waitingForPaste = false
-        sessionManager?.transition(sessionId, ClipboardEvent.Reset)
+        sessionManager.transition(sessionId, ClipboardEvent.Reset)
     }
 
     // ==================== Deprecated Legacy API ====================
@@ -469,7 +467,7 @@ class ClipboardInteractionService(
         log("JSON ready: $copyStatus, ~$totalTokens tokens")
 
         // Transition SESSION_ACTIVE -> AWAITING_PASTE (or AWAITING_PASTE -> AWAITING_PASTE on retry)
-        sessionManager?.transition(sessionId, ClipboardEvent.JsonCopied)
+        sessionManager.transition(sessionId, ClipboardEvent.JsonCopied)
         // Drive the deprecated isWaitingForResponse() compat API
         waitingForPaste = true
 

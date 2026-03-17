@@ -29,6 +29,7 @@ import com.maxvibes.application.port.output.IdeErrorsPort
 import com.maxvibes.adapter.psi.context.IntellijIdeErrorsAdapter
 import com.maxvibes.application.service.ChatTreeService
 import com.maxvibes.plugin.chat.ChatHistoryService
+import com.maxvibes.application.service.ClipboardSessionManager
 
 /**
  * Main service for MaxVibes plugin.
@@ -117,7 +118,8 @@ class MaxVibesService(private val project: Project) {
             codeRepository = codeRepository,
             notificationPort = notificationPort,
             promptPort = promptPort,
-            logger = MaxVibesLogger
+            logger = MaxVibesLogger,
+            sessionManager = clipboardSessionManager
         )
     }
 
@@ -292,6 +294,14 @@ class MaxVibesService(private val project: Project) {
     }
     val chatTreeService: ChatTreeService by lazy {
         ChatTreeService(chatSessionRepository)
+    }
+
+    /** Manages clipboard session state transitions (IDLE → SESSION_ACTIVE → AWAITING_PASTE). */
+    val clipboardSessionManager: ClipboardSessionManager by lazy {
+        ClipboardSessionManager(
+            repository = chatSessionRepository,
+            logger = loggerPort
+        )
     }
 
     companion object {
