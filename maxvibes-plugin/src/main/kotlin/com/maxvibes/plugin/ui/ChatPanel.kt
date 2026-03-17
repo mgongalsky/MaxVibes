@@ -28,6 +28,7 @@ import com.intellij.openapi.vcs.VcsDataKeys
 import com.maxvibes.domain.model.chat.MessageRole
 import com.maxvibes.domain.model.chat.ChatMessage
 import com.maxvibes.domain.model.chat.ChatSession
+import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 
 class ChatPanel(
     private val project: Project,
@@ -140,7 +141,6 @@ class ChatPanel(
         )
     }
 
-    private var isWaitingForResponse: Boolean = false
     private val elementNavRegistry = mutableMapOf<String, String>()
 
     // ConversationRenderer handles all message filtering and formatting for display.
@@ -195,18 +195,26 @@ class ChatPanel(
     }
 
     override fun setInputEnabled(enabled: Boolean) {
-        isWaitingForResponse = !enabled
-        inputArea.isEnabled = enabled; sendButton.isEnabled = enabled
-        dryRunCheckbox.isEnabled = enabled; planOnlyCheckbox.isEnabled = enabled
+        // isWaitingForResponse field removed — state is now read from the domain via buildState().
+        inputArea.isEnabled = enabled
+        sendButton.isEnabled = enabled
+        dryRunCheckbox.isEnabled = enabled
+        planOnlyCheckbox.isEnabled = enabled
         // Keep "Add History" in sync with the rest of the input controls.
         addHistoryCheckbox.isEnabled = enabled
         copyJsonButton.isEnabled = enabled
-        attachTraceButton.isEnabled = enabled; clearTraceButton.isEnabled = enabled
-        attachErrorsButton.isEnabled = enabled; clearErrorsButton.isEnabled = enabled
-        promptsButton.isEnabled = enabled; modeComboBox.isEnabled = enabled
-        sessionsButton.isEnabled = enabled; branchButton.isEnabled = enabled
-        newChatButton.isEnabled = enabled; deleteButton.isEnabled = enabled
-        contextFilesButton.isEnabled = enabled; claudeInstrButton.isEnabled = enabled
+        attachTraceButton.isEnabled = enabled
+        clearTraceButton.isEnabled = enabled
+        attachErrorsButton.isEnabled = enabled
+        clearErrorsButton.isEnabled = enabled
+        promptsButton.isEnabled = enabled
+        modeComboBox.isEnabled = enabled
+        sessionsButton.isEnabled = enabled
+        branchButton.isEnabled = enabled
+        newChatButton.isEnabled = enabled
+        deleteButton.isEnabled = enabled
+        contextFilesButton.isEnabled = enabled
+        claudeInstrButton.isEnabled = enabled
         maximizeButton.isEnabled = enabled
     }
 
@@ -782,9 +790,10 @@ class ChatPanel(
         // Индикатор режима
         updateModeUI(state.mode)
 
-        // Кнопка отправки и поле ввода
-        sendButton.isEnabled = !state.isWaitingResponse
-        inputArea.isEnabled = !state.isWaitingResponse
+        // Кнопка отправки и поле ввода: блокируются только пока ждём вставку ответа из буфера обмена.
+        val waiting = state.clipboardStatus == ClipboardSessionStatus.AWAITING_PASTE
+        sendButton.isEnabled = !waiting
+        inputArea.isEnabled = !waiting
 
         // Индикаторы прикреплений (trace / errors)
         updateIndicators()
@@ -801,15 +810,18 @@ class ChatPanel(
 
     private fun buildState(): ChatPanelState {
         val session = chatTreeService.getActiveSession()
+        val clipboardStatus = session.clipboardStatus
         return ChatPanelState(
             currentSession = session,
             sessionPath = chatTreeService.getSessionPath(session.id),
             mode = modeManager.currentMode,
-            isWaitingResponse = isWaitingForResponse,
+            // Derived from domain status — no longer tracked as a separate local field.
+            isWaitingResponse = clipboardStatus == ClipboardSessionStatus.AWAITING_PASTE,
             attachedTrace = messageController.attachedTrace,
             attachedErrors = messageController.attachedErrors,
             contextFilesCount = chatTreeService.getGlobalContextFiles().size,
-            tokenUsage = session.tokenUsage.takeIf { !it.isEmpty() }
+            tokenUsage = session.tokenUsage.takeIf { !it.isEmpty() },
+            clipboardStatus = clipboardStatus
         )
     }
     override fun onAttachmentsChanged(trace: String?, errors: String?) {
