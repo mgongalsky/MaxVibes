@@ -1,5 +1,6 @@
 package com.maxvibes.plugin.ui
 
+import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 import com.maxvibes.domain.model.interaction.InteractionMode
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.*
@@ -37,16 +38,16 @@ class ChatPanelStateTest {
     }
 
     @Test
-    fun `isWaitingResponse defaults to false`() {
+    fun `clipboardStatus defaults to IDLE`() {
         val state = ChatPanelState(currentSession = null)
-        assertFalse(state.isWaitingResponse)
+        assertEquals(ClipboardSessionStatus.IDLE, state.clipboardStatus)
     }
 
     @Test
     fun `copy creates modified state without changing original`() {
-        val original = ChatPanelState(currentSession = null, isWaitingResponse = false)
-        val waiting = original.copy(isWaitingResponse = true)
-        assertFalse(original.isWaitingResponse)
-        assertTrue(waiting.isWaitingResponse)
+        val original = ChatPanelState(currentSession = null, clipboardStatus = ClipboardSessionStatus.IDLE)
+        val waiting = original.copy(clipboardStatus = ClipboardSessionStatus.AWAITING_PASTE)
+        assertEquals(ClipboardSessionStatus.IDLE, original.clipboardStatus)
+        assertEquals(ClipboardSessionStatus.AWAITING_PASTE, waiting.clipboardStatus)
     }
 }

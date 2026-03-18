@@ -668,15 +668,3 @@ sealed class ClipboardStepResult {
 
 // ==================== Internal State ====================
 
-private data class ClipboardSessionState(
-    /** Текущее сообщение пользователя, с которого началась или продолжается сессия. */
-    val currentMessage: String,
-    val projectContext: ProjectContext,
-    val dialogHistory: MutableList<ChatMessageDTO>,
-    val prompts: PromptTemplates,
-    val allGatheredFiles: MutableMap<String, String>,
-    val attachedContext: String? = null,
-    val ideErrors: String? = null,
-    var lastInputTokens: Int = 0,
-    val planOnly: Boolean = false
-)
