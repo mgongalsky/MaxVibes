@@ -13,6 +13,7 @@ import com.maxvibes.domain.model.chat.ChatMessage
 import java.awt.CardLayout
 import javax.swing.JOptionPane
 import javax.swing.JPanel
+import javax.swing.SwingUtilities
 
 // ==================== Factory ====================
 
@@ -57,14 +58,32 @@ class MaxVibesToolPanel(private val project: Project, private val toolWindow: To
         })
     }
 
+    /**
+     * Shows the chat card.
+     *
+     * Wrapped in [SwingUtilities.invokeLater] to defer [CardLayout.show] past the current
+     * event-dispatch cycle. This prevents a re-entrant layout pass that occurs when
+     * [EditorTextField] lazily initialises its inner editor inside [BoxLayout.preferredLayoutSize],
+     * which would trigger a second layout pass before the first one completes → NPE on `xTotal`.
+     */
     private fun showChat() {
-        (layout as CardLayout).show(this, CARD_CHAT)
-        chatPanel.refreshHeader()
+        SwingUtilities.invokeLater {
+            (layout as CardLayout).show(this, CARD_CHAT)
+            chatPanel.refreshHeader()
+        }
     }
 
+    /**
+     * Shows the session-tree card.
+     *
+     * Same [SwingUtilities.invokeLater] guard as [showChat] — ensures the card switch
+     * happens outside any in-progress layout pass.
+     */
     private fun showSessions() {
-        sessionTreePanel.refresh()
-        (layout as CardLayout).show(this, CARD_SESSIONS)
+        SwingUtilities.invokeLater {
+            sessionTreePanel.refresh()
+            (layout as CardLayout).show(this, CARD_SESSIONS)
+        }
     }
 
     private fun openSession(sessionId: String) {
