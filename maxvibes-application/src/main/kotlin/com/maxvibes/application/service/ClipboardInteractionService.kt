@@ -3,7 +3,6 @@ package com.maxvibes.application.service
 import com.maxvibes.application.port.output.*
 import com.maxvibes.domain.model.code.ElementKind
 import com.maxvibes.domain.model.code.ElementPath
-import com.maxvibes.domain.model.context.ProjectContext
 import com.maxvibes.domain.model.interaction.*
 import com.maxvibes.domain.model.modification.InsertPosition
 import com.maxvibes.domain.model.modification.Modification
@@ -36,8 +35,6 @@ import com.maxvibes.domain.model.chat.MessageRole
  * @param logger                 Optional logger; pass null in unit tests to suppress output.
  * @param sessionManager         State-machine manager; wired in by MaxVibesService DI.
  * @param chatSessionRepository  Read/write access to persisted chat sessions.
- *   Used to save [requestedFiles] into domain messages and to read session state
- *   for [redoLastRequest] Scenario B (workspace belongs to a different session).
  */
 class ClipboardInteractionService(
     private val contextProvider: ProjectContextPort,
@@ -54,6 +51,9 @@ class ClipboardInteractionService(
 
     /** ID of the session that owns the current [sessionState]. Guards against cross-session misuse. */
     private var sessionStateOwner: String? = null
+
+    /** Validator used to diagnose parse failures and produce LLM-facing error payloads. */
+    private val responseValidator = ClipboardResponseValidator()
 
     // ==================== Status Routing ====================
 
@@ -199,7 +199,7 @@ class ClipboardInteractionService(
      * Handles a raw LLM response pasted by the user.
      *
      * Wraps [handlePastedResponseInternal] in a top-level exception handler so unexpected
-     * parse errors are surfaced as [ClipboardStepResult.Error] rather than crashing.
+     * errors are surfaced as [ClipboardStepResult.Error] rather than crashing.
      */
     suspend fun handlePastedResponse(sessionId: String, rawText: String): ClipboardStepResult {
         return try {
@@ -213,31 +213,63 @@ class ClipboardInteractionService(
     }
 
     private suspend fun handlePastedResponseInternal(sessionId: String, rawText: String): ClipboardStepResult {
-        // Guard: transition check BEFORE touching in-memory state
-        val transitioned = sessionManager.transition(sessionId, ClipboardEvent.ResponsePasted)
-        if (!transitioned) {
-            return error("Cannot accept response paste: session is not in AWAITING_PASTE state.")
-        }
-
         val state = sessionState
             ?: return error("No active clipboard session. Start a new task first.")
 
         log("Parsing pasted response (${rawText.length} chars)...")
 
+        // --- Validate BEFORE touching session state ---
+        // The state machine transition (AWAITING_PASTE -> SESSION_ACTIVE) must only happen
+        // on a successful parse. If parsing fails we stay in AWAITING_PASTE so the user
+        // can paste the corrected LLM response without restarting.
+        val validationResult = responseValidator.validate(rawText, clipboardPort)
+
+        if (validationResult !is ValidationResult.Valid) {
+            // Build diagnostic JSON and copy it to clipboard for the LLM
+            val details = when (validationResult) {
+                is ValidationResult.ParseFailure -> validationResult.details
+                ValidationResult.EmptyInput -> ParseFailureDetails.NoJsonFound(
+                    hint = "The pasted text was empty."
+                )
+
+                else -> ParseFailureDetails.NoJsonFound(hint = "Unknown parse failure.")
+            }
+            val errorJson = responseValidator.buildErrorFeedbackJson(
+                details = details,
+                originalPreview = rawText.trim().take(ClipboardResponseValidator.PREVIEW_LENGTH)
+            )
+            val copied = clipboardPort.copyRawText(errorJson)
+            val detail = details.humanDescription()
+
+            log("Parse failed (${details.reasonCode()}): $detail")
+            logger?.warn(
+                "Clipboard", "parse failure", data = mapOf(
+                    "reason" to details.reasonCode(),
+                    "detail" to detail.take(120),
+                    "clipboardCopied" to copied
+                )
+            )
+
+            // Session stays in AWAITING_PASTE — no transition fired
+            return ClipboardStepResult.ParseError(
+                humanMessage = "Could not parse LLM response (${details.reasonCode()}). " +
+                        if (copied) "Diagnostic JSON copied to clipboard — paste it into the LLM and paste the corrected response back here."
+                        else "Diagnostic JSON is ready but could not be copied automatically. See details below.",
+                errorDetail = detail,
+                errorFeedbackJson = errorJson,
+                clipboardCopySucceeded = copied
+            )
+        }
+
+        // --- Parse succeeded — now transition the state machine ---
+        val transitioned = sessionManager.transition(sessionId, ClipboardEvent.ResponsePasted)
+        if (!transitioned) {
+            return error("Cannot accept response paste: session is not in AWAITING_PASTE state.")
+        }
+
+        val response = validationResult.response
         val outputTokens = rawText.length / 4
         val inputTokens = state.lastInputTokens
-
-        val response = try {
-            clipboardPort.parseResponse(rawText)
-        } catch (e: Exception) {
-            log("ERROR: Exception during JSON parse: ${e.message}")
-            return error("Failed to parse response JSON: ${e.message}")
-        }
-
-        if (response == null) {
-            log("ERROR: Failed to parse response — null returned")
-            return error("Failed to parse LLM response. Make sure you pasted complete raw JSON without markdown code blocks.")
-        }
 
         val reasoningDisplay = response.reasoning?.take(40) ?: "none"
         log(
@@ -392,13 +424,7 @@ class ClipboardInteractionService(
      * Two scenarios:
      * - **A**: In-memory workspace belongs to this session → reuse it, call [generateAndCopyJson] directly.
      * - **B**: Workspace belongs to another session → rebuild minimal workspace from domain
-     *   (fresh projectContext + last message of any role + last requestedFiles), then call [generateAndCopyJson].
-     *
-     * Returns [ClipboardStepResult.Error] if:
-     * - session not found (Scenario B)
-     * - session status is IDLE (Generate was never called)
-     * - session has no messages
-     * - project context cannot be loaded (Scenario B)
+     *   (fresh projectContext + last user message + last requestedFiles), then call [generateAndCopyJson].
      */
     suspend fun redoLastRequest(
         sessionId: String,
@@ -426,12 +452,10 @@ class ClipboardInteractionService(
             return error("No active clipboard session for this chat.")
         }
 
-        // Use the last message regardless of role — it may be an LLM file-request reply
-        // (role=ASSISTANT) that contains the requestedFiles the next JSON turn should carry.
-        val lastMessage = session.messages.lastOrNull()
-            ?: return error("No messages found in session $sessionId")
-
-        val lastMessageContent = lastMessage.content
+        val lastUserMessage = session.messages
+            .lastOrNull { it.role == MessageRole.USER }
+            ?.content
+            ?: return error("No user message found in session $sessionId")
 
         // File paths from the last LLM response only (not the entire accumulated list)
         val lastRequestedFiles = session.messages
@@ -449,7 +473,7 @@ class ClipboardInteractionService(
 
         // Build minimal workspace with just enough data for generateAndCopyJson
         sessionState = ClipboardSessionState(
-            currentMessage = lastMessageContent,
+            currentMessage = lastUserMessage,
             projectContext = projectContext,
             dialogHistory = session.messages
                 .filter { it.role == MessageRole.USER || it.role == MessageRole.ASSISTANT }
@@ -665,8 +689,29 @@ sealed class ClipboardStepResult {
         val commitMessage: String? = null
     ) : ClipboardStepResult()
 
+    /**
+     * A general application-level error (session not found, project context failure, etc.).
+     * Distinct from [ParseError] — these are infrastructure failures, not LLM response issues.
+     */
     data class Error(val message: String) : ClipboardStepResult()
+
+    /**
+     * The pasted LLM response could not be parsed.
+     *
+     * The session remains in AWAITING_PASTE — the user should paste the response from
+     * the LLM after it corrects its output using the [errorFeedbackJson].
+     *
+     * @param humanMessage           Short description shown in the chat panel.
+     * @param errorDetail            Technical detail for display below the message.
+     * @param errorFeedbackJson      JSON string already copied to clipboard for the LLM.
+     * @param clipboardCopySucceeded Whether the clipboard write succeeded.
+     */
+    data class ParseError(
+        val humanMessage: String,
+        val errorDetail: String,
+        val errorFeedbackJson: String,
+        val clipboardCopySucceeded: Boolean
+    ) : ClipboardStepResult()
 }
 
 // ==================== Internal State ====================
-

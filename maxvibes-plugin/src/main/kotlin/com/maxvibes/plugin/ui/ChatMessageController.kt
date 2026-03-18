@@ -393,6 +393,29 @@ class ChatMessageController(
                 }
             }
 
+            is ClipboardStepResult.ParseError -> {
+                // Session remains in AWAITING_PASTE — user must paste the corrected LLM response.
+                MaxVibesLogger.warn(
+                    "Controller", "clipboard parse error", data = mapOf(
+                        "reason" to result.errorDetail.take(80),
+                        "clipboardCopied" to result.clipboardCopySucceeded
+                    )
+                )
+
+                // Record in session history so the error is visible after session reload
+                chatTreeService.addMessage(session.id, MessageRole.SYSTEM, "Parse error: ${result.errorDetail}")
+
+                callbacks.appendToChat("\u26A0\uFE0F ${result.humanMessage}")
+                if (result.errorDetail.isNotBlank()) {
+                    callbacks.appendToChat("Details: ${result.errorDetail}")
+                }
+
+                // Input stays enabled — the session is still AWAITING_PASTE, user needs to paste again
+                callbacks.setInputEnabled(true)
+                callbacks.updateModeIndicator()
+                callbacks.setStatus("\u26A0\uFE0F Parse error \u2014 paste corrected LLM response")
+            }
+
             is ClipboardStepResult.Error -> {
                 MaxVibesLogger.warn("Controller", "clipboard error", data = mapOf("msg" to result.message))
                 chatTreeService.addMessage(session.id, MessageRole.SYSTEM, "Error: ${result.message}")

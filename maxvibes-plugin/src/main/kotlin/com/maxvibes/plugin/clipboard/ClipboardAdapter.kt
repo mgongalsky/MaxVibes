@@ -8,18 +8,6 @@ import com.maxvibes.plugin.service.MaxVibesLogger
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 
-/**
- * Implementation of [ClipboardPort] for the IntelliJ plugin layer.
- *
- * Thin wrapper: delegates all JSON encode/decode logic to [codec],
- * and is itself responsible only for AWT system-clipboard I/O.
- *
- * Protocol logic lives in [JsonClipboardProtocolCodec] and is unit-tested
- * independently — no IntelliJ mocks required.
- *
- * @param codec codec that handles protocol serialization; defaults to
- *              [JsonClipboardProtocolCodec] so callers can omit it.
- */
 class ClipboardAdapter(
     private val codec: ClipboardProtocolCodec = JsonClipboardProtocolCodec()
 ) : ClipboardPort {
@@ -49,6 +37,25 @@ class ClipboardAdapter(
             true
         } catch (e: Exception) {
             MaxVibesLogger.error("Clipboard", "copyRequestToClipboard failed", e)
+            false
+        }
+    }
+
+    /**
+     * Places a pre-built [text] string directly on the system clipboard.
+     *
+     * Used for diagnostic error JSON payloads — bypasses codec encoding.
+     *
+     * @return true if the clipboard write succeeded; false on any exception.
+     */
+    override fun copyRawText(text: String): Boolean {
+        return try {
+            val selection = StringSelection(text)
+            Toolkit.getDefaultToolkit().systemClipboard.setContents(selection, null)
+            MaxVibesLogger.debug("Clipboard", "copyRawText", mapOf("length" to text.length))
+            true
+        } catch (e: Exception) {
+            MaxVibesLogger.error("Clipboard", "copyRawText failed", e)
             false
         }
     }
