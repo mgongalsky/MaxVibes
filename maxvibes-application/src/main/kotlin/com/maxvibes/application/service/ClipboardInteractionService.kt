@@ -46,6 +46,9 @@ class ClipboardInteractionService(
     /** In-memory session state: messages, gathered files, prompts, etc. */
     private var sessionState: ClipboardSessionState? = null
 
+    /** ID сессии, которой принадлежит текущий [sessionState]. Защищает от использования чужого состояния. */
+    private var sessionStateOwner: String? = null
+
     /** Last generated request — used by [recopyLastRequest]. */
     private var lastRequest: ClipboardRequest? = null
 
@@ -163,6 +166,8 @@ class ClipboardInteractionService(
             ideErrors = ideErrors,
             planOnly = planOnly
         )
+        // Claim ownership so redoLastRequest() can guard against cross-session misuse
+        sessionStateOwner = sessionId
 
         addToHistory(ChatRole.USER, currentMessage)
         val freshFiles = gatherRequestedFiles(globalContextFiles) ?: emptyMap()
@@ -297,6 +302,8 @@ class ClipboardInteractionService(
         log("Session reset (sessionId=$sessionId)")
         sessionState = null
         lastRequest = null
+        // Release ownership so a future session cannot accidentally reuse stale state
+        sessionStateOwner = null
         sessionManager.transition(sessionId, ClipboardEvent.Reset)
     }
 
@@ -352,19 +359,16 @@ class ClipboardInteractionService(
     }
 
     /**
-     * Builds a [ClipboardRequest], copies it to the clipboard, and returns
-     * [ClipboardStepResult.WaitingForResponse].
+     * Builds a [ClipboardRequest] via [ClipboardRequestBuilder], copies it to the clipboard,
+     * and returns [ClipboardStepResult.WaitingForResponse].
      *
-     * ## Token-saving policy (Minimal mode)
-     *
-     * When [isFirstMessage] is false AND [addHistory] is false, the request is minimal:
-     * only the current user message, freshly-requested files, and errors are included.
-     * Heavy context fields are left blank so the codec omits them from JSON.
+     * All field-population and token-saving policy are delegated to the pure builder;
+     * this method is responsible only for I/O side effects (clipboard, logging, state transition).
      *
      * @param sessionId        Session ID — used to fire the [ClipboardEvent.JsonCopied] transition.
      * @param freshFiles       Files gathered in this turn (path to content).
      * @param isFirstMessage   True for the very first message in a session.
-     * @param assistantMessage Optional message to show above the status.
+     * @param assistantMessage Optional message to show above the status banner.
      * @param llmReasoning     Reasoning snippet from the previous LLM response.
      * @param addHistory       When true, full context and previously gathered paths are populated.
      */
@@ -378,62 +382,16 @@ class ClipboardInteractionService(
     ): ClipboardStepResult {
         val state = sessionState ?: return error("No active session")
 
-        // Minimal-mode: LLM already has all context in its chat window
-        val isMinimal = !isFirstMessage && !addHistory
-        val previousPaths: List<String> =
-            if (addHistory) state.allGatheredFiles.keys.toList() else emptyList()
-
-        log(
-            "Generating JSON: freshFiles=${freshFiles.size}, previousPaths=${previousPaths.size}, " +
-                    "historySize=${state.dialogHistory.size}, isMinimal=$isMinimal"
-        )
-
-        // In minimal mode carry only the latest user message
-        val taskContent = if (isMinimal) {
-            state.dialogHistory.lastOrNull { it.role == ChatRole.USER }?.content ?: state.currentMessage
-        } else {
-            state.currentMessage
-        }
-
-        // System prompt: omitted in minimal mode — codec skips blank strings
-        val systemInstruction = if (isMinimal) "" else {
-            if (state.allGatheredFiles.isEmpty()) {
-                state.prompts.planningSystem
-            } else {
-                buildString {
-                    append(state.prompts.chatSystem)
-                    if (state.planOnly) append(PLAN_ONLY_SUFFIX)
-                }
-            }
-        }
-
-        val request = ClipboardRequest(
-            phase = if (state.allGatheredFiles.isEmpty() && freshFiles.isEmpty())
-                ClipboardPhase.PLANNING else ClipboardPhase.CHAT,
-            currentMessage = taskContent,
-            projectName = state.projectContext.name,
-            // Blank/empty fields are omitted by JsonClipboardProtocolCodec.encode()
-            systemInstruction = systemInstruction,
-            fileTree = if (isMinimal) "" else state.projectContext.fileTree.toCompactString(maxDepth = 4),
+        // Delegate all assembly and token-saving policy to the pure builder
+        val request = ClipboardRequestBuilder.build(
+            state = state,
             freshFiles = freshFiles,
-            previouslyGatheredPaths = previousPaths,
-            chatHistory = if (isMinimal) emptyList() else state.dialogHistory.map { msg ->
-                ClipboardHistoryEntry(
-                    role = when (msg.role) {
-                        ChatRole.USER -> "user"
-                        ChatRole.ASSISTANT -> "assistant"
-                        ChatRole.SYSTEM -> "system"
-                    },
-                    content = msg.content
-                )
-            },
-            attachedContext = if (isMinimal) null else state.attachedContext,
-            ideErrors = state.ideErrors,
-            planOnly = if (isMinimal) false else state.planOnly
+            isFirstMessage = isFirstMessage,
+            addHistory = addHistory,
+            planOnlySuffix = PLAN_ONLY_SUFFIX
         )
 
-        lastRequest = request
-
+        // Copy to system clipboard; fall back gracefully if the clipboard is unavailable
         val copied = clipboardPort.copyRequestToClipboard(request)
         val copyStatus = if (copied) "copied to clipboard" else "generated (copy manually)"
 
@@ -453,7 +411,7 @@ class ClipboardInteractionService(
             estimatedInputTokens = totalTokens,
             llmReasoning = llmReasoning,
             freshFileNames = freshFiles.keys.map { it.substringAfterLast('/') },
-            previouslyGatheredCount = previousPaths.size
+            previouslyGatheredCount = request.previouslyGatheredPaths.size
         )
     }
 
@@ -617,6 +575,35 @@ class ClipboardInteractionService(
     fun recopyLastRequest(): Boolean {
         val req = lastRequest ?: return false
         return clipboardPort.copyRequestToClipboard(req)
+    }
+
+    /**
+     * Re-gathers project files and rebuilds the full JSON request for the given session.
+     *
+     * Produces an identical payload to what the Generate button produces.
+     * Does NOT add a new user message to chat history.
+     *
+     * Returns [ClipboardStepResult.Error] if:
+     * - no active clipboard session exists for this sessionId
+     * - the in-memory session state belongs to a different chat
+     *
+     * @param sessionId          The ID of the current chat session.
+     * @param globalContextFiles Paths to always include as fresh files.
+     */
+    suspend fun redoLastRequest(
+        sessionId: String,
+        globalContextFiles: List<String>
+    ): ClipboardStepResult {
+        // Guard: reject if state belongs to a different chat or no session is active
+        if (sessionStateOwner != sessionId || sessionState == null) {
+            return ClipboardStepResult.Error("No active clipboard session for this chat.")
+        }
+        val freshFiles = gatherRequestedFiles(globalContextFiles) ?: emptyMap()
+        return generateAndCopyJson(
+            sessionId = sessionId,
+            freshFiles = freshFiles,
+            isFirstMessage = false
+        )
     }
 
     companion object {
