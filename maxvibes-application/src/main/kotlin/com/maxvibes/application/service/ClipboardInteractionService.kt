@@ -10,6 +10,8 @@ import com.maxvibes.domain.model.modification.Modification
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.shared.result.Result
 import com.maxvibes.application.port.output.LoggerPort
+import com.maxvibes.application.port.output.ChatSessionRepository
+import com.maxvibes.domain.model.chat.MessageRole
 
 /**
  * Application-layer service that orchestrates the clipboard-mode LLM dialog.
@@ -24,15 +26,18 @@ import com.maxvibes.application.port.output.LoggerPort
  * - [startTask] / [continueDialog] / [handlePastedResponse] — explicit stage calls.
  * - [status] — current [ClipboardSessionStatus] for a session.
  * - [reset] — clears in-memory state and sets session back to IDLE.
- * - [recopyLastRequest] — re-copies the last generated JSON request to the clipboard.
+ * - [redoLastRequest] — re-generates JSON for any session, even after switching chats.
  *
- * @param contextProvider   Provides project file tree and file content.
- * @param clipboardPort     Copies requests to and parses responses from the system clipboard.
- * @param codeRepository    Applies PSI-level code modifications.
- * @param notificationPort  Displays progress/success/warning notifications in the IDE.
- * @param promptPort        Supplies system prompt templates; falls back to [PromptTemplates.EMPTY].
- * @param logger            Optional logger; pass null in unit tests to suppress output.
- * @param sessionManager    State-machine manager; wired in by MaxVibesService DI.
+ * @param contextProvider        Provides project file tree and file content.
+ * @param clipboardPort          Copies requests to and parses responses from the system clipboard.
+ * @param codeRepository         Applies PSI-level code modifications.
+ * @param notificationPort       Displays progress/success/warning notifications in the IDE.
+ * @param promptPort             Supplies system prompt templates; falls back to [PromptTemplates.EMPTY].
+ * @param logger                 Optional logger; pass null in unit tests to suppress output.
+ * @param sessionManager         State-machine manager; wired in by MaxVibesService DI.
+ * @param chatSessionRepository  Read/write access to persisted chat sessions.
+ *   Used to save [requestedFiles] into domain messages and to read session state
+ *   for [redoLastRequest] Scenario B (workspace belongs to a different session).
  */
 class ClipboardInteractionService(
     private val contextProvider: ProjectContextPort,
@@ -41,16 +46,14 @@ class ClipboardInteractionService(
     private val notificationPort: NotificationPort,
     private val promptPort: PromptPort? = null,
     private val logger: LoggerPort? = null,
-    private val sessionManager: ClipboardSessionManager
+    private val sessionManager: ClipboardSessionManager,
+    private val chatSessionRepository: ChatSessionRepository
 ) {
-    /** In-memory session state: messages, gathered files, prompts, etc. */
+    /** In-memory workspace: messages, gathered files, prompts, project context. */
     private var sessionState: ClipboardSessionState? = null
 
-    /** ID сессии, которой принадлежит текущий [sessionState]. Защищает от использования чужого состояния. */
+    /** ID of the session that owns the current [sessionState]. Guards against cross-session misuse. */
     private var sessionStateOwner: String? = null
-
-    /** Last generated request — used by [recopyLastRequest]. */
-    private var lastRequest: ClipboardRequest? = null
 
     // ==================== Status Routing ====================
 
@@ -68,15 +71,6 @@ class ClipboardInteractionService(
      *
      * Routes to [startTask], [continueDialog], or [handlePastedResponse] based on the
      * current session status, so UI code does not need to track internal states.
-     *
-     * @param sessionId          The ID of the current chat session.
-     * @param userInput          Raw user input or pasted LLM response.
-     * @param history            Pre-existing dialog history (used by [startTask] only).
-     * @param attachedContext    Additional context text attached by the user.
-     * @param planOnly           When true, instructs the LLM not to generate code changes.
-     * @param ideErrors          IDE error output to include in the request.
-     * @param globalContextFiles Paths to always include as fresh files.
-     * @param addHistory         When true, full context and previously gathered paths are sent.
      */
     suspend fun handleUserInput(
         sessionId: String,
@@ -88,10 +82,7 @@ class ClipboardInteractionService(
         globalContextFiles: List<String> = emptyList(),
         addHistory: Boolean = false
     ): ClipboardStepResult = when (currentStatus(sessionId)) {
-        // Waiting for a pasted LLM response — treat input as the paste content
         ClipboardSessionStatus.AWAITING_PASTE -> handlePastedResponse(sessionId, userInput)
-
-        // Session live — continue the conversation with a new user message
         ClipboardSessionStatus.SESSION_ACTIVE -> continueDialog(
             sessionId = sessionId,
             message = userInput,
@@ -102,7 +93,6 @@ class ClipboardInteractionService(
             addHistory = addHistory
         )
 
-        // No active session — start a fresh task
         ClipboardSessionStatus.IDLE -> startTask(
             sessionId = sessionId,
             currentMessage = userInput,
@@ -120,15 +110,6 @@ class ClipboardInteractionService(
      *
      * Gathers global context files, initialises session state, and copies the first
      * JSON request to the clipboard for the user to paste into an external LLM.
-     *
-     * @param sessionId          The ID of the current chat session.
-     * @param currentMessage     The user message to send to the LLM.
-     * @param history            Pre-existing dialog history.
-     * @param attachedContext    Additional context text.
-     * @param planOnly           When true, the LLM is instructed not to generate code changes.
-     * @param ideErrors          IDE error output to include.
-     * @param globalContextFiles Paths that should always be included as fresh files.
-     * @param addHistory         When true, previously gathered paths are included in the request.
      */
     suspend fun startTask(
         sessionId: String,
@@ -155,7 +136,7 @@ class ClipboardInteractionService(
 
         log("Project: ${projectContext.name}, files in tree: ${projectContext.fileTree.totalFiles}")
 
-        // Initialise in-memory session state for this dialog
+        // Initialise in-memory workspace for this dialog
         sessionState = ClipboardSessionState(
             currentMessage = currentMessage,
             projectContext = projectContext,
@@ -166,7 +147,6 @@ class ClipboardInteractionService(
             ideErrors = ideErrors,
             planOnly = planOnly
         )
-        // Claim ownership so redoLastRequest() can guard against cross-session misuse
         sessionStateOwner = sessionId
 
         addToHistory(ChatRole.USER, currentMessage)
@@ -181,14 +161,6 @@ class ClipboardInteractionService(
 
     /**
      * Continues an existing clipboard dialog session with a new user message.
-     *
-     * @param sessionId          The ID of the current chat session.
-     * @param message            The user's follow-up message.
-     * @param attachedContext    Replaces (or inherits) the attached context for this turn.
-     * @param planOnly           Overrides plan-only mode; inherits previous value if null.
-     * @param ideErrors          IDE error output for this turn.
-     * @param globalContextFiles Paths to include as fresh files — only honoured when [addHistory]=true.
-     * @param addHistory         When true, full context and all previously gathered paths are sent.
      */
     suspend fun continueDialog(
         sessionId: String,
@@ -228,9 +200,6 @@ class ClipboardInteractionService(
      *
      * Wraps [handlePastedResponseInternal] in a top-level exception handler so unexpected
      * parse errors are surfaced as [ClipboardStepResult.Error] rather than crashing.
-     *
-     * @param sessionId The ID of the current chat session.
-     * @param rawText   The raw text pasted from the external LLM interface.
      */
     suspend fun handlePastedResponse(sessionId: String, rawText: String): ClipboardStepResult {
         return try {
@@ -244,8 +213,7 @@ class ClipboardInteractionService(
     }
 
     private suspend fun handlePastedResponseInternal(sessionId: String, rawText: String): ClipboardStepResult {
-        // Guard: transition check BEFORE touching in-memory state.
-        // Returns false when the manager rejects the transition (invalid state).
+        // Guard: transition check BEFORE touching in-memory state
         val transitioned = sessionManager.transition(sessionId, ClipboardEvent.ResponsePasted)
         if (!transitioned) {
             return error("Cannot accept response paste: session is not in AWAITING_PASTE state.")
@@ -259,7 +227,6 @@ class ClipboardInteractionService(
         val outputTokens = rawText.length / 4
         val inputTokens = state.lastInputTokens
 
-        // Parse the raw clipboard text into a structured response
         val response = try {
             clipboardPort.parseResponse(rawText)
         } catch (e: Exception) {
@@ -284,25 +251,41 @@ class ClipboardInteractionService(
             addToHistory(ChatRole.ASSISTANT, response.message)
         }
 
+        // Persist requested file paths into the last ASSISTANT message in the domain.
+        // Required for redoLastRequest Scenario B — when the in-memory workspace
+        // belongs to a different session after the user switches chats.
+        if (response.requestedFiles.isNotEmpty()) {
+            persistRequestedFilesIntoDomain(sessionId, response.requestedFiles)
+        }
+
         return processUnifiedResponse(sessionId, response, inputTokens, outputTokens)
     }
 
     /**
+     * Saves [requestedFiles] from the LLM response into the last ASSISTANT message
+     * of the domain session. No-op if session not found or no ASSISTANT message exists.
+     */
+    private fun persistRequestedFilesIntoDomain(sessionId: String, requestedFiles: List<String>) {
+        val session = chatSessionRepository.getSessionById(sessionId) ?: return
+        val messages = session.messages.toMutableList()
+        val lastAssistantIdx = messages.indexOfLast { it.role == MessageRole.ASSISTANT }
+        if (lastAssistantIdx < 0) return
+        messages[lastAssistantIdx] = messages[lastAssistantIdx].copy(requestedFiles = requestedFiles)
+        chatSessionRepository.saveSession(session.copy(messages = messages))
+        log("Persisted ${requestedFiles.size} requestedFiles into domain message for session $sessionId")
+    }
+
+    /**
      * Returns the current [ClipboardSessionStatus] for the given session.
-     * Delegates to [ClipboardSessionManager.statusFor].
      */
     fun status(sessionId: String): ClipboardSessionStatus = currentStatus(sessionId)
 
     /**
-     * Resets the clipboard session: clears in-memory state and transitions the session to IDLE.
-     *
-     * @param sessionId The ID of the session to reset.
+     * Resets the clipboard session: clears in-memory workspace and transitions the session to IDLE.
      */
     fun reset(sessionId: String) {
         log("Session reset (sessionId=$sessionId)")
         sessionState = null
-        lastRequest = null
-        // Release ownership so a future session cannot accidentally reuse stale state
         sessionStateOwner = null
         sessionManager.transition(sessionId, ClipboardEvent.Reset)
     }
@@ -323,11 +306,9 @@ class ClipboardInteractionService(
 
         log("Processing: hasFiles=$hasFiles, hasMods=$hasMods, hasMessage=$hasMessage")
 
-        // Apply modifications before gathering additional files
         val modResults = if (hasMods) applyModifications(response.modifications)
         else emptyList<ModificationResult>()
 
-        // If the LLM requested more files, gather them and send a follow-up request
         if (hasFiles) {
             val gatheredFilesMap = gatherRequestedFiles(response.requestedFiles)
             if (gatheredFilesMap == null) {
@@ -361,16 +342,6 @@ class ClipboardInteractionService(
     /**
      * Builds a [ClipboardRequest] via [ClipboardRequestBuilder], copies it to the clipboard,
      * and returns [ClipboardStepResult.WaitingForResponse].
-     *
-     * All field-population and token-saving policy are delegated to the pure builder;
-     * this method is responsible only for I/O side effects (clipboard, logging, state transition).
-     *
-     * @param sessionId        Session ID — used to fire the [ClipboardEvent.JsonCopied] transition.
-     * @param freshFiles       Files gathered in this turn (path to content).
-     * @param isFirstMessage   True for the very first message in a session.
-     * @param assistantMessage Optional message to show above the status banner.
-     * @param llmReasoning     Reasoning snippet from the previous LLM response.
-     * @param addHistory       When true, full context and previously gathered paths are populated.
      */
     private fun generateAndCopyJson(
         sessionId: String,
@@ -382,7 +353,6 @@ class ClipboardInteractionService(
     ): ClipboardStepResult {
         val state = sessionState ?: return error("No active session")
 
-        // Delegate all assembly and token-saving policy to the pure builder
         val request = ClipboardRequestBuilder.build(
             state = state,
             freshFiles = freshFiles,
@@ -391,7 +361,6 @@ class ClipboardInteractionService(
             planOnlySuffix = PLAN_ONLY_SUFFIX
         )
 
-        // Copy to system clipboard; fall back gracefully if the clipboard is unavailable
         val copied = clipboardPort.copyRequestToClipboard(request)
         val copyStatus = if (copied) "copied to clipboard" else "generated (copy manually)"
 
@@ -400,7 +369,6 @@ class ClipboardInteractionService(
 
         log("JSON ready: $copyStatus, ~$totalTokens tokens")
 
-        // Transition SESSION_ACTIVE -> AWAITING_PASTE (or AWAITING_PASTE -> AWAITING_PASTE on retry)
         sessionManager.transition(sessionId, ClipboardEvent.JsonCopied)
 
         return ClipboardStepResult.WaitingForResponse(
@@ -412,6 +380,96 @@ class ClipboardInteractionService(
             llmReasoning = llmReasoning,
             freshFileNames = freshFiles.keys.map { it.substringAfterLast('/') },
             previouslyGatheredCount = request.previouslyGatheredPaths.size
+        )
+    }
+
+    /**
+     * Re-generates and copies the clipboard JSON for the given session.
+     *
+     * Does NOT add messages to history, does NOT trigger state machine transitions.
+     * Simply rebuilds the JSON payload and copies it to the clipboard.
+     *
+     * Two scenarios:
+     * - **A**: In-memory workspace belongs to this session → reuse it, call [generateAndCopyJson] directly.
+     * - **B**: Workspace belongs to another session → rebuild minimal workspace from domain
+     *   (fresh projectContext + last user message + last requestedFiles), then call [generateAndCopyJson].
+     *
+     * Returns [ClipboardStepResult.Error] if:
+     * - session not found (Scenario B)
+     * - session status is IDLE (Generate was never called)
+     * - session has no USER messages
+     * - project context cannot be loaded (Scenario B)
+     */
+    suspend fun redoLastRequest(
+        sessionId: String,
+        globalContextFiles: List<String>
+    ): ClipboardStepResult {
+
+        // --- Scenario A: workspace already belongs to this session ---
+        if (sessionStateOwner == sessionId && sessionState != null) {
+            log("Redo scenario A: reusing existing workspace for session $sessionId")
+            val freshFiles = gatherRequestedFiles(globalContextFiles) ?: emptyMap()
+            return generateAndCopyJson(
+                sessionId = sessionId,
+                freshFiles = freshFiles,
+                isFirstMessage = false
+            )
+        }
+
+        // --- Scenario B: workspace belongs to another session, rebuild from domain ---
+        log("Redo scenario B: rebuilding workspace from domain for session $sessionId")
+
+        val session = chatSessionRepository.getSessionById(sessionId)
+            ?: return error("Session not found: $sessionId")
+
+        if (session.clipboardStatus == ClipboardSessionStatus.IDLE) {
+            return error("No active clipboard session for this chat.")
+        }
+
+        val lastUserMessage = session.messages
+            .lastOrNull { it.role == MessageRole.USER }
+            ?.content
+            ?: return error("No user message found in session $sessionId")
+
+        // File paths from the last LLM response only (not the entire accumulated list)
+        val lastRequestedFiles = session.messages
+            .lastOrNull { it.role == MessageRole.ASSISTANT && it.requestedFiles.isNotEmpty() }
+            ?.requestedFiles
+            ?: emptyList()
+
+        // Fresh project context is required to build the file tree in the JSON
+        val projectContextResult = contextProvider.getProjectContext()
+        if (projectContextResult is Result.Failure) {
+            return error("Failed to get project context: ${projectContextResult.error.message}")
+        }
+        val projectContext = (projectContextResult as Result.Success).value
+        val prompts = promptPort?.getPrompts() ?: PromptTemplates.EMPTY
+
+        // Build minimal workspace with just enough data for generateAndCopyJson
+        sessionState = ClipboardSessionState(
+            currentMessage = lastUserMessage,
+            projectContext = projectContext,
+            dialogHistory = session.messages
+                .filter { it.role == MessageRole.USER || it.role == MessageRole.ASSISTANT }
+                .map {
+                    ChatMessageDTO(
+                        role = if (it.role == MessageRole.USER) ChatRole.USER else ChatRole.ASSISTANT,
+                        content = it.content
+                    )
+                }
+                .toMutableList(),
+            prompts = prompts,
+            allGatheredFiles = mutableMapOf(),
+            planOnly = false
+        )
+        sessionStateOwner = sessionId
+
+        val filesToGather = (globalContextFiles + lastRequestedFiles).distinct()
+        val freshFiles = gatherRequestedFiles(filesToGather) ?: emptyMap()
+        return generateAndCopyJson(
+            sessionId = sessionId,
+            freshFiles = freshFiles,
+            isFirstMessage = false
         )
     }
 
@@ -566,52 +624,7 @@ class ClipboardInteractionService(
         }
     }
 
-    /**
-     * Re-copies the last generated request JSON to the system clipboard.
-     * Useful when the user accidentally dismissed the clipboard content before pasting.
-     *
-     * @return true if the content was successfully copied; false if there is no previous request.
-     */
-    fun recopyLastRequest(): Boolean {
-        val req = lastRequest ?: return false
-        return clipboardPort.copyRequestToClipboard(req)
-    }
-
-    /**
-     * Re-gathers project files and rebuilds the full JSON request for the given session.
-     *
-     * Produces an identical payload to what the Generate button produces.
-     * Does NOT add a new user message to chat history.
-     *
-     * Returns [ClipboardStepResult.Error] if:
-     * - no active clipboard session exists for this sessionId
-     * - the in-memory session state belongs to a different chat
-     *
-     * @param sessionId          The ID of the current chat session.
-     * @param globalContextFiles Paths to always include as fresh files.
-     */
-    suspend fun redoLastRequest(
-        sessionId: String,
-        globalContextFiles: List<String>
-    ): ClipboardStepResult {
-        // Guard: reject if state belongs to a different chat or no session is active
-        if (sessionStateOwner != sessionId || sessionState == null) {
-            return ClipboardStepResult.Error("No active clipboard session for this chat.")
-        }
-        val freshFiles = gatherRequestedFiles(globalContextFiles) ?: emptyMap()
-        return generateAndCopyJson(
-            sessionId = sessionId,
-            freshFiles = freshFiles,
-            isFirstMessage = false
-        )
-    }
-
     companion object {
-        /**
-         * Suffix appended to the chat system prompt in plan-only mode.
-         * Instructs the LLM to discuss the plan without generating code changes.
-         * Single source of truth — used only inside [generateAndCopyJson].
-         */
         private val PLAN_ONLY_SUFFIX = "\n\n" +
                 "## PLAN-ONLY MODE — DISCUSSION REQUIRED\n\n" +
                 "DO NOT generate any code changes in the modifications array.\n" +

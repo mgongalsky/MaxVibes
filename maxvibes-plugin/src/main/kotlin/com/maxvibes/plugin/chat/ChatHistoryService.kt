@@ -33,28 +33,46 @@ class XmlChatMessage {
     @Attribute("timestamp")
     var timestamp: Long = Instant.now().toEpochMilli()
 
+    /**
+     * File paths requested by the LLM in this ASSISTANT message.
+     * Serialized as a nested XCollection — absent in old XML reads as empty list (backward compat).
+     */
+    @XCollection(style = XCollection.Style.v2, elementTypes = [String::class])
+    var requestedFiles: MutableList<String> = mutableListOf()
+
     constructor()
 
-    constructor(id: String, role: MessageRole, content: String, timestamp: Long) {
+    constructor(
+        id: String,
+        role: MessageRole,
+        content: String,
+        timestamp: Long,
+        requestedFiles: List<String> = emptyList()
+    ) {
         this.id = id
         this.role = role
         this.content = content
         this.timestamp = timestamp
+        this.requestedFiles = requestedFiles.toMutableList()
     }
 
+    /** Converts this XML DTO to the domain [ChatMessage]. */
     fun toDomain(): ChatMessage = ChatMessage(
         id = id,
         role = role,
         content = content,
-        timestamp = timestamp
+        timestamp = timestamp,
+        requestedFiles = requestedFiles.toList()
     )
 
     companion object {
+        /** Creates an XML DTO from a domain [ChatMessage] for serialization. */
         fun fromDomain(msg: ChatMessage) = XmlChatMessage(
             id = msg.id,
             role = msg.role,
             content = msg.content,
-            timestamp = msg.timestamp
+            timestamp = msg.timestamp,
+            requestedFiles = msg.requestedFiles
         )
     }
 }

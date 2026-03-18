@@ -119,7 +119,8 @@ class MaxVibesService(private val project: Project) {
             notificationPort = notificationPort,
             promptPort = promptPort,
             logger = MaxVibesLogger,
-            sessionManager = clipboardSessionManager
+            sessionManager = clipboardSessionManager,
+            chatSessionRepository = chatSessionRepository
         )
     }
 

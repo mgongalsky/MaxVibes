@@ -466,13 +466,13 @@ class ChatPanel(
         }
 
         sendButton.addActionListener { sendMessage() }
+
+        // Delegates to controller which runs a background task and updates status via handleClipboardResult.
+        // Status and mode indicator are updated by handleClipboardResult → callbacks.setStatus() + updateModeIndicator().
         copyJsonButton.addActionListener {
-            if (service.clipboardService.recopyLastRequest()) {
-                statusLabel.text = "JSON re-copied to clipboard"
-            } else {
-                statusLabel.text = "Nothing to copy"
-            }
+            messageController.redoClipboardJson()
         }
+
         sessionsButton.addActionListener { onShowSessions() }
 
         // Clipboard state is now per-session in the domain — no resetClipboard() on session switch.

@@ -190,6 +190,25 @@ class ChatMessageController(
         })
     }
 
+    /**
+     * Re-generates and copies the clipboard JSON for the current active session.
+     *
+     * Runs in a background task — identical to what Generate produces:
+     * re-gathers project files and rebuilds the full JSON payload via
+     * [ClipboardInteractionService.redoLastRequest].
+     *
+     * Does NOT add a new user message to history.
+     * Result is routed through [handleClipboardResult] — same as Generate.
+     */
+    fun redoClipboardJson() {
+        val session = chatTreeService.getActiveSession()
+        val globalContextFiles = chatTreeService.getGlobalContextFiles()
+        callbacks.setInputEnabled(false)
+        runClipboardBg("Re-generating JSON...", session) {
+            service.clipboardService.redoLastRequest(session.id, globalContextFiles)
+        }
+    }
+
     // ==================== Result Handlers ====================
 
     private fun handleApiResult(result: ContextAwareResult, session: ChatSession, wasPlanOnly: Boolean = false) {
