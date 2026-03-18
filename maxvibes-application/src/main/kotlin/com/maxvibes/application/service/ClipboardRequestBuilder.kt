@@ -48,9 +48,11 @@ internal object ClipboardRequestBuilder {
         val previousPaths: List<String> =
             if (addHistory) state.allGatheredFiles.keys.toList() else emptyList()
 
-        // In minimal mode carry only the latest user message to save tokens.
+        // In minimal mode carry only the latest message (any role) to save tokens.
+        // Using lastOrNull without role filter ensures that an LLM file-request reply
+        // (role=ASSISTANT) is forwarded as current_message rather than the older USER task.
         val taskContent = if (isMinimal) {
-            state.dialogHistory.lastOrNull { it.role == ChatRole.USER }?.content
+            state.dialogHistory.lastOrNull()?.content
                 ?: state.currentMessage
         } else {
             state.currentMessage

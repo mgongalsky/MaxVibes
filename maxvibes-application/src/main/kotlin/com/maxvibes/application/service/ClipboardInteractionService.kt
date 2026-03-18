@@ -392,12 +392,12 @@ class ClipboardInteractionService(
      * Two scenarios:
      * - **A**: In-memory workspace belongs to this session → reuse it, call [generateAndCopyJson] directly.
      * - **B**: Workspace belongs to another session → rebuild minimal workspace from domain
-     *   (fresh projectContext + last user message + last requestedFiles), then call [generateAndCopyJson].
+     *   (fresh projectContext + last message of any role + last requestedFiles), then call [generateAndCopyJson].
      *
      * Returns [ClipboardStepResult.Error] if:
      * - session not found (Scenario B)
      * - session status is IDLE (Generate was never called)
-     * - session has no USER messages
+     * - session has no messages
      * - project context cannot be loaded (Scenario B)
      */
     suspend fun redoLastRequest(
@@ -426,10 +426,12 @@ class ClipboardInteractionService(
             return error("No active clipboard session for this chat.")
         }
 
-        val lastUserMessage = session.messages
-            .lastOrNull { it.role == MessageRole.USER }
-            ?.content
-            ?: return error("No user message found in session $sessionId")
+        // Use the last message regardless of role — it may be an LLM file-request reply
+        // (role=ASSISTANT) that contains the requestedFiles the next JSON turn should carry.
+        val lastMessage = session.messages.lastOrNull()
+            ?: return error("No messages found in session $sessionId")
+
+        val lastMessageContent = lastMessage.content
 
         // File paths from the last LLM response only (not the entire accumulated list)
         val lastRequestedFiles = session.messages
@@ -447,7 +449,7 @@ class ClipboardInteractionService(
 
         // Build minimal workspace with just enough data for generateAndCopyJson
         sessionState = ClipboardSessionState(
-            currentMessage = lastUserMessage,
+            currentMessage = lastMessageContent,
             projectContext = projectContext,
             dialogHistory = session.messages
                 .filter { it.role == MessageRole.USER || it.role == MessageRole.ASSISTANT }
