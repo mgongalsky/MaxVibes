@@ -6,6 +6,8 @@ import com.maxvibes.domain.model.code.ElementPath
 import com.maxvibes.domain.model.modification.Modification
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.shared.result.Result
+import com.maxvibes.domain.model.code.CodeView
+import com.maxvibes.domain.model.code.CodeViewRequest
 
 /**
  * Порт для работы с кодом (реализуется PSI адаптером)
@@ -32,6 +34,19 @@ interface CodeRepository {
     suspend fun exists(path: ElementPath): Boolean
 
     suspend fun validateSyntax(content: String): Result<Unit, CodeRepositoryError>
+
+    /**
+     * Returns the contents of a file at the requested granularity level.
+     *
+     * Allows the LLM to request only the level of detail it actually needs
+     * (signatures, outline, or a specific element) instead of the full file,
+     * reducing token usage for read-only context requests.
+     *
+     * @param request describes the desired view: file path, granularity, and optional element path
+     * @return [CodeView] with the rendered text ready to be injected into the prompt
+     * @throws IllegalArgumentException if the file is not found or [CodeViewRequest.elementPath] is invalid
+     */
+    suspend fun getCodeView(request: CodeViewRequest): CodeView
 }
 
 sealed class CodeRepositoryError(val message: String) {

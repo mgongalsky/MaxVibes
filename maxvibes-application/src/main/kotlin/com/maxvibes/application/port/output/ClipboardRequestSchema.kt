@@ -109,4 +109,10 @@ object ClipboardRequestSchema {
 
     /** Default insertion position when the field is absent in a modification entry. */
     const val DEFAULT_POSITION = "LAST_CHILD"
+
+    /**
+     * Response field: structured file-view requests with granularity control.
+     * LLM uses this instead of [RESP_REQUESTED_FILES] when it needs less than the full file.
+     */
+    const val REQUESTED_VIEWS = "requestedViews"
 }

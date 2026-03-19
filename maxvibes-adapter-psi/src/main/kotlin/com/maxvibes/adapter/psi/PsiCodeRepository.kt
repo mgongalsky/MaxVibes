@@ -20,6 +20,8 @@ import com.maxvibes.domain.model.modification.*
 import com.maxvibes.shared.result.Result
 import org.jetbrains.kotlin.psi.KtFile
 import java.io.File
+import com.maxvibes.domain.model.code.CodeView
+import com.maxvibes.domain.model.code.CodeViewRequest
 
 /**
  * Реализация CodeRepository через IntelliJ PSI
@@ -424,5 +426,24 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
         }
 
         return currentDir
+    }
+
+    /**
+     * Stub implementation of [CodeRepository.getCodeView].
+     *
+     * Returns the full file content for any granularity level — functionally correct
+     * but not yet token-optimised. Will be replaced by the real renderer in STEP 5
+     * (PsiCodeViewRenderer).
+     *
+     * TODO: replace with granularity-aware rendering in STEP 5 (CodeGranularity feature)
+     */
+    override suspend fun getCodeView(request: CodeViewRequest): CodeView {
+        // Wrap the plain String path into ElementPath required by getFileContent.
+        val result = getFileContent(ElementPath(request.filePath))
+        val content = when (result) {
+            is Result.Success -> result.value
+            is Result.Failure -> ""
+        }
+        return CodeView(request.filePath, request.granularity, content)
     }
 }
