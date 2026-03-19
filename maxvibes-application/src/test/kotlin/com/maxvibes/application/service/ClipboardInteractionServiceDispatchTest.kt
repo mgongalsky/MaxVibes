@@ -34,7 +34,8 @@ class ClipboardInteractionServiceDispatchTest {
         clipboardPort = clipboardPort,
         codeRepository = codeRepository,
         notificationPort = notificationPort,
-        sessionManager = manager
+        sessionManager = manager,
+        chatSessionRepository = mockk(relaxed = true)
     )
 
     // ==================== Dispatch tests ====================

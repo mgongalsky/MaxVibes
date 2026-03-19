@@ -44,6 +44,8 @@ class ClipboardMinimalModeTest {
             return true
         }
 
+        override fun copyRawText(text: String): Boolean = true
+
         override fun parseResponse(rawText: String): ClipboardResponse? = null
     }
 
@@ -139,7 +141,8 @@ class ClipboardMinimalModeTest {
             codeRepository = codeRepository,
             notificationPort = notificationPort,
             promptPort = promptPort,
-            sessionManager = sessionManager
+            sessionManager = sessionManager,
+            chatSessionRepository = mockk(relaxed = true)
         )
     }
 

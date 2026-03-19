@@ -24,14 +24,15 @@ class ClipboardRequestBuilderTest {
     /**
      * Creates a [ClipboardSessionState] with sensible defaults for testing.
      * All parameters are optional so each test only specifies what it cares about.
+     *
+     * Note: [attachedContext] and [ideErrors] are no longer stored in session state —
+     * they are one-shot per-message values passed directly to [ClipboardRequestBuilder.build].
      */
     private fun makeState(
         currentMessage: String = "fix the bug",
         gatheredFiles: Map<String, String> = emptyMap(),
         history: List<ChatMessageDTO> = emptyList(),
-        planOnly: Boolean = false,
-        attachedContext: String? = null,
-        ideErrors: String? = null
+        planOnly: Boolean = false
     ) = ClipboardSessionState(
         currentMessage = currentMessage,
         projectContext = ProjectContext(
@@ -45,8 +46,6 @@ class ClipboardRequestBuilderTest {
             chatSystem = "CHAT_PROMPT"
         ),
         allGatheredFiles = gatheredFiles.toMutableMap(),
-        attachedContext = attachedContext,
-        ideErrors = ideErrors,
         planOnly = planOnly
     )
 
@@ -119,11 +118,13 @@ class ClipboardRequestBuilderTest {
 
     @Test
     fun `minimal mode omits attachedContext`() {
+        // attachedContext is passed directly to build() — in minimal mode it must be dropped.
         val req = ClipboardRequestBuilder.build(
-            state = makeState(attachedContext = "some trace"),
+            state = makeState(),
             freshFiles = emptyMap(),
             isFirstMessage = false,
-            addHistory = false
+            addHistory = false,
+            attachedContext = "some trace"
         )
         assertNull(req.attachedContext)
     }
@@ -207,23 +208,38 @@ class ClipboardRequestBuilderTest {
 
     @Test
     fun `ideErrors is present in full mode`() {
+        // ideErrors is now passed directly to build(), not stored in session state.
         val req = ClipboardRequestBuilder.build(
-            state = makeState(ideErrors = "error: unresolved reference"),
+            state = makeState(),
             freshFiles = emptyMap(),
-            isFirstMessage = true
+            isFirstMessage = true,
+            ideErrors = "error: unresolved reference"
         )
         assertEquals("error: unresolved reference", req.ideErrors)
     }
 
     @Test
     fun `ideErrors is present in minimal mode`() {
-        // IDE errors are always included — they are per-turn diagnostics, not accumulated context.
+        // IDE errors are always forwarded — they are per-turn diagnostics, not accumulated context.
         val req = ClipboardRequestBuilder.build(
-            state = makeState(ideErrors = "error: type mismatch"),
+            state = makeState(),
+            freshFiles = emptyMap(),
+            isFirstMessage = false,
+            addHistory = false,
+            ideErrors = "error: type mismatch"
+        )
+        assertEquals("error: type mismatch", req.ideErrors)
+    }
+
+    @Test
+    fun `ideErrors is null when not passed`() {
+        // Confirms that without explicit attachment the field stays null — the core bug fix.
+        val req = ClipboardRequestBuilder.build(
+            state = makeState(),
             freshFiles = emptyMap(),
             isFirstMessage = false,
             addHistory = false
         )
-        assertEquals("error: type mismatch", req.ideErrors)
+        assertNull(req.ideErrors)
     }
 }

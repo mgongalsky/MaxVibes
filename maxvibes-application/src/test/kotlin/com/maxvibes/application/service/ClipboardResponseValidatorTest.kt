@@ -226,13 +226,10 @@ class ClipboardResponseValidatorTest {
             ParseFailureDetails.WrappedInMarkdown(detected = "```json{...}```")
         )
         for (details in cases) {
-            assertTrue(details.reasonCode().isNotBlank(),
-                "
-                { details::class.simpleName } has blank reasonCode ")
-                        assertTrue (details.humanDescription().isNotBlank(),
-                "{details::class.simpleName} has blank humanDescription")
-            assertTrue(details.correctionHint().isNotBlank(), "
-            { details::class.simpleName } has blank correctionHint ")
+            val name = details::class.simpleName
+            assertTrue(details.reasonCode().isNotBlank(), "$name has blank reasonCode")
+            assertTrue(details.humanDescription().isNotBlank(), "$name has blank humanDescription")
+            assertTrue(details.correctionHint().isNotBlank(), "$name has blank correctionHint")
         }
     }
 }
