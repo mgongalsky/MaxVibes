@@ -107,10 +107,35 @@ class ChatTreeService(private val repository: ChatSessionRepository) {
         return updated
     }
 
-    fun addMessage(sessionId: String, role: MessageRole, content: String): ChatSession {
+    /**
+     * Appends a new message to the session and persists the updated session.
+     *
+     * @param sessionId                Target session ID.
+     * @param role                     Message role (USER / ASSISTANT / SYSTEM).
+     * @param content                  Message text.
+     * @param requestedFiles           File paths requested BY the LLM (ASSISTANT messages only).
+     * @param attachedFiles            File paths sent TO the LLM this round (clipboard ASSISTANT messages only).
+     * @param appliedModificationPaths String paths of successful code modifications (ASSISTANT messages only).
+     *   Persisted so the clickable modification links survive session reload.
+     * @return Updated [ChatSession] after the message was appended.
+     */
+    fun addMessage(
+        sessionId: String,
+        role: MessageRole,
+        content: String,
+        requestedFiles: List<String> = emptyList(),
+        attachedFiles: List<String> = emptyList(),
+        appliedModificationPaths: List<String> = emptyList()
+    ): ChatSession {
         val session = repository.getSessionById(sessionId)
             ?: throw IllegalArgumentException("Session not found: $sessionId")
-        val message = ChatMessage(role = role, content = content)
+        val message = ChatMessage(
+            role = role,
+            content = content,
+            requestedFiles = requestedFiles,
+            attachedFiles = attachedFiles,
+            appliedModificationPaths = appliedModificationPaths
+        )
         val updated = session.withMessage(message)
         repository.saveSession(updated)
         return updated
@@ -138,7 +163,7 @@ class ChatTreeService(private val repository: ChatSessionRepository) {
     }
 
     /**
-     * Удаляет сессию. Дети переподвешиваются к родителю удалённой сессии.
+     * Deletes the session. Child sessions are re-attached to the deleted session's parent.
      */
     fun deleteSession(sessionId: String) {
         val session = repository.getSessionById(sessionId) ?: return
@@ -163,7 +188,7 @@ class ChatTreeService(private val repository: ChatSessionRepository) {
     }
 
     /**
-     * Удаляет сессию вместе со всеми потомками.
+     * Deletes the session and all its descendants recursively.
      */
     fun deleteSessionCascade(sessionId: String) {
         val toDelete = collectDescendantIds(sessionId) + sessionId

@@ -4,16 +4,19 @@ import com.maxvibes.domain.model.chat.ChatMessage
 import com.maxvibes.domain.model.chat.MessageRole
 
 /**
- * Responsible for transforming a list of ChatMessage into DisplayMessage objects ready for UI rendering.
+ * Responsible for transforming a list of [ChatMessage] into [DisplayMessage] objects ready for UI rendering.
  *
- * This class encapsulates all message filtering and formatting logic, keeping ChatPanel (the View)
+ * Encapsulates all message filtering and formatting logic, keeping ChatPanel (the View)
  * free from knowledge about the internal message storage format.
  *
- * Specifically handles:
+ * Handles:
  * - Filtering out placeholder messages used in the clipboard workflow
  * - Stripping technical annotations appended to USER messages before sending to LLM
  *   (e.g. "[trace: N lines]", "[attached ide errors]", "[plan-only]")
  * - Removing blank messages that should not be displayed
+ * - Carrying [ChatMessage.attachedFiles], [ChatMessage.requestedFiles], and
+ *   [ChatMessage.appliedModificationPaths] into [DisplayMessage] so ASSISTANT bubbles
+ *   fully reconstruct their footer (gathered files + modification links) after session reload
  */
 class ConversationRenderer {
 
@@ -35,6 +38,8 @@ class ConversationRenderer {
      * 1. Filter out messages that should never be shown (e.g. clipboard placeholders)
      * 2. Format content (strip technical annotations from USER messages)
      * 3. Skip USER messages that become blank after formatting
+     * 4. Carry [ChatMessage.attachedFiles], [ChatMessage.requestedFiles], and
+     *    [ChatMessage.appliedModificationPaths] into [DisplayMessage] for full footer reconstruction
      *
      * @param messages raw messages from ChatSession.messages
      * @return filtered and formatted messages ready for rendering in ConversationPanel
@@ -51,7 +56,13 @@ class ConversationRenderer {
                 }
                 // A USER message might become blank after stripping annotations — skip it.
                 if (content.isBlank()) null
-                else DisplayMessage(role = message.role, content = content)
+                else DisplayMessage(
+                    role = message.role,
+                    content = content,
+                    attachedFiles = message.attachedFiles,
+                    requestedFiles = message.requestedFiles,
+                    appliedModificationPaths = message.appliedModificationPaths
+                )
             }
     }
 
@@ -94,14 +105,23 @@ class ConversationRenderer {
 }
 
 /**
- * A message that has been processed by ConversationRenderer and is ready for display in the UI.
+ * A message processed by [ConversationRenderer] and ready for display in the UI.
  *
- * Unlike the raw ChatMessage domain object, DisplayMessage:
+ * Unlike the raw [ChatMessage] domain object, DisplayMessage:
  * - Is guaranteed to have non-blank, clean content
  * - Has been filtered (no clipboard placeholders)
  * - Has had technical annotations stripped from USER messages
+ * - Carries [attachedFiles] (files sent TO the LLM), [requestedFiles] (files requested BY the LLM),
+ *   and [appliedModificationPaths] (successful code change paths) so ASSISTANT bubbles fully
+ *   reconstruct their footer on session reload
  */
 data class DisplayMessage(
     val role: MessageRole,
-    val content: String
+    val content: String,
+    /** Files gathered and sent TO the LLM in this round (shown as "Gathered files" in the bubble footer). */
+    val attachedFiles: List<String> = emptyList(),
+    /** Files requested BY the LLM for the next round. */
+    val requestedFiles: List<String> = emptyList(),
+    /** ElementPath strings for each successfully applied code modification — reconstructed on reload as clickable links. */
+    val appliedModificationPaths: List<String> = emptyList()
 )

@@ -34,11 +34,27 @@ class XmlChatMessage {
     var timestamp: Long = Instant.now().toEpochMilli()
 
     /**
-     * File paths requested by the LLM in this ASSISTANT message.
-     * Serialized as a nested XCollection — absent in old XML reads as empty list (backward compat).
+     * File paths requested BY the LLM in this ASSISTANT message ("please give me these next").
+     * Absent in old XML reads as empty list — backward compatible.
      */
     @XCollection(style = XCollection.Style.v2, elementTypes = [String::class])
     var requestedFiles: MutableList<String> = mutableListOf()
+
+    /**
+     * File paths gathered and sent TO the LLM in this round (the "freshFiles" payload).
+     * Persisted so the "Gathered files" bubble footer survives session reload.
+     * Absent in old XML reads as empty list — backward compatible.
+     */
+    @XCollection(style = XCollection.Style.v2, elementTypes = [String::class])
+    var attachedFiles: MutableList<String> = mutableListOf()
+
+    /**
+     * String representations of ElementPath for each successful code modification.
+     * Persisted so the clickable modification links in the bubble footer survive session reload.
+     * Absent in old XML reads as empty list — backward compatible.
+     */
+    @XCollection(style = XCollection.Style.v2, elementTypes = [String::class])
+    var appliedModificationPaths: MutableList<String> = mutableListOf()
 
     constructor()
 
@@ -47,13 +63,17 @@ class XmlChatMessage {
         role: MessageRole,
         content: String,
         timestamp: Long,
-        requestedFiles: List<String> = emptyList()
+        requestedFiles: List<String> = emptyList(),
+        attachedFiles: List<String> = emptyList(),
+        appliedModificationPaths: List<String> = emptyList()
     ) {
         this.id = id
         this.role = role
         this.content = content
         this.timestamp = timestamp
         this.requestedFiles = requestedFiles.toMutableList()
+        this.attachedFiles = attachedFiles.toMutableList()
+        this.appliedModificationPaths = appliedModificationPaths.toMutableList()
     }
 
     /** Converts this XML DTO to the domain [ChatMessage]. */
@@ -62,7 +82,9 @@ class XmlChatMessage {
         role = role,
         content = content,
         timestamp = timestamp,
-        requestedFiles = requestedFiles.toList()
+        requestedFiles = requestedFiles.toList(),
+        attachedFiles = attachedFiles.toList(),
+        appliedModificationPaths = appliedModificationPaths.toList()
     )
 
     companion object {
@@ -72,7 +94,9 @@ class XmlChatMessage {
             role = msg.role,
             content = msg.content,
             timestamp = msg.timestamp,
-            requestedFiles = msg.requestedFiles
+            requestedFiles = msg.requestedFiles,
+            attachedFiles = msg.attachedFiles,
+            appliedModificationPaths = msg.appliedModificationPaths
         )
     }
 }

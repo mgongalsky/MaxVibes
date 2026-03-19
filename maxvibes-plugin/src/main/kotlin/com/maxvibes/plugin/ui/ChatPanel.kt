@@ -5,7 +5,9 @@ import com.intellij.openapi.ui.ComboBox
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.*
 import com.intellij.util.ui.JBUI
+import com.maxvibes.domain.model.code.ElementPath
 import com.maxvibes.domain.model.interaction.InteractionMode
+import com.maxvibes.domain.model.modification.Modification
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.plugin.service.MaxVibesService
 import com.maxvibes.plugin.service.PromptService
@@ -127,14 +129,13 @@ class ChatPanel(
     private val settings: MaxVibesSettings by lazy { MaxVibesSettings.getInstance() }
 
     // Manages interaction mode state (API / Clipboard / CheapAPI).
-// Extracted from ChatPanel to separate state logic from UI.
+    // Extracted from ChatPanel to separate state logic from UI.
     private val modeManager: InteractionModeManager by lazy {
         InteractionModeManager(
             settings = settings,
             onModeChanged = { mode ->
                 settings.interactionMode = mode.name
                 if (mode == InteractionMode.CHEAP_API) service.ensureCheapLLMService()
-                // render() calls updateModeUI(state) internally — no need to call it separately
                 render(buildState())
             }
         )
@@ -194,12 +195,10 @@ class ChatPanel(
     }
 
     override fun setInputEnabled(enabled: Boolean) {
-        // isWaitingForResponse field removed — state is now read from the domain via buildState().
         inputArea.isEnabled = enabled
         sendButton.isEnabled = enabled
         dryRunCheckbox.isEnabled = enabled
         planOnlyCheckbox.isEnabled = enabled
-        // Keep "Add History" in sync with the rest of the input controls.
         addHistoryCheckbox.isEnabled = enabled
         copyJsonButton.isEnabled = enabled
         attachTraceButton.isEnabled = enabled
@@ -221,7 +220,6 @@ class ChatPanel(
         statusLabel.text = text
     }
 
-    // Interface method (no-arg) — rebuilds state snapshot and delegates to updateModeUI(state).
     override fun updateModeIndicator() {
         updateModeUI(buildState())
     }
@@ -273,9 +271,7 @@ class ChatPanel(
         ChatNavigationHelper.registerElementPaths(modifications, elementNavRegistry)
     }
 
-    override fun formatMarkdown(text: String): String {
-        return text
-    }
+    override fun formatMarkdown(text: String): String = text
 
     override fun updateTokenDisplay() {
         val session = chatTreeService.getActiveSession()
@@ -332,6 +328,14 @@ class ChatPanel(
         updateBreadcrumb(); updateModeIndicator(); updateContextIndicator(); updateToolWindowIcons()
     }
 
+    /**
+     * Loads (or reloads) the active session into the conversation panel.
+     *
+     * For ASSISTANT messages, persisted [DisplayMessage.appliedModificationPaths] are reconstructed
+     * into [ModificationResult.Success] objects using a stub [Modification.ReplaceElement] so the
+     * clickable modification links in the bubble footer are fully restored after session reload.
+     * The stub modification is never applied — it exists only to satisfy the sealed interface contract.
+     */
     fun loadCurrentSession() {
         val session = chatTreeService.getActiveSession()
         conversationPanel.clearMessages()
@@ -348,12 +352,30 @@ class ChatPanel(
                 conversationPanel.addSystemBubble("\u2514 Branch of: $chain")
             }
 
-            // Delegate filtering and formatting to ConversationRenderer.
-            // This replaces the inline when/filter logic that previously lived here.
             conversationRenderer.render(session.messages).forEach { msg ->
                 when (msg.role) {
                     MessageRole.USER -> conversationPanel.addUserBubble(msg.content)
-                    MessageRole.ASSISTANT -> conversationPanel.addAssistantBubble(msg.content)
+                    MessageRole.ASSISTANT -> {
+                        // Reconstruct ModificationResult.Success from persisted paths.
+                        // A stub ReplaceElement is used to satisfy the sealed interface —
+                        // it is never executed, only the affectedPath drives the UI (navigation links).
+                        val restoredMods: List<ModificationResult> = msg.appliedModificationPaths.map { pathStr ->
+                            val ep = ElementPath(pathStr)
+                            ModificationResult.Success(
+                                modification = Modification.ReplaceElement(targetPath = ep, newContent = ""),
+                                affectedPath = ep,
+                                resultContent = null
+                            )
+                        }
+                        // Register nav paths so clicks navigate to the element in the editor.
+                        registerElementPaths(restoredMods)
+                        conversationPanel.addAssistantBubble(
+                            text = msg.content,
+                            metaFiles = msg.attachedFiles,
+                            modifications = restoredMods
+                        )
+                    }
+
                     MessageRole.SYSTEM -> conversationPanel.addSystemBubble(msg.content)
                 }
             }
@@ -426,7 +448,6 @@ class ChatPanel(
                 background = JBColor.background()
                 add(attachErrorsButton.apply { preferredSize = Dimension(85, 26) })
                 add(attachTraceButton.apply { preferredSize = Dimension(80, 26) })
-                // "Add History" is toggled visible/hidden by updateModeUI() per mode.
                 add(addHistoryCheckbox); add(planOnlyCheckbox); add(dryRunCheckbox); add(copyJsonButton); add(sendButton)
             }, BorderLayout.SOUTH)
         }
@@ -435,8 +456,7 @@ class ChatPanel(
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             border = JBUI.Borders.empty(2, 10, 2, 10); background = JBColor.background()
             add(JPanel(BorderLayout()).apply {
-                background = JBColor.background()
-                add(statusLabel, BorderLayout.WEST)
+                background = JBColor.background(); add(statusLabel, BorderLayout.WEST)
             })
             add(JPanel(BorderLayout()).apply {
                 background = JBColor.background()
@@ -466,23 +486,15 @@ class ChatPanel(
         }
 
         sendButton.addActionListener { sendMessage() }
-
-        // Delegates to controller which runs a background task and updates status via handleClipboardResult.
-        // Status and mode indicator are updated by handleClipboardResult → callbacks.setStatus() + updateModeIndicator().
-        copyJsonButton.addActionListener {
-            messageController.redoClipboardJson()
-        }
-
+        copyJsonButton.addActionListener { messageController.redoClipboardJson() }
         sessionsButton.addActionListener { onShowSessions() }
 
-        // Clipboard state is now per-session in the domain — no resetClipboard() on session switch.
         newChatButton.addActionListener {
             messageController.clearAttachmentsAfterSend()
             messageController.createNewSession()
             statusLabel.text = "New dialog"
         }
 
-        // Branching preserves the parent session's clipboard state.
         branchButton.addActionListener {
             val active = chatTreeService.getActiveSession()
             val title = JOptionPane.showInputDialog(
@@ -538,7 +550,6 @@ class ChatPanel(
                 return@addActionListener
             }
             if (newMode == modeManager.currentMode) return@addActionListener
-            // Read clipboard status from state snapshot — no direct service query
             if (modeManager.currentMode == InteractionMode.CLIPBOARD &&
                 buildState().clipboardStatus == ClipboardSessionStatus.AWAITING_PASTE
             ) {
@@ -549,7 +560,6 @@ class ChatPanel(
                 if (confirm != JOptionPane.YES_OPTION) {
                     syncComboBoxToMode(); return@addActionListener
                 }
-                // Pass the active session ID to reset() — required after STEP 4 refactor
                 val sessionId = chatTreeService.getActiveSession().id
                 service.clipboardService.reset(sessionId)
             }
@@ -578,7 +588,6 @@ class ChatPanel(
     private fun sendMessage() {
         val userInput = inputArea.text.trim()
         if (userInput.isBlank()) return
-        // Capture checkbox state BEFORE clearing — one-shot: auto-resets after each send.
         val addHistory = addHistoryCheckbox.isSelected
         inputArea.text = ""
         addHistoryCheckbox.isSelected = false
@@ -592,7 +601,7 @@ class ChatPanel(
     }
 
     /**
-     * Syncs the combo box selection to match modeManager.currentMode.
+     * Syncs the combo box selection to match [modeManager].currentMode.
      * Called after syncFromSettings to keep UI in sync without triggering the listener.
      */
     private fun syncComboBoxToMode() {
@@ -617,14 +626,11 @@ class ChatPanel(
                 sendButton.text = "Send"
                 dryRunCheckbox.isVisible = true
                 copyJsonButton.isVisible = false
-                // "Add History" is only meaningful in Clipboard mode.
                 addHistoryCheckbox.isVisible = false
             }
 
             InteractionMode.CLIPBOARD -> {
-                // Reveal "Add History" — only shown in Clipboard mode.
                 addHistoryCheckbox.isVisible = true
-                // Switch button label and indicator based on domain status snapshot
                 when (state.clipboardStatus) {
                     ClipboardSessionStatus.AWAITING_PASTE -> {
                         modeIndicator.text = "\u23F3 Paste response"
@@ -656,7 +662,6 @@ class ChatPanel(
                 sendButton.text = "Send"
                 dryRunCheckbox.isVisible = true
                 copyJsonButton.isVisible = false
-                // "Add History" is only meaningful in Clipboard mode.
                 addHistoryCheckbox.isVisible = false
             }
         }
@@ -702,7 +707,6 @@ class ChatPanel(
             if (committed) return; committed = true
             val newTitle = textField.text.trim()
             if (newTitle.isNotBlank() && newTitle != currentTitle) {
-                // Saving delegated to controller; onSessionRenamed callback updates breadcrumb via render()
                 messageController.renameSession(sessionId, newTitle)
                 statusLabel.text = "Renamed to \"$newTitle\""
             } else {
@@ -739,10 +743,13 @@ class ChatPanel(
             if (childCount > 0) "Delete \"${session.title}\"?\n$childCount branch(es) will be re-attached to parent."
             else "Delete \"${session.title}\"?"
         val confirm = JOptionPane.showConfirmDialog(
-            this, msg, "Delete Chat", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE
+            this,
+            msg,
+            "Delete Chat",
+            JOptionPane.YES_NO_OPTION,
+            JOptionPane.WARNING_MESSAGE
         )
         if (confirm != JOptionPane.YES_OPTION) return
-        // Clipboard state is per-session in the domain — no explicit reset needed on delete
         messageController.clearAttachmentsAfterSend()
         messageController.deleteCurrentSession(session.id)
         statusLabel.text = "Chat deleted"
@@ -772,43 +779,29 @@ class ChatPanel(
         val manager = ToolWindowManager.getInstance(project)
         maximizeButton.icon =
             if (manager.isMaximized(toolWindow)) AllIcons.General.CollapseComponent else AllIcons.General.ExpandComponent
-
         val isFloating = toolWindow.type == ToolWindowType.FLOATING || toolWindow.type == ToolWindowType.WINDOWED
         windowedButton.icon = AllIcons.Actions.MoveToWindow
         windowedButton.toolTipText = if (isFloating) "Dock Tool Window" else "Floating Mode"
     }
 
     /**
-     * Обновляет все UI-компоненты на основе переданного состояния.
-     * Единая точка обновления View — фундамент для MVP-паттерна.
+     * Updates all UI components based on the provided state snapshot.
+     * Single point of UI refresh — foundation for MVP pattern.
      *
-     * Важно: управление isEnabled инпута и кнопки НЕ выполняется здесь.
-     * Это делается через setInputEnabled(), вызываемый контроллером до и после фоновой задачи.
-     * render() только обновляет лейблы, индикаторы и видимость контролов.
+     * Note: input enable/disable is handled via [setInputEnabled] (called by the controller).
+     * render() only updates labels, indicators, and control visibility.
      */
     fun render(state: ChatPanelState) {
-        // Хлебные крошки / заголовок
         updateBreadcrumb()
-
-        // Индикатор режима и лейбл кнопки — читает clipboardStatus из снапшота, не из сервиса
         updateModeUI(state)
-
-        // Индикаторы прикреплений (trace / errors)
         updateIndicators()
-
-        // Токены текущей сессии
         updateTokenDisplay()
-
-        // Количество файлов контекста
         updateContextIndicator()
-
-        // Иконки тулбара (maximize / windowed)
         updateToolWindowIcons()
     }
 
     private fun buildState(): ChatPanelState {
         val session = chatTreeService.getActiveSession()
-        val clipboardStatus = session.clipboardStatus
         return ChatPanelState(
             currentSession = session,
             sessionPath = chatTreeService.getSessionPath(session.id),
@@ -817,23 +810,26 @@ class ChatPanel(
             attachedErrors = messageController.attachedErrors,
             contextFilesCount = chatTreeService.getGlobalContextFiles().size,
             tokenUsage = session.tokenUsage.takeIf { !it.isEmpty() },
-            clipboardStatus = clipboardStatus
+            clipboardStatus = session.clipboardStatus
         )
     }
+
     override fun onAttachmentsChanged(trace: String?, errors: String?) {
         render(buildState())
     }
+
     override fun onError(message: String) {
         setStatus(message)
     }
+
     override fun onSessionChanged(session: ChatSession?) {
-        // Delegate to loadCurrentSession which reads the active session via chatTreeService.
-        // The controller has already called setActiveSessionId before firing this callback.
         loadCurrentSession()
     }
+
     override fun onSessionRenamed(session: ChatSession) {
         render(buildState())
     }
+
     override fun onShowWelcome() {
         showWelcome()
     }

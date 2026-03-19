@@ -193,12 +193,8 @@ class ChatMessageController(
     /**
      * Re-generates and copies the clipboard JSON for the current active session.
      *
-     * Runs in a background task — identical to what Generate produces:
-     * re-gathers project files and rebuilds the full JSON payload via
-     * [ClipboardInteractionService.redoLastRequest].
-     *
-     * Does NOT add a new user message to history.
-     * Result is routed through [handleClipboardResult] — same as Generate.
+     * Runs in a background task — re-gathers project files and rebuilds the full JSON payload via
+     * [ClipboardInteractionService.redoLastRequest]. Does NOT add a new user message to history.
      */
     fun redoClipboardJson() {
         val session = chatTreeService.getActiveSession()
@@ -220,6 +216,7 @@ class ChatMessageController(
             chatTreeService.addChatTokens(updatedSession.id, result.chatInputTokens, result.chatOutputTokens)
 
         val failures = result.modifications.filterIsInstance<ModificationResult.Failure>()
+        val successes = result.modifications.filterIsInstance<ModificationResult.Success>()
 
         MaxVibesLogger.info(
             "Controller", "apiResult", mapOf(
@@ -236,7 +233,13 @@ class ChatMessageController(
         )
 
         val mainText = result.message
-        updatedSession = chatTreeService.addMessage(updatedSession.id, MessageRole.ASSISTANT, mainText)
+        // Persist applied modification paths so the clickable links survive session reload.
+        updatedSession = chatTreeService.addMessage(
+            updatedSession.id,
+            MessageRole.ASSISTANT,
+            mainText,
+            appliedModificationPaths = successes.map { it.affectedPath.toString() }
+        )
         callbacks.updateTokenDisplay()
 
         val tokenInfo = buildTokenInfo(
@@ -256,9 +259,7 @@ class ChatMessageController(
             callbacks.appendToChat("\uD83D\uDCAC Commit message set in IDE")
         }
 
-        if (wasPlanOnly) {
-            callbacks.setPlanOnlyMode(false)
-        }
+        if (wasPlanOnly) callbacks.setPlanOnlyMode(false)
 
         if (failures.isNotEmpty() && autoRetryCount < MAX_AUTO_RETRIES) {
             val ctx = lastApiContext
@@ -291,7 +292,14 @@ class ChatMessageController(
 
                 val assistantText = result.assistantMessage
                 if (!assistantText.isNullOrBlank()) {
-                    updatedSession = chatTreeService.addMessage(updatedSession.id, MessageRole.ASSISTANT, assistantText)
+                    // Persist freshFileNames as attachedFiles so the "Gathered files" footer survives reload.
+                    // No modifications at this stage (LLM just requested files, hasn't applied changes yet).
+                    updatedSession = chatTreeService.addMessage(
+                        updatedSession.id,
+                        MessageRole.ASSISTANT,
+                        assistantText,
+                        attachedFiles = result.freshFileNames
+                    )
                 }
                 callbacks.updateTokenDisplay()
 
@@ -321,6 +329,7 @@ class ChatMessageController(
 
             is ClipboardStepResult.Completed -> {
                 val failures = result.modifications.filterIsInstance<ModificationResult.Failure>()
+                val successes = result.modifications.filterIsInstance<ModificationResult.Success>()
                 MaxVibesLogger.info(
                     "Controller", "clipboard completed", mapOf(
                         "success" to result.success,
@@ -334,7 +343,13 @@ class ChatMessageController(
 
                 var updatedSession = chatTreeService.addChatTokens(session.id, 0, result.outputTokens)
                 val text = result.message.trim().ifBlank { "Done." }
-                updatedSession = chatTreeService.addMessage(updatedSession.id, MessageRole.ASSISTANT, text)
+                // Persist applied modification paths so the clickable links survive session reload.
+                updatedSession = chatTreeService.addMessage(
+                    updatedSession.id,
+                    MessageRole.ASSISTANT,
+                    text,
+                    appliedModificationPaths = successes.map { it.affectedPath.toString() }
+                )
 
                 val tokenInfo = if (result.outputTokens > 0) "\u2193${fmt(result.outputTokens)}" else null
 
@@ -370,7 +385,6 @@ class ChatMessageController(
                     callbacks.setStatus("\u26A0\uFE0F ${failures.size} failed \u2014 retry prompt copied, paste LLM response")
                 } else {
                     callbacks.updateTokenDisplay()
-
                     callbacks.addAssistantMessageBubble(
                         callbacks.formatMarkdown(text),
                         tokenInfo,
@@ -382,10 +396,8 @@ class ChatMessageController(
                         callbacks.setCommitMessage(msg)
                         callbacks.appendToChat("\uD83D\uDCAC Commit message set in IDE")
                     }
-
                     callbacks.setInputEnabled(true)
                     callbacks.updateModeIndicator()
-                    // Show "Session active" hint when clipboard session is still live (not IDLE)
                     val isSessionActive = service.clipboardService.status(session.id) != ClipboardSessionStatus.IDLE
                     val hint = if (isSessionActive) " \u2022 Session active" else ""
                     callbacks.setStatus((if (result.success) "Ready" else "Errors") + hint)
@@ -394,23 +406,15 @@ class ChatMessageController(
             }
 
             is ClipboardStepResult.ParseError -> {
-                // Session remains in AWAITING_PASTE — user must paste the corrected LLM response.
                 MaxVibesLogger.warn(
                     "Controller", "clipboard parse error", data = mapOf(
                         "reason" to result.errorDetail.take(80),
                         "clipboardCopied" to result.clipboardCopySucceeded
                     )
                 )
-
-                // Record in session history so the error is visible after session reload
                 chatTreeService.addMessage(session.id, MessageRole.SYSTEM, "Parse error: ${result.errorDetail}")
-
                 callbacks.appendToChat("\u26A0\uFE0F ${result.humanMessage}")
-                if (result.errorDetail.isNotBlank()) {
-                    callbacks.appendToChat("Details: ${result.errorDetail}")
-                }
-
-                // Input stays enabled — the session is still AWAITING_PASTE, user needs to paste again
+                if (result.errorDetail.isNotBlank()) callbacks.appendToChat("Details: ${result.errorDetail}")
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
                 callbacks.setStatus("\u26A0\uFE0F Parse error \u2014 paste corrected LLM response")
@@ -556,18 +560,22 @@ Check:
     }
 
     private fun fmt(n: Int) = if (n >= 1000) "${n / 1000}k" else n.toString()
+
     fun attachTrace(traceContent: String) {
         attachedTrace = traceContent
         callbacks.onAttachmentsChanged(attachedTrace, attachedErrors)
     }
+
     fun clearTrace() {
         attachedTrace = null
         callbacks.onAttachmentsChanged(attachedTrace, attachedErrors)
     }
+
     fun clearErrors() {
         attachedErrors = null
         callbacks.onAttachmentsChanged(attachedTrace, attachedErrors)
     }
+
     fun fetchIdeErrors() {
         callbacks.setStatus("Fetching IDE errors...")
         object : Task.Backgroundable(project, "Fetching IDE errors", false) {
@@ -587,58 +595,55 @@ Check:
                                 }
                             }
 
-                            is Result.Failure -> {
-                                callbacks.onError("Failed to fetch IDE errors: ${result.error}")
-                            }
+                            is Result.Failure -> callbacks.onError("Failed to fetch IDE errors: ${result.error}")
                         }
                     }
                 }
             }
         }.queue()
     }
+
     fun clearAttachmentsAfterSend() {
         attachedTrace = null
         attachedErrors = null
         callbacks.onAttachmentsChanged(null, null)
     }
+
     fun createNewSession() {
         val newSession = chatTreeService.createNewSession()
         callbacks.onSessionChanged(newSession)
     }
+
     fun deleteCurrentSession(sessionId: String) {
         chatTreeService.deleteSession(sessionId)
-        // deleteSession() internally sets the next active session (parent / sibling / first remaining)
         val next = chatTreeService.getActiveSession()
         callbacks.onSessionChanged(next)
     }
+
     fun renameSession(sessionId: String, newTitle: String) {
         val updated = chatTreeService.renameSession(sessionId, newTitle)
-        if (updated != null) {
-            callbacks.onSessionRenamed(updated)
-        }
+        if (updated != null) callbacks.onSessionRenamed(updated)
     }
+
     fun branchSession(parentSessionId: String, title: String) {
         val newSession = chatTreeService.createBranch(parentSessionId, title)
-        if (newSession != null) {
-            callbacks.onSessionChanged(newSession)
-        }
+        if (newSession != null) callbacks.onSessionChanged(newSession)
     }
+
     fun loadSession(sessionId: String) {
         chatTreeService.setActiveSession(sessionId)
         val session = chatTreeService.getSessionById(sessionId)
-        if (session != null) {
-            callbacks.onSessionChanged(session)
-        }
+        if (session != null) callbacks.onSessionChanged(session)
     }
 
     /**
      * Dispatches a user message to the appropriate mode handler.
      *
-     * @param userInput raw text from the input field
-     * @param isPlanOnly whether plan-only mode is active
-     * @param isDryRun whether dry-run mode is active (API/CheapAPI only)
-     * @param mode current interaction mode
-     * @param addHistory when true, previously gathered file paths are included in the
+     * @param userInput   raw text from the input field
+     * @param isPlanOnly  whether plan-only mode is active
+     * @param isDryRun    whether dry-run mode is active (API/CheapAPI only)
+     * @param mode        current interaction mode
+     * @param addHistory  when true, previously gathered file paths are included in the
      *   Clipboard request so a fresh LLM chat can re-request context it needs
      */
     fun sendMessage(
@@ -667,6 +672,7 @@ Check:
             InteractionMode.CHEAP_API -> dispatchCheapApiMessage(userInput, trace, errs, isPlanOnly, isDryRun)
         }
     }
+
     private fun dispatchApiMessage(msg: String, trace: String?, errs: String?, isPlanOnly: Boolean, isDryRun: Boolean) {
         var session = chatTreeService.getActiveSession()
         val fullTask = buildString {
@@ -686,14 +692,7 @@ Check:
     /**
      * Routes a Clipboard-mode message via [ClipboardInteractionService.handleUserInput].
      *
-     * The service handles state-based routing (IDLE / SESSION_ACTIVE / AWAITING_PASTE) internally,
-     * so UI no longer needs to inspect service flags directly.
-     *
-     * UI responsibilities:
-     * - Show a user bubble for new tasks and continuations (not for paste responses)
-     * - Record message in domain session history (not for paste — that is the LLM's reply)
-     * - Append a paste icon on the last bubble when processing a pasted LLM response
-     * - Disable input controls and show a context-aware status label
+     * The service handles state-based routing (IDLE / SESSION_ACTIVE / AWAITING_PASTE) internally.
      *
      * @param addHistory when true, previously gathered file paths are forwarded to the service
      *   so they appear in the Clipboard JSON payload
@@ -710,18 +709,17 @@ Check:
         val globalContextFiles = chatTreeService.getGlobalContextFiles()
         val currentStatus = session.clipboardStatus
 
-        // Capture history BEFORE mutating session (passed to startTask / continueDialog)
+        // Capture history BEFORE mutating session.
         val history = session.messages.map { it.toChatMessageDTO() }
 
-        // UI update: differentiate between pasting an LLM response and user-initiated messages
         when (currentStatus) {
             ClipboardSessionStatus.AWAITING_PASTE -> {
-                // Pasting an LLM response — decorate the last bubble with a paste icon, no user bubble
+                // Pasting an LLM response — decorate the last bubble with a paste icon, no user bubble.
                 callbacks.appendIconToLastBubble("\uD83D\uDCE5")
             }
 
             else -> {
-                // New task or continuation — record message in domain session and show user bubble
+                // New task or continuation — record message and show user bubble.
                 val fullMsg = buildString {
                     append(userInput)
                     if (!trace.isNullOrBlank()) append("\n[trace: ${trace.lines().size} lines]")
@@ -733,7 +731,6 @@ Check:
             }
         }
 
-        // Disable input and show a context-aware status label for the operation type
         callbacks.setInputEnabled(false)
         val statusText = when (currentStatus) {
             ClipboardSessionStatus.AWAITING_PASTE -> "Processing response..."
@@ -742,7 +739,6 @@ Check:
         }
         callbacks.setStatus(statusText)
 
-        // Single unified service call — routing logic lives inside handleUserInput()
         val capturedSession = session
         runClipboardBg(statusText, capturedSession) {
             cs.handleUserInput(
@@ -757,6 +753,7 @@ Check:
             )
         }
     }
+
     private fun dispatchCheapApiMessage(
         msg: String,
         trace: String?,
