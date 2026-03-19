@@ -147,7 +147,6 @@ class PsiCodeViewRenderer {
         }
 
         // Expression body: fun foo() = expr  →  fun foo() = ...
-        // bodyExpression is the part *after* the '=' sign
         val exprBody = fn.bodyExpression
         if (exprBody != null) {
             val rangeStart = exprBody.textRangeInParent.startOffset

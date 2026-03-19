@@ -11,20 +11,27 @@ import com.maxvibes.adapter.psi.kotlin.KotlinElementFactory
 import com.maxvibes.adapter.psi.mapper.PsiToDomainMapper
 import com.maxvibes.adapter.psi.operation.PsiModifier
 import com.maxvibes.adapter.psi.operation.PsiNavigator
+import com.maxvibes.adapter.psi.renderer.PsiCodeViewRenderer
 import com.maxvibes.application.port.output.CodeRepository
 import com.maxvibes.application.port.output.CodeRepositoryError
 import com.maxvibes.domain.model.code.CodeElement
+import com.maxvibes.domain.model.code.CodeGranularity
+import com.maxvibes.domain.model.code.CodeView
+import com.maxvibes.domain.model.code.CodeViewRequest
 import com.maxvibes.domain.model.code.ElementKind
 import com.maxvibes.domain.model.code.ElementPath
 import com.maxvibes.domain.model.modification.*
 import com.maxvibes.shared.result.Result
+import org.jetbrains.kotlin.psi.KtClass
 import org.jetbrains.kotlin.psi.KtFile
+import org.jetbrains.kotlin.psi.KtNamedDeclaration
 import java.io.File
-import com.maxvibes.domain.model.code.CodeView
-import com.maxvibes.domain.model.code.CodeViewRequest
 
 /**
- * Реализация CodeRepository через IntelliJ PSI
+ * Implementation of [CodeRepository] backed by the IntelliJ PSI API.
+ *
+ * Handles file/element reads, structural modifications (create / replace / delete),
+ * and granularity-aware code view rendering via [PsiCodeViewRenderer].
  */
 class PsiCodeRepository(private val project: Project) : CodeRepository {
 
@@ -32,6 +39,9 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
     private val navigator = PsiNavigator(project)
     private val elementFactory = KotlinElementFactory(project)
     private val modifier = PsiModifier(project, elementFactory)
+
+    /** Renders PSI elements into prompt-ready text at the requested granularity level. */
+    private val renderer = PsiCodeViewRenderer()
 
     override suspend fun getFileContent(path: ElementPath): Result<String, CodeRepositoryError> {
         return runReadAction {
@@ -71,7 +81,6 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
                 ?: return@runReadAction Result.Failure(CodeRepositoryError.NotFound(basePath.value))
 
             val children = navigator.getChildren(rootElement)
-            val projectBasePath = project.basePath ?: ""
 
             val mapped = children.mapNotNull { child ->
                 mapper.mapDeclaration(child, basePath)
@@ -119,6 +128,59 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
             } catch (e: Exception) {
                 Result.Failure(CodeRepositoryError.ValidationError(e.message ?: "Parse error"))
             }
+        }
+    }
+
+    /**
+     * Returns file content rendered at the requested granularity level.
+     *
+     * All PSI reads are performed inside a read action. For [CodeGranularity.ELEMENT]
+     * the [CodeViewRequest.elementPath] segment string is appended to the file path
+     * to build a full [ElementPath] that [PsiNavigator.findElement] can resolve.
+     *
+     * @param request parameters: file path, granularity, and optional element path
+     * @return [CodeView] with prompt-ready text
+     * @throws IllegalStateException if the file, class, or element cannot be found
+     */
+    override suspend fun getCodeView(request: CodeViewRequest): CodeView {
+        return runReadAction {
+            val content = when (request.granularity) {
+
+                // Full file — return raw PSI text
+                CodeGranularity.FULL -> {
+                    val psiFile = navigator.findFile(ElementPath.file(request.filePath))
+                        ?: error("File not found: ${request.filePath}")
+                    psiFile.text
+                }
+
+                // All declarations with stub bodies — no implementation noise
+                CodeGranularity.SIGNATURES -> {
+                    val ktFile = navigator.findFile(ElementPath.file(request.filePath)) as? KtFile
+                        ?: error("File not found: ${request.filePath}")
+                    renderer.renderSignatures(ktFile)
+                }
+
+                // Compact class outline: header, properties, method signatures
+                CodeGranularity.OUTLINE -> {
+                    val ktFile = navigator.findFile(ElementPath.file(request.filePath)) as? KtFile
+                        ?: error("File not found: ${request.filePath}")
+                    val ktClass = ktFile.declarations.filterIsInstance<KtClass>().firstOrNull()
+                        ?: error("No class found in: ${request.filePath}")
+                    renderer.renderOutline(ktClass)
+                }
+
+                // Single element resolved by its PSI path segments
+                CodeGranularity.ELEMENT -> {
+                    val elemPathStr = request.elementPath
+                        ?: error("elementPath is required for ELEMENT granularity")
+                    // Combine file path with element segments into a full ElementPath
+                    val fullPath = ElementPath("file:${request.filePath}/$elemPathStr")
+                    val element = navigator.findElement(fullPath)
+                        ?: error("Element not found: $elemPathStr in ${request.filePath}")
+                    renderer.renderElement(element as KtNamedDeclaration)
+                }
+            }
+            CodeView(request.filePath, request.granularity, content)
         }
     }
 
@@ -179,10 +241,7 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
             val app = ApplicationManager.getApplication()
             val action = {
                 WriteCommandAction.runWriteCommandAction(project) {
-                    modifier.replaceFileContent(
-                        psiFile,
-                        mod.newContent
-                    )
+                    modifier.replaceFileContent(psiFile, mod.newContent)
                 }
             }
             if (app.isDispatchThread) action() else app.invokeAndWait(action)
@@ -426,24 +485,5 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
         }
 
         return currentDir
-    }
-
-    /**
-     * Stub implementation of [CodeRepository.getCodeView].
-     *
-     * Returns the full file content for any granularity level — functionally correct
-     * but not yet token-optimised. Will be replaced by the real renderer in STEP 5
-     * (PsiCodeViewRenderer).
-     *
-     * TODO: replace with granularity-aware rendering in STEP 5 (CodeGranularity feature)
-     */
-    override suspend fun getCodeView(request: CodeViewRequest): CodeView {
-        // Wrap the plain String path into ElementPath required by getFileContent.
-        val result = getFileContent(ElementPath(request.filePath))
-        val content = when (result) {
-            is Result.Success -> result.value
-            is Result.Failure -> ""
-        }
-        return CodeView(request.filePath, request.granularity, content)
     }
 }
