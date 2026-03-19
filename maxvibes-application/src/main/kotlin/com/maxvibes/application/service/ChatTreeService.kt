@@ -110,13 +110,19 @@ class ChatTreeService(private val repository: ChatSessionRepository) {
     /**
      * Appends a new message to the session and persists the updated session.
      *
-     * @param sessionId                Target session ID.
-     * @param role                     Message role (USER / ASSISTANT / SYSTEM).
-     * @param content                  Message text.
-     * @param requestedFiles           File paths requested BY the LLM (ASSISTANT messages only).
-     * @param attachedFiles            File paths sent TO the LLM this round (clipboard ASSISTANT messages only).
-     * @param appliedModificationPaths String paths of successful code modifications (ASSISTANT messages only).
-     *   Persisted so the clickable modification links survive session reload.
+     * All optional fields default to empty/null so existing callers (USER messages,
+     * SYSTEM messages, auto-retry) do not need to be changed.
+     *
+     * @param sessionId                  Target session ID.
+     * @param role                       Message role (USER / ASSISTANT / SYSTEM).
+     * @param content                    Message text.
+     * @param requestedFiles             File paths requested BY the LLM in this ASSISTANT message.
+     * @param attachedFiles              File paths gathered and sent TO the LLM in this round
+     *   (clipboard mode: files included in the generated JSON).
+     * @param appliedModificationPaths   String-encoded [ElementPath] for each successfully
+     *   applied modification — enables bubble footer reconstruction after IDE restart.
+     * @param reasoning                  Optional LLM reasoning / thinking block.
+     * @param tokenInfo                  Human-readable token summary line for the bubble footer.
      * @return Updated [ChatSession] after the message was appended.
      */
     fun addMessage(
@@ -125,7 +131,9 @@ class ChatTreeService(private val repository: ChatSessionRepository) {
         content: String,
         requestedFiles: List<String> = emptyList(),
         attachedFiles: List<String> = emptyList(),
-        appliedModificationPaths: List<String> = emptyList()
+        appliedModificationPaths: List<String> = emptyList(),
+        reasoning: String? = null,
+        tokenInfo: String? = null
     ): ChatSession {
         val session = repository.getSessionById(sessionId)
             ?: throw IllegalArgumentException("Session not found: $sessionId")
@@ -134,7 +142,9 @@ class ChatTreeService(private val repository: ChatSessionRepository) {
             content = content,
             requestedFiles = requestedFiles,
             attachedFiles = attachedFiles,
-            appliedModificationPaths = appliedModificationPaths
+            appliedModificationPaths = appliedModificationPaths,
+            reasoning = reasoning,
+            tokenInfo = tokenInfo
         )
         val updated = session.withMessage(message)
         repository.saveSession(updated)

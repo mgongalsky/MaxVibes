@@ -14,11 +14,21 @@ import com.maxvibes.domain.model.chat.ChatMessage
 import com.maxvibes.domain.model.chat.ChatSession
 import com.maxvibes.domain.model.chat.MessageRole
 import com.maxvibes.domain.model.chat.TokenUsage
+import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 import com.maxvibes.plugin.service.MaxVibesLogger
 import java.time.Instant
 import java.util.UUID
-import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 
+/**
+ * XML DTO for a single chat message.
+ *
+ * All collection fields use [XCollection] with [XCollection.Style.v2] so they are stored
+ * as nested XML elements. Fields absent in older XML files default to empty — this ensures
+ * backward compatibility when new fields are added.
+ *
+ * Nullable string fields ([reasoning], [tokenInfo]) are stored as XML tags/attributes;
+ * if their value is null they are omitted from XML (IntelliJ serializer behaviour).
+ */
 @Tag("message")
 class XmlChatMessage {
     @Attribute("id")
@@ -33,28 +43,28 @@ class XmlChatMessage {
     @Attribute("timestamp")
     var timestamp: Long = Instant.now().toEpochMilli()
 
-    /**
-     * File paths requested BY the LLM in this ASSISTANT message ("please give me these next").
-     * Absent in old XML reads as empty list — backward compatible.
-     */
+    /** File paths requested by the LLM. Absent in old XML reads as empty list. */
     @XCollection(style = XCollection.Style.v2, elementTypes = [String::class])
     var requestedFiles: MutableList<String> = mutableListOf()
 
-    /**
-     * File paths gathered and sent TO the LLM in this round (the "freshFiles" payload).
-     * Persisted so the "Gathered files" bubble footer survives session reload.
-     * Absent in old XML reads as empty list — backward compatible.
-     */
+    /** File paths sent TO the LLM (clipboard gathered files). */
     @XCollection(style = XCollection.Style.v2, elementTypes = [String::class])
     var attachedFiles: MutableList<String> = mutableListOf()
 
-    /**
-     * String representations of ElementPath for each successful code modification.
-     * Persisted so the clickable modification links in the bubble footer survive session reload.
-     * Absent in old XML reads as empty list — backward compatible.
-     */
+    /** String-encoded ElementPath values for each successfully applied modification. */
     @XCollection(style = XCollection.Style.v2, elementTypes = [String::class])
     var appliedModificationPaths: MutableList<String> = mutableListOf()
+
+    /**
+     * LLM reasoning / thinking block. Stored as a nested tag (not attribute) because
+     * reasoning text can be very long — XML attributes are not suited for multi-line text.
+     */
+    @Tag("reasoning")
+    var reasoning: String? = null
+
+    /** Short token-info summary line. Fits comfortably in an XML attribute. */
+    @Attribute("tokenInfo")
+    var tokenInfo: String? = null
 
     constructor()
 
@@ -65,7 +75,9 @@ class XmlChatMessage {
         timestamp: Long,
         requestedFiles: List<String> = emptyList(),
         attachedFiles: List<String> = emptyList(),
-        appliedModificationPaths: List<String> = emptyList()
+        appliedModificationPaths: List<String> = emptyList(),
+        reasoning: String? = null,
+        tokenInfo: String? = null
     ) {
         this.id = id
         this.role = role
@@ -74,6 +86,8 @@ class XmlChatMessage {
         this.requestedFiles = requestedFiles.toMutableList()
         this.attachedFiles = attachedFiles.toMutableList()
         this.appliedModificationPaths = appliedModificationPaths.toMutableList()
+        this.reasoning = reasoning
+        this.tokenInfo = tokenInfo
     }
 
     /** Converts this XML DTO to the domain [ChatMessage]. */
@@ -84,7 +98,9 @@ class XmlChatMessage {
         timestamp = timestamp,
         requestedFiles = requestedFiles.toList(),
         attachedFiles = attachedFiles.toList(),
-        appliedModificationPaths = appliedModificationPaths.toList()
+        appliedModificationPaths = appliedModificationPaths.toList(),
+        reasoning = reasoning,
+        tokenInfo = tokenInfo
     )
 
     companion object {
@@ -96,7 +112,9 @@ class XmlChatMessage {
             timestamp = msg.timestamp,
             requestedFiles = msg.requestedFiles,
             attachedFiles = msg.attachedFiles,
-            appliedModificationPaths = msg.appliedModificationPaths
+            appliedModificationPaths = msg.appliedModificationPaths,
+            reasoning = msg.reasoning,
+            tokenInfo = msg.tokenInfo
         )
     }
 }
@@ -136,8 +154,10 @@ class XmlChatSession {
     @Attribute("chatOutputTokens")
     var chatOutputTokens: Int = 0
 
-    /** Статус clipboard-сессии, сохраняется как строка для надёжной XML-сериализации.
-     *  Дефолт "IDLE" обеспечивает backward compatibility со старыми XML без этого поля. */
+    /**
+     * Clipboard session status serialized as a string enum name.
+     * Default "IDLE" ensures backward compat with XML files written before this field existed.
+     */
     @Attribute("clipboardStatus")
     var clipboardStatus: String = "IDLE"
 
@@ -150,9 +170,11 @@ class XmlChatSession {
         chatOutput = chatOutputTokens
     )
 
-    /** Конвертирует XML-объект в доменную модель ChatSession.
-     *  clipboardStatus десериализуется с защитным fallback на IDLE —
-     *  на случай если в XML окажется устаревшее/неизвестное значение. */
+    /**
+     * Converts this XML DTO to the domain [ChatSession].
+     * [clipboardStatus] is deserialized with a protective fallback to IDLE in case an
+     * unknown/stale value appears in old XML files.
+     */
     fun toDomain(): ChatSession = ChatSession(
         id = id,
         title = title,
@@ -165,14 +187,12 @@ class XmlChatSession {
         clipboardStatus = try {
             ClipboardSessionStatus.valueOf(clipboardStatus)
         } catch (_: IllegalArgumentException) {
-            // Защита от неизвестных значений из старых версий плагина
             ClipboardSessionStatus.IDLE
         }
     )
 
     companion object {
-        /** Создаёт XML-объект из доменной модели ChatSession для сериализации.
-         *  clipboardStatus сохраняется как строковое имя enum-константы. */
+        /** Creates an XML DTO from a domain [ChatSession] for serialization. */
         fun fromDomain(session: ChatSession): XmlChatSession {
             val xml = XmlChatSession()
             xml.id = session.id
@@ -186,7 +206,6 @@ class XmlChatSession {
             xml.chatOutputTokens = session.tokenUsage.chatOutput
             xml.createdAt = session.createdAt
             xml.updatedAt = session.updatedAt
-            // Сериализуем статус как строку — IntelliJ XML-сериализатор работает с примитивами надёжнее
             xml.clipboardStatus = session.clipboardStatus.name
             return xml
         }
@@ -204,9 +223,11 @@ class ChatHistoryState {
 }
 
 /**
- * Pure persistence adapter для хранения истории чатов (per-project).
- * Реализует ChatSessionRepository — порт application layer.
- * Вся бизнес-логика дерева сессий находится в ChatTreeService.
+ * Pure persistence adapter for per-project chat history storage.
+ *
+ * Implements [ChatSessionRepository] — the application-layer port.
+ * Manages only XML serialization via IntelliJ [PersistentStateComponent];
+ * all business logic lives in [com.maxvibes.application.service.ChatTreeService].
  */
 @Service(Service.Level.PROJECT)
 @State(
@@ -231,13 +252,10 @@ class ChatHistoryService : PersistentStateComponent<ChatHistoryState>, ChatSessi
         )
     }
 
-    override fun getAllSessions(): List<ChatSession> {
-        return state.sessions.map { it.toDomain() }
-    }
+    override fun getAllSessions(): List<ChatSession> = state.sessions.map { it.toDomain() }
 
-    override fun getSessionById(id: String): ChatSession? {
-        return state.sessions.find { it.id == id }?.toDomain()
-    }
+    override fun getSessionById(id: String): ChatSession? =
+        state.sessions.find { it.id == id }?.toDomain()
 
     override fun getActiveSessionId(): String? = state.activeSessionId
 
@@ -259,37 +277,31 @@ class ChatHistoryService : PersistentStateComponent<ChatHistoryState>, ChatSessi
         }
     }
 
-    override fun getGlobalContextFiles(): List<String> {
-        return state.globalContextFiles.toList()
-    }
+    override fun getGlobalContextFiles(): List<String> = state.globalContextFiles.toList()
 
     override fun setGlobalContextFiles(files: List<String>) {
         state.globalContextFiles = files.distinct().toMutableList()
     }
 
+    // ── Depth recalculation ────────────────────────────────────────────────────
+
     private fun recalculateChildDepths(sessionId: String) {
         val parent = state.sessions.find { it.id == sessionId } ?: return
-        val children = state.sessions.filter { it.parentId == sessionId }
-        for (child in children) {
+        state.sessions.filter { it.parentId == sessionId }.forEach { child ->
             child.depth = parent.depth + 1
             recalculateChildDepths(child.id)
         }
     }
 
     private fun recalculateDepths() {
-        for (session in state.sessions) {
-            if (session.parentId == null) {
-                session.depth = 0
-            }
-        }
-        for (session in state.sessions.filter { it.parentId == null }) {
-            recalculateChildDepths(session.id)
+        state.sessions.filter { it.parentId == null }.forEach { root ->
+            root.depth = 0
+            recalculateChildDepths(root.id)
         }
     }
 
     companion object {
-        fun getInstance(project: Project): ChatHistoryService {
-            return project.getService(ChatHistoryService::class.java)
-        }
+        fun getInstance(project: Project): ChatHistoryService =
+            project.getService(ChatHistoryService::class.java)
     }
 }

@@ -216,7 +216,6 @@ class ChatMessageController(
             chatTreeService.addChatTokens(updatedSession.id, result.chatInputTokens, result.chatOutputTokens)
 
         val failures = result.modifications.filterIsInstance<ModificationResult.Failure>()
-        val successes = result.modifications.filterIsInstance<ModificationResult.Success>()
 
         MaxVibesLogger.info(
             "Controller", "apiResult", mapOf(
@@ -233,19 +232,25 @@ class ChatMessageController(
         )
 
         val mainText = result.message
-        // Persist applied modification paths so the clickable links survive session reload.
-        updatedSession = chatTreeService.addMessage(
-            updatedSession.id,
-            MessageRole.ASSISTANT,
-            mainText,
-            appliedModificationPaths = successes.map { it.affectedPath.toString() }
-        )
-        callbacks.updateTokenDisplay()
 
+        // Build token info and collect applied mod paths BEFORE persisting the message
+        // so the bubble footer can be reconstructed identically after IDE restart.
         val tokenInfo = buildTokenInfo(
             result.planningInputTokens, result.planningOutputTokens,
             result.chatInputTokens, result.chatOutputTokens
         )
+        val appliedPaths = result.modifications
+            .filterIsInstance<ModificationResult.Success>()
+            .map { it.affectedPath.toString() }
+
+        updatedSession = chatTreeService.addMessage(
+            updatedSession.id, MessageRole.ASSISTANT, mainText,
+            appliedModificationPaths = appliedPaths,
+            tokenInfo = tokenInfo
+            // reasoning: API mode doesn't expose a reasoning field yet — left null
+        )
+        callbacks.updateTokenDisplay()
+
         callbacks.addAssistantMessageBubble(
             callbacks.formatMarkdown(mainText),
             tokenInfo,
@@ -259,7 +264,9 @@ class ChatMessageController(
             callbacks.appendToChat("\uD83D\uDCAC Commit message set in IDE")
         }
 
-        if (wasPlanOnly) callbacks.setPlanOnlyMode(false)
+        if (wasPlanOnly) {
+            callbacks.setPlanOnlyMode(false)
+        }
 
         if (failures.isNotEmpty() && autoRetryCount < MAX_AUTO_RETRIES) {
             val ctx = lastApiContext
@@ -291,25 +298,29 @@ class ChatMessageController(
                 var updatedSession = chatTreeService.addChatTokens(session.id, result.estimatedInputTokens, 0)
 
                 val assistantText = result.assistantMessage
+
+                // Build tokenInfo before persisting so it survives IDE restart.
+                val tokenInfo: String? = if (!assistantText.isNullOrBlank()) {
+                    val parts = mutableListOf<String>()
+                    if (result.estimatedInputTokens > 0) parts += "~${fmt(result.estimatedInputTokens)} tokens"
+                    if (result.freshFileNames.isNotEmpty()) parts += "${result.freshFileNames.size} files"
+                    parts += result.phase.name.lowercase()
+                    parts.joinToString("  \u00B7  ")
+                } else null
+
                 if (!assistantText.isNullOrBlank()) {
-                    // Persist freshFileNames as attachedFiles so the "Gathered files" footer survives reload.
-                    // No modifications at this stage (LLM just requested files, hasn't applied changes yet).
+                    // Persist attachedFiles, tokenInfo, and reasoning so the bubble
+                    // footer is reconstructed identically after IDE restart.
                     updatedSession = chatTreeService.addMessage(
-                        updatedSession.id,
-                        MessageRole.ASSISTANT,
-                        assistantText,
-                        attachedFiles = result.freshFileNames
+                        updatedSession.id, MessageRole.ASSISTANT, assistantText,
+                        attachedFiles = result.freshFileNames,
+                        tokenInfo = tokenInfo,
+                        reasoning = result.llmReasoning
                     )
                 }
                 callbacks.updateTokenDisplay()
 
                 if (!assistantText.isNullOrBlank()) {
-                    val tokenSummaryParts = mutableListOf<String>()
-                    if (result.estimatedInputTokens > 0) tokenSummaryParts += "~${fmt(result.estimatedInputTokens)} tokens"
-                    if (result.freshFileNames.isNotEmpty()) tokenSummaryParts += "${result.freshFileNames.size} files"
-                    tokenSummaryParts += result.phase.name.lowercase()
-                    val tokenInfo = tokenSummaryParts.joinToString("  \u00B7  ")
-
                     callbacks.addAssistantMessageBubble(
                         callbacks.formatMarkdown(assistantText),
                         tokenInfo,
@@ -329,7 +340,6 @@ class ChatMessageController(
 
             is ClipboardStepResult.Completed -> {
                 val failures = result.modifications.filterIsInstance<ModificationResult.Failure>()
-                val successes = result.modifications.filterIsInstance<ModificationResult.Success>()
                 MaxVibesLogger.info(
                     "Controller", "clipboard completed", mapOf(
                         "success" to result.success,
@@ -343,15 +353,20 @@ class ChatMessageController(
 
                 var updatedSession = chatTreeService.addChatTokens(session.id, 0, result.outputTokens)
                 val text = result.message.trim().ifBlank { "Done." }
-                // Persist applied modification paths so the clickable links survive session reload.
-                updatedSession = chatTreeService.addMessage(
-                    updatedSession.id,
-                    MessageRole.ASSISTANT,
-                    text,
-                    appliedModificationPaths = successes.map { it.affectedPath.toString() }
-                )
-
                 val tokenInfo = if (result.outputTokens > 0) "\u2193${fmt(result.outputTokens)}" else null
+
+                // Collect applied mod paths for footer reconstruction after IDE restart.
+                val appliedPaths = result.modifications
+                    .filterIsInstance<ModificationResult.Success>()
+                    .map { it.affectedPath.toString() }
+
+                // Persist full bubble metadata with the ASSISTANT message.
+                updatedSession = chatTreeService.addMessage(
+                    updatedSession.id, MessageRole.ASSISTANT, text,
+                    appliedModificationPaths = appliedPaths,
+                    tokenInfo = tokenInfo,
+                    reasoning = result.llmReasoning
+                )
 
                 if (failures.isNotEmpty()) {
                     val errorSummary = buildErrorSummary(failures)
@@ -385,6 +400,7 @@ class ChatMessageController(
                     callbacks.setStatus("\u26A0\uFE0F ${failures.size} failed \u2014 retry prompt copied, paste LLM response")
                 } else {
                     callbacks.updateTokenDisplay()
+
                     callbacks.addAssistantMessageBubble(
                         callbacks.formatMarkdown(text),
                         tokenInfo,
@@ -396,6 +412,7 @@ class ChatMessageController(
                         callbacks.setCommitMessage(msg)
                         callbacks.appendToChat("\uD83D\uDCAC Commit message set in IDE")
                     }
+
                     callbacks.setInputEnabled(true)
                     callbacks.updateModeIndicator()
                     val isSessionActive = service.clipboardService.status(session.id) != ClipboardSessionStatus.IDLE
@@ -414,7 +431,9 @@ class ChatMessageController(
                 )
                 chatTreeService.addMessage(session.id, MessageRole.SYSTEM, "Parse error: ${result.errorDetail}")
                 callbacks.appendToChat("\u26A0\uFE0F ${result.humanMessage}")
-                if (result.errorDetail.isNotBlank()) callbacks.appendToChat("Details: ${result.errorDetail}")
+                if (result.errorDetail.isNotBlank()) {
+                    callbacks.appendToChat("Details: ${result.errorDetail}")
+                }
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
                 callbacks.setStatus("\u26A0\uFE0F Parse error \u2014 paste corrected LLM response")

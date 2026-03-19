@@ -328,14 +328,6 @@ class ChatPanel(
         updateBreadcrumb(); updateModeIndicator(); updateContextIndicator(); updateToolWindowIcons()
     }
 
-    /**
-     * Loads (or reloads) the active session into the conversation panel.
-     *
-     * For ASSISTANT messages, persisted [DisplayMessage.appliedModificationPaths] are reconstructed
-     * into [ModificationResult.Success] objects using a stub [Modification.ReplaceElement] so the
-     * clickable modification links in the bubble footer are fully restored after session reload.
-     * The stub modification is never applied — it exists only to satisfy the sealed interface contract.
-     */
     fun loadCurrentSession() {
         val session = chatTreeService.getActiveSession()
         conversationPanel.clearMessages()
@@ -352,28 +344,39 @@ class ChatPanel(
                 conversationPanel.addSystemBubble("\u2514 Branch of: $chain")
             }
 
+            // Delegate filtering and formatting to ConversationRenderer.
+            // DisplayMessage carries all bubble metadata so ASSISTANT footers are
+            // reconstructed identically after IDE restart.
             conversationRenderer.render(session.messages).forEach { msg ->
                 when (msg.role) {
                     MessageRole.USER -> conversationPanel.addUserBubble(msg.content)
+
                     MessageRole.ASSISTANT -> {
-                        // Reconstruct ModificationResult.Success from persisted paths.
-                        // A stub ReplaceElement is used to satisfy the sealed interface —
-                        // it is never executed, only the affectedPath drives the UI (navigation links).
-                        val restoredMods: List<ModificationResult> = msg.appliedModificationPaths.map { pathStr ->
-                            val ep = ElementPath(pathStr)
-                            ModificationResult.Success(
-                                modification = Modification.ReplaceElement(targetPath = ep, newContent = ""),
-                                affectedPath = ep,
-                                resultContent = null
-                            )
+                        // Reconstruct ModificationResult.Success list from persisted path strings.
+                        // A lightweight ReplaceElement stub carries the affectedPath so
+                        // navigation hyperlinks in the footer work the same as at first render.
+                        val persistedMods = msg.appliedModificationPaths.mapNotNull { pathStr ->
+                            runCatching {
+                                val elemPath = com.maxvibes.domain.model.code.ElementPath(pathStr)
+                                ModificationResult.Success(
+                                    modification = com.maxvibes.domain.model.modification.Modification.ReplaceElement(
+                                        targetPath = elemPath,
+                                        newContent = ""
+                                    ),
+                                    affectedPath = elemPath,
+                                    resultContent = null
+                                )
+                            }.getOrNull()
                         }
-                        // Register nav paths so clicks navigate to the element in the editor.
-                        registerElementPaths(restoredMods)
                         conversationPanel.addAssistantBubble(
                             text = msg.content,
+                            tokenInfo = msg.tokenInfo,
+                            modifications = persistedMods,
                             metaFiles = msg.attachedFiles,
-                            modifications = restoredMods
+                            reasoning = msg.reasoning
                         )
+                        // Re-register nav links so element hyperlinks are clickable after reload.
+                        registerElementPaths(persistedMods)
                     }
 
                     MessageRole.SYSTEM -> conversationPanel.addSystemBubble(msg.content)
