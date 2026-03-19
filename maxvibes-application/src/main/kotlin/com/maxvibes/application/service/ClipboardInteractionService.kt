@@ -105,12 +105,6 @@ class ClipboardInteractionService(
         )
     }
 
-    /**
-     * Starts a new clipboard task session.
-     *
-     * Gathers global context files, initialises session state, and copies the first
-     * JSON request to the clipboard for the user to paste into an external LLM.
-     */
     suspend fun startTask(
         sessionId: String,
         currentMessage: String,
@@ -136,15 +130,15 @@ class ClipboardInteractionService(
 
         log("Project: ${projectContext.name}, files in tree: ${projectContext.fileTree.totalFiles}")
 
-        // Initialise in-memory workspace for this dialog
+        // Initialise in-memory workspace for this dialog.
+        // attachedContext and ideErrors are NOT stored here — they are one-shot per-message
+        // context forwarded directly to generateAndCopyJson so they don't bleed into future turns.
         sessionState = ClipboardSessionState(
             currentMessage = currentMessage,
             projectContext = projectContext,
             dialogHistory = history.toMutableList(),
             prompts = prompts,
             allGatheredFiles = mutableMapOf(),
-            attachedContext = attachedContext,
-            ideErrors = ideErrors,
             planOnly = planOnly
         )
         sessionStateOwner = sessionId
@@ -155,13 +149,12 @@ class ClipboardInteractionService(
             sessionId = sessionId,
             freshFiles = freshFiles,
             isFirstMessage = true,
-            addHistory = addHistory
+            addHistory = addHistory,
+            ideErrors = ideErrors,
+            attachedContext = attachedContext
         )
     }
 
-    /**
-     * Continues an existing clipboard dialog session with a new user message.
-     */
     suspend fun continueDialog(
         sessionId: String,
         message: String,
@@ -176,11 +169,12 @@ class ClipboardInteractionService(
 
         log("Continuing dialog: addHistory=$addHistory")
 
-        sessionState = state.copy(
-            attachedContext = attachedContext ?: state.attachedContext,
-            ideErrors = ideErrors ?: state.ideErrors,
-            planOnly = planOnly ?: state.planOnly
-        )
+        // planOnly is a dialog-level flag — persist it in session state if explicitly provided.
+        // attachedContext and ideErrors are NOT stored in session state; they are one-shot
+        // per-message context passed directly to generateAndCopyJson.
+        if (planOnly != null) {
+            sessionState = state.copy(planOnly = planOnly)
+        }
 
         addToHistory(ChatRole.USER, message)
 
@@ -191,7 +185,9 @@ class ClipboardInteractionService(
             sessionId = sessionId,
             freshFiles = freshFiles,
             isFirstMessage = false,
-            addHistory = addHistory
+            addHistory = addHistory,
+            ideErrors = ideErrors,
+            attachedContext = attachedContext
         )
     }
 
@@ -371,17 +367,15 @@ class ClipboardInteractionService(
         )
     }
 
-    /**
-     * Builds a [ClipboardRequest] via [ClipboardRequestBuilder], copies it to the clipboard,
-     * and returns [ClipboardStepResult.WaitingForResponse].
-     */
     private fun generateAndCopyJson(
         sessionId: String,
         freshFiles: Map<String, String>,
         isFirstMessage: Boolean,
         assistantMessage: String? = null,
         llmReasoning: String? = null,
-        addHistory: Boolean = false
+        addHistory: Boolean = false,
+        ideErrors: String? = null,
+        attachedContext: String? = null
     ): ClipboardStepResult {
         val state = sessionState ?: return error("No active session")
 
@@ -390,7 +384,9 @@ class ClipboardInteractionService(
             freshFiles = freshFiles,
             isFirstMessage = isFirstMessage,
             addHistory = addHistory,
-            planOnlySuffix = PLAN_ONLY_SUFFIX
+            planOnlySuffix = PLAN_ONLY_SUFFIX,
+            ideErrors = ideErrors,
+            attachedContext = attachedContext
         )
 
         val copied = clipboardPort.copyRequestToClipboard(request)

@@ -17,29 +17,14 @@ import com.maxvibes.domain.model.interaction.ClipboardRequest
  */
 internal object ClipboardRequestBuilder {
 
-    /**
-     * Builds a [ClipboardRequest] from the current session state and freshly gathered files.
-     *
-     * ## Token-saving policy (Minimal mode)
-     * When [isFirstMessage] is false AND [addHistory] is false, the request is minimal:
-     * only the current user message, fresh files, and IDE errors are included.
-     * Heavy context fields (systemInstruction, fileTree, chatHistory) are left blank
-     * so [JsonClipboardProtocolCodec] omits them from the JSON output.
-     *
-     * @param state           In-memory session state accumulated so far.
-     * @param freshFiles      Files gathered in this turn (path → content).
-     * @param isFirstMessage  True for the very first message in a session.
-     * @param addHistory      When true, full context and previously gathered paths are included.
-     * @param planOnlySuffix  Optional suffix appended to the system prompt in plan-only mode.
-     *                        Supplied by [ClipboardInteractionService] to avoid coupling the
-     *                        builder to the prompt string constant.
-     */
     fun build(
         state: ClipboardSessionState,
         freshFiles: Map<String, String>,
         isFirstMessage: Boolean,
         addHistory: Boolean = false,
-        planOnlySuffix: String = ""
+        planOnlySuffix: String = "",
+        ideErrors: String? = null,
+        attachedContext: String? = null
     ): ClipboardRequest {
         // Minimal-mode: LLM already has full context in its chat window — send only the delta.
         val isMinimal = !isFirstMessage && !addHistory
@@ -82,9 +67,12 @@ internal object ClipboardRequestBuilder {
                     content = msg.content
                 )
             },
-            attachedContext = if (isMinimal) null else state.attachedContext,
-            // IDE errors are always included — they are per-turn diagnostics, not accumulated context.
-            ideErrors = state.ideErrors,
+            // attachedContext: one-shot per-message context — NOT stored in session state.
+            // Passed directly from the UI layer for the turn it was attached.
+            attachedContext = if (isMinimal) null else attachedContext,
+            // ideErrors: one-shot per-message diagnostics — NOT stored in session state.
+            // Always forwarded when provided; ignored in subsequent turns where null is passed.
+            ideErrors = ideErrors,
             planOnly = if (isMinimal) false else state.planOnly
         )
     }
