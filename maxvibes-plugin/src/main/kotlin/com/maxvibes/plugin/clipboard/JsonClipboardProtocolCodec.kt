@@ -4,6 +4,8 @@ import com.maxvibes.application.port.output.ClipboardProtocolCodec
 import com.maxvibes.application.port.output.ClipboardRequestSchema
 import com.maxvibes.domain.model.interaction.*
 import kotlinx.serialization.json.*
+import com.maxvibes.domain.model.code.CodeGranularity
+import com.maxvibes.domain.model.code.CodeViewRequest
 
 /**
  * Pure [ClipboardProtocolCodec] implementation backed by kotlinx.serialization.
@@ -170,17 +172,38 @@ class JsonClipboardProtocolCodec : ClipboardProtocolCodec {
     /**
      * Parses a JSON string into a [ClipboardResponse] using lenient mode.
      *
-     * Missing optional fields default to their zero values (empty string / null / empty list).
+     * Handles both the legacy `requestedFiles` array and the new `requestedViews`
+     * array. The two sources are merged into [ClipboardResponse.codeViewRequests]:
+     * entries from `requestedViews` take precedence over entries from `requestedFiles`
+     * when paths collide. Legacy [ClipboardResponse.requestedFiles] is preserved
+     * unchanged for backward compatibility with existing service call-sites.
      *
      * @throws kotlinx.serialization.SerializationException if [jsonText] is not valid JSON
      */
     private fun parseUnifiedResponse(jsonText: String): ClipboardResponse {
         val obj = lenientJson.parseToJsonElement(jsonText).jsonObject
+
+        // Legacy requestedFiles — kept as-is for backward compatibility
+        val legacyFiles: List<String> = obj[ClipboardRequestSchema.RESP_REQUESTED_FILES]?.jsonArray
+            ?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
+
+        // 1. Legacy requestedFiles → CodeViewRequest(path, FULL)
+        val fromFiles: List<CodeViewRequest> = legacyFiles
+            .map { CodeViewRequest(it, CodeGranularity.FULL) }
+
+        // 2. New requestedViews → CodeViewRequest with explicit granularity
+        val fromViews: List<CodeViewRequest> = obj[ClipboardRequestSchema.REQUESTED_VIEWS]?.jsonArray
+            ?.toCodeViewRequests() ?: emptyList()
+
+        // 3. Merge: requestedViews wins on duplicate path
+        val mergedRequests: List<CodeViewRequest> = (fromViews + fromFiles)
+            .distinctBy { it.filePath }
+
         return ClipboardResponse(
             message = obj[ClipboardRequestSchema.RESP_MESSAGE]?.jsonPrimitive?.contentOrNull ?: "",
             reasoning = obj[ClipboardRequestSchema.RESP_REASONING]?.jsonPrimitive?.contentOrNull,
-            requestedFiles = obj[ClipboardRequestSchema.RESP_REQUESTED_FILES]?.jsonArray
-                ?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList(),
+            requestedFiles = legacyFiles,
+            codeViewRequests = mergedRequests,
             modifications = obj[ClipboardRequestSchema.RESP_MODIFICATIONS]?.jsonArray
                 ?.mapNotNull { parseModification(it.jsonObject) } ?: emptyList(),
             commitMessage = obj[ClipboardRequestSchema.RESP_COMMIT_MESSAGE]?.jsonPrimitive?.contentOrNull
@@ -283,4 +306,36 @@ class JsonClipboardProtocolCodec : ClipboardProtocolCodec {
             .replace(Regex("\\s*`{3}$"), "")
             .trim()
     }
+
+    /**
+     * Parses a [JsonArray] of `requestedViews` entries into a list of [CodeViewRequest].
+     *
+     * Each entry is expected to have the shape:
+     * `{ "path": "...", "granularity": "SIGNATURES", "elementPath": "..." }`
+     *
+     * Rules:
+     * - `granularity` is optional — defaults to [CodeGranularity.FULL]
+     * - `elementPath` is optional — defaults to `null`
+     * - An unknown `granularity` value falls back to [CodeGranularity.FULL] without throwing
+     * - Entries with a blank or absent `path` are silently skipped
+     */
+    private fun JsonArray.toCodeViewRequests(): List<CodeViewRequest> =
+        mapNotNull { element ->
+            val obj = element.jsonObject
+
+            // path is mandatory — skip entry if blank or absent
+            val path = obj[ClipboardRequestSchema.VIEW_PATH]?.jsonPrimitive?.contentOrNull
+                ?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+
+            // granularity is optional; unknown values fall back to FULL
+            val granularity = obj[ClipboardRequestSchema.VIEW_GRANULARITY]?.jsonPrimitive?.contentOrNull
+                ?.let { raw -> runCatching { CodeGranularity.valueOf(raw) }.getOrElse { CodeGranularity.FULL } }
+                ?: CodeGranularity.FULL
+
+            // elementPath is optional (required only for ELEMENT granularity)
+            val elementPath = obj[ClipboardRequestSchema.VIEW_ELEMENT_PATH]?.jsonPrimitive?.contentOrNull
+                ?.takeIf { it.isNotBlank() }
+
+            CodeViewRequest(path, granularity, elementPath)
+        }
 }

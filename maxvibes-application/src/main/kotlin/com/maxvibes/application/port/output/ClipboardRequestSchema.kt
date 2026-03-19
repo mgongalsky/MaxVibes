@@ -110,9 +110,20 @@ object ClipboardRequestSchema {
     /** Default insertion position when the field is absent in a modification entry. */
     const val DEFAULT_POSITION = "LAST_CHILD"
 
+    // ── requestedViews fields ─────────────────────────────────────────
+
     /**
      * Response field: structured file-view requests with granularity control.
      * LLM uses this instead of [RESP_REQUESTED_FILES] when it needs less than the full file.
      */
     const val REQUESTED_VIEWS = "requestedViews"
+
+    /** Project-relative file path inside a `requestedViews` entry. */
+    const val VIEW_PATH = "path"
+
+    /** Optional granularity level inside a `requestedViews` entry (FULL / SIGNATURES / OUTLINE / ELEMENT). */
+    const val VIEW_GRANULARITY = "granularity"
+
+    /** Optional PSI element path inside a `requestedViews` entry (required when granularity = ELEMENT). */
+    const val VIEW_ELEMENT_PATH = "elementPath"
 }

@@ -1,5 +1,7 @@
 package com.maxvibes.domain.model.interaction
 
+import com.maxvibes.domain.model.code.CodeViewRequest
+
 /**
  * Фаза clipboard-протокола — используется внутренне для трекинга.
  */
@@ -40,15 +42,26 @@ data class ClipboardHistoryEntry(
 )
 
 data class ClipboardResponse(
-    /** Текстовое сообщение пользователю (обязательно рекомендуется) */
+    /** Текстовое сообщение пользователю (обязательно рекомендуется). */
     val message: String = "",
-    /** Обоснование или пояснение от LLM */
+    /** Обоснование или пояснение от LLM. */
     val reasoning: String? = null,
-    /** Запрошенные файлы для следующего шага */
+    /**
+     * Запрошенные файлы для следующего шага (legacy — для обратной совместимости).
+     * Новый код должен использовать [codeViewRequests].
+     */
     val requestedFiles: List<String> = emptyList(),
-    /** Модификации кода */
+    /**
+     * Структурированные запросы файлов с контролем гранулярности.
+     *
+     * Объединяет [requestedFiles] (превращаются в [com.maxvibes.domain.model.code.CodeGranularity.FULL])
+     * и новое поле `requestedViews` из JSON-ответа LLM.
+     * При совпадении пути элемент из `requestedViews` побеждает.
+     */
+    val codeViewRequests: List<CodeViewRequest> = emptyList(),
+    /** Модификации кода. */
     val modifications: List<ClipboardModification> = emptyList(),
-    /** Сгенерированный commit message — плагин автоматически вставит его в поле коммита в IDE */
+    /** Сгенерированный commit message — плагин автоматически вставит его в поле коммита в IDE. */
     val commitMessage: String? = null
 )
 
