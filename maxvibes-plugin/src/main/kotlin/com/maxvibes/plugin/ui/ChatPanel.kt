@@ -147,6 +147,12 @@ class ChatPanel(
     // Extracted here to keep ChatPanel free from knowledge of the internal message storage format.
     private val conversationRenderer = ConversationRenderer()
 
+    /**
+     * Holds the active force-activate MouseListener on [modeIndicator] so it can be
+     * removed before re-attaching on the next [updateModeUI] call, preventing listener accumulation.
+     */
+    private var forceActivateListener: MouseAdapter? = null
+
     private val messageController: ChatMessageController by lazy {
         ChatMessageController(project, service, this)
     }
@@ -619,8 +625,9 @@ class ChatPanel(
     /**
      * Updates mode-specific UI components based on the provided panel state.
      *
-     * Reads [ChatPanelState.clipboardStatus] instead of querying the clipboard service directly,
-     * completing the decoupling of UI from service internal state.
+     * Reads [ChatPanelState.clipboardStatus] instead of querying the clipboard service directly.
+     * In Clipboard mode, [modeIndicator] is clickable in both AWAITING_PASTE and SESSION_ACTIVE,
+     * allowing the user to toggle between the two states manually.
      */
     private fun updateModeUI(state: ChatPanelState) {
         when (state.mode) {
@@ -634,12 +641,31 @@ class ChatPanel(
 
             InteractionMode.CLIPBOARD -> {
                 addHistoryCheckbox.isVisible = true
+
+                // Always remove any previously attached listener before re-evaluating the status
+                // to prevent listener accumulation across render() calls.
+                forceActivateListener?.let { modeIndicator.removeMouseListener(it) }
+                forceActivateListener = null
+
                 when (state.clipboardStatus) {
                     ClipboardSessionStatus.AWAITING_PASTE -> {
                         modeIndicator.text = "\u23F3 Paste response"
                         modeIndicator.isVisible = true
                         sendButton.text = "Paste"
                         copyJsonButton.isVisible = true
+
+                        // Clickable: skip paste and force-resume the dialog.
+                        modeIndicator.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+                        modeIndicator.toolTipText = "Click to skip paste and continue dialog"
+                        val listener = object : MouseAdapter() {
+                            override fun mouseClicked(e: MouseEvent) {
+                                val sessionId = chatTreeService.getActiveSession().id
+                                service.clipboardService.forceActivate(sessionId)
+                                render(buildState())
+                            }
+                        }
+                        forceActivateListener = listener
+                        modeIndicator.addMouseListener(listener)
                     }
 
                     ClipboardSessionStatus.SESSION_ACTIVE -> {
@@ -647,6 +673,20 @@ class ChatPanel(
                         modeIndicator.isVisible = true
                         sendButton.text = "Send / Paste"
                         copyJsonButton.isVisible = false
+
+                        // Clickable: go back to awaiting-paste in case the user wants to paste
+                        // a previously generated LLM response.
+                        modeIndicator.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+                        modeIndicator.toolTipText = "Click to go back to paste mode"
+                        val listener = object : MouseAdapter() {
+                            override fun mouseClicked(e: MouseEvent) {
+                                val sessionId = chatTreeService.getActiveSession().id
+                                service.clipboardService.forceAwaitPaste(sessionId)
+                                render(buildState())
+                            }
+                        }
+                        forceActivateListener = listener
+                        modeIndicator.addMouseListener(listener)
                     }
 
                     ClipboardSessionStatus.IDLE -> {
@@ -654,6 +694,9 @@ class ChatPanel(
                         modeIndicator.isVisible = true
                         sendButton.text = "Generate"
                         copyJsonButton.isVisible = false
+                        // Not clickable in IDLE — no active session to toggle.
+                        modeIndicator.cursor = Cursor.getDefaultCursor()
+                        modeIndicator.toolTipText = null
                     }
                 }
                 dryRunCheckbox.isVisible = false

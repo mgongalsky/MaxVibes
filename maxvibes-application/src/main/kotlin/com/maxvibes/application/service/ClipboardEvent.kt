@@ -36,4 +36,20 @@ sealed class ClipboardEvent {
      * Always drives the target session to IDLE, regardless of the current state.
      */
     object Reset : ClipboardEvent()
+
+    /**
+     * The user manually overrode the AWAITING_PASTE state to continue the dialog
+     * without pasting the LLM response. In-memory session workspace is preserved —
+     * the next [ClipboardInteractionService.handleUserInput] call routes to continueDialog normally.
+     * Valid transition: AWAITING_PASTE → SESSION_ACTIVE.
+     */
+    object ForceActivate : ClipboardEvent()
+
+    /**
+     * The user manually overrode the SESSION_ACTIVE state to go back to awaiting a paste —
+     * for example, to paste a previously generated LLM response that was skipped.
+     * In-memory session workspace is preserved.
+     * Valid transition: SESSION_ACTIVE → AWAITING_PASTE.
+     */
+    object ForceAwaitPaste : ClipboardEvent()
 }

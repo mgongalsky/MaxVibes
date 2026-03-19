@@ -318,6 +318,35 @@ class ClipboardInteractionService(
         sessionManager.transition(sessionId, ClipboardEvent.Reset)
     }
 
+    /**
+     * Forces the session from AWAITING_PASTE to SESSION_ACTIVE without requiring a paste.
+     *
+     * Used when the user explicitly decides to skip the pending LLM response and continue
+     * the dialog with a new message. In-memory [sessionState] is preserved — the next
+     * [handleUserInput] call will route to [continueDialog] as normal.
+     *
+     * @param sessionId The ID of the session to force-activate.
+     * @return true if the transition was applied; false if the session was not in AWAITING_PASTE.
+     */
+    fun forceActivate(sessionId: String): Boolean {
+        log("Force-activating session (sessionId=$sessionId)")
+        return sessionManager.transition(sessionId, ClipboardEvent.ForceActivate)
+    }
+
+    /**
+     * Forces the session from SESSION_ACTIVE back to AWAITING_PASTE.
+     *
+     * Used when the user wants to paste a previously generated LLM response
+     * that was skipped via [forceActivate]. In-memory [sessionState] is preserved.
+     *
+     * @param sessionId The ID of the session to force into awaiting-paste state.
+     * @return true if the transition was applied; false if the session was not in SESSION_ACTIVE.
+     */
+    fun forceAwaitPaste(sessionId: String): Boolean {
+        log("Force-awaiting paste for session (sessionId=$sessionId)")
+        return sessionManager.transition(sessionId, ClipboardEvent.ForceAwaitPaste)
+    }
+
     // ==================== Core Logic ====================
 
     private suspend fun processUnifiedResponse(

@@ -126,7 +126,20 @@ class ClipboardSessionManager(
             ClipboardSessionStatus.AWAITING_PASTE -> ClipboardSessionStatus.SESSION_ACTIVE
             else -> null
         }
-        // Reset is always valid — returns IDLE regardless of the current state
+
+        // ForceActivate: user skips the pending paste and resumes the dialog.
+        is ClipboardEvent.ForceActivate -> when (current) {
+            ClipboardSessionStatus.AWAITING_PASTE -> ClipboardSessionStatus.SESSION_ACTIVE
+            else -> null
+        }
+
+        // ForceAwaitPaste: user goes back to paste mode from an active session.
+        is ClipboardEvent.ForceAwaitPaste -> when (current) {
+            ClipboardSessionStatus.SESSION_ACTIVE -> ClipboardSessionStatus.AWAITING_PASTE
+            else -> null
+        }
+
+        // Reset is always valid — drives the session to IDLE regardless of current state.
         is ClipboardEvent.Reset -> ClipboardSessionStatus.IDLE
     }
 }
