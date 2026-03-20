@@ -2,7 +2,7 @@
     <id>com.maxvibes.plugin</id>
     <name>MaxVibes</name>
     <vendor email="support@maxvibes.ai" url="https://maxvibes.ai">MaxVibes Team</vendor>
-    <version>1.1.4-SNAPSHOT</version>
+    <version>1.1.5-SNAPSHOT</version>
 
     <description><![CDATA[
         <h2>MaxVibes - AI-powered Kotlin Assistant</h2>

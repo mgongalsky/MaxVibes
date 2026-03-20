@@ -34,7 +34,7 @@ tasks {
     }
 
     patchPluginXml {
-        version.set("1.1.4")
+        version.set("1.1.5")
         sinceBuild.set("231")
         untilBuild.set("253.*")
     }
