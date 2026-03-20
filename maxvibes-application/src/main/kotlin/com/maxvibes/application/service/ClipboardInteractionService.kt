@@ -11,6 +11,8 @@ import com.maxvibes.shared.result.Result
 import com.maxvibes.application.port.output.LoggerPort
 import com.maxvibes.application.port.output.ChatSessionRepository
 import com.maxvibes.domain.model.chat.MessageRole
+import com.maxvibes.domain.model.code.CodeViewRequest
+import com.maxvibes.domain.model.code.RequestedViewInfo
 
 /**
  * Application-layer service that orchestrates the clipboard-mode LLM dialog.
@@ -290,6 +292,10 @@ class ClipboardInteractionService(
             persistRequestedFilesIntoDomain(sessionId, response.requestedFiles)
         }
 
+        if (response.codeViewRequests.isNotEmpty()) {
+            persistRequestedViewsIntoDomain(sessionId, response.codeViewRequests)
+        }
+
         return processUnifiedResponse(sessionId, response, inputTokens, outputTokens)
     }
 
@@ -305,6 +311,24 @@ class ClipboardInteractionService(
         messages[lastAssistantIdx] = messages[lastAssistantIdx].copy(requestedFiles = requestedFiles)
         chatSessionRepository.saveSession(session.copy(messages = messages))
         log("Persisted ${requestedFiles.size} requestedFiles into domain message for session $sessionId")
+    }
+
+    /**
+     * Saves [codeViewRequests] from the LLM response into the last ASSISTANT message
+     * of the domain session as typed [RequestedViewInfo] entries.
+     * No-op if session not found or no ASSISTANT message exists.
+     */
+    private fun persistRequestedViewsIntoDomain(sessionId: String, codeViewRequests: List<CodeViewRequest>) {
+        val session = chatSessionRepository.getSessionById(sessionId) ?: return
+        val messages = session.messages.toMutableList()
+        val lastAssistantIdx = messages.indexOfLast { it.role == MessageRole.ASSISTANT }
+        if (lastAssistantIdx < 0) return
+        val requestedViews = codeViewRequests.map { rv ->
+            RequestedViewInfo(path = rv.filePath, granularity = rv.granularity, elementPath = rv.elementPath)
+        }
+        messages[lastAssistantIdx] = messages[lastAssistantIdx].copy(requestedViews = requestedViews)
+        chatSessionRepository.saveSession(session.copy(messages = messages))
+        log("Persisted ${requestedViews.size} requestedViews into domain message for session $sessionId")
     }
 
     /**

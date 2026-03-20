@@ -20,6 +20,8 @@ import com.maxvibes.shared.result.Result
 import com.maxvibes.adapter.llm.dto.toChatMessageDTO
 import com.maxvibes.domain.model.interaction.InteractionMode
 import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
+import com.maxvibes.domain.model.modification.AppliedModInfo
+import com.maxvibes.domain.model.modification.toCategory
 
 interface ChatPanelCallbacks {
     fun appendToChat(text: String)
@@ -243,10 +245,15 @@ class ChatMessageController(
             .filterIsInstance<ModificationResult.Success>()
             .map { it.affectedPath.toString() }
 
+        val appliedMods = result.modifications
+            .filterIsInstance<ModificationResult.Success>()
+            .map { AppliedModInfo(path = it.affectedPath.toString(), category = it.modification.toCategory()) }
+
         updatedSession = chatTreeService.addMessage(
             updatedSession.id, MessageRole.ASSISTANT, mainText,
             appliedModificationPaths = appliedPaths,
-            tokenInfo = tokenInfo
+            tokenInfo = tokenInfo,
+            appliedModifications = appliedMods
             // reasoning: API mode doesn't expose a reasoning field yet — left null
         )
         callbacks.updateTokenDisplay()
@@ -360,12 +367,17 @@ class ChatMessageController(
                     .filterIsInstance<ModificationResult.Success>()
                     .map { it.affectedPath.toString() }
 
+                val appliedMods = result.modifications
+                    .filterIsInstance<ModificationResult.Success>()
+                    .map { AppliedModInfo(path = it.affectedPath.toString(), category = it.modification.toCategory()) }
+
                 // Persist full bubble metadata with the ASSISTANT message.
                 updatedSession = chatTreeService.addMessage(
                     updatedSession.id, MessageRole.ASSISTANT, text,
                     appliedModificationPaths = appliedPaths,
                     tokenInfo = tokenInfo,
-                    reasoning = result.llmReasoning
+                    reasoning = result.llmReasoning,
+                    appliedModifications = appliedMods
                 )
 
                 if (failures.isNotEmpty()) {
