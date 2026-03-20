@@ -131,17 +131,6 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
         }
     }
 
-    /**
-     * Returns file content rendered at the requested granularity level.
-     *
-     * All PSI reads are performed inside a read action. For [CodeGranularity.ELEMENT]
-     * the [CodeViewRequest.elementPath] segment string is appended to the file path
-     * to build a full [ElementPath] that [PsiNavigator.findElement] can resolve.
-     *
-     * @param request parameters: file path, granularity, and optional element path
-     * @return [CodeView] with prompt-ready text
-     * @throws IllegalStateException if the file, class, or element cannot be found
-     */
     override suspend fun getCodeView(request: CodeViewRequest): CodeView {
         return runReadAction {
             val content = when (request.granularity) {
@@ -164,8 +153,16 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
                 CodeGranularity.OUTLINE -> {
                     val ktFile = navigator.findFile(ElementPath.file(request.filePath)) as? KtFile
                         ?: error("File not found: ${request.filePath}")
-                    val ktClass = ktFile.declarations.filterIsInstance<KtClass>().firstOrNull()
-                        ?: error("No class found in: ${request.filePath}")
+                    val allClasses = ktFile.declarations.filterIsInstance<KtClass>()
+                    val ktClass = if (request.elementPath != null) {
+                        // elementPath for OUTLINE: just the class name, e.g. "SnakeGame"
+                        allClasses.firstOrNull { it.name == request.elementPath }
+                            ?: error("Class '${request.elementPath}' not found in: ${request.filePath}")
+                    } else {
+                        // No elementPath — pick the largest class by member count
+                        allClasses.maxByOrNull { it.declarations.size }
+                            ?: error("No class found in: ${request.filePath}")
+                    }
                     renderer.renderOutline(ktClass)
                 }
 
@@ -173,7 +170,6 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
                 CodeGranularity.ELEMENT -> {
                     val elemPathStr = request.elementPath
                         ?: error("elementPath is required for ELEMENT granularity")
-                    // Combine file path with element segments into a full ElementPath
                     val fullPath = ElementPath("file:${request.filePath}/$elemPathStr")
                     val element = navigator.findElement(fullPath)
                         ?: error("Element not found: $elemPathStr in ${request.filePath}")

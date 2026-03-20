@@ -357,7 +357,8 @@ class ClipboardInteractionService(
     ): ClipboardStepResult {
         val state = sessionState ?: return error("No active session")
 
-        val hasFiles = response.requestedFiles.isNotEmpty()
+        // Use codeViewRequests as single source of truth (already merges legacy requestedFiles as FULL)
+        val hasFiles = response.codeViewRequests.isNotEmpty()
         val hasMods = response.modifications.isNotEmpty()
         val hasMessage = response.message.isNotBlank()
 
@@ -367,21 +368,46 @@ class ClipboardInteractionService(
         else emptyList<ModificationResult>()
 
         if (hasFiles) {
-            val gatheredFilesMap = gatherRequestedFiles(response.requestedFiles)
-            if (gatheredFilesMap == null) {
-                return buildCompletedResult(
-                    response = response,
-                    modResults = modResults,
-                    extraMessage = "Failed to gather some requested files.",
-                    inputTokens = inputTokens,
-                    outputTokens = outputTokens
-                )
+            // Split by granularity: FULL requests use the caching gather path;
+            // partial views (SIGNATURES / OUTLINE / ELEMENT) go directly to PSI renderer.
+            val fullRequests = response.codeViewRequests
+                .filter { it.granularity == com.maxvibes.domain.model.code.CodeGranularity.FULL }
+                .map { it.filePath }
+            val partialRequests = response.codeViewRequests
+                .filter { it.granularity != com.maxvibes.domain.model.code.CodeGranularity.FULL }
+
+            // Gather full files (cached in session state)
+            val fullFilesMap: Map<String, String> = if (fullRequests.isNotEmpty()) {
+                gatherRequestedFiles(fullRequests) ?: run {
+                    return buildCompletedResult(
+                        response = response,
+                        modResults = modResults,
+                        extraMessage = "Failed to gather some requested files.",
+                        inputTokens = inputTokens,
+                        outputTokens = outputTokens
+                    )
+                }
+            } else emptyMap()
+
+            // Render partial views via PSI (not cached — content depends on granularity)
+            val partialFilesMap: Map<String, String> = partialRequests.associate { request ->
+                try {
+                    val view = codeRepository.getCodeView(request)
+                    log("Rendered ${request.granularity} view for ${request.filePath} (${view.content.length} chars)")
+                    request.filePath to view.content
+                } catch (e: Exception) {
+                    log("ERROR: Failed to render ${request.granularity} view for ${request.filePath}: ${e.message}")
+                    request.filePath to "// ERROR: Could not render ${request.granularity} view: ${e.message}"
+                }
             }
+
+            val mergedFiles = fullFilesMap + partialFilesMap
+
             val assistantMsg = response.message.trim().takeIf { it.isNotBlank() }
             val reasoningStr = response.reasoning?.takeIf { it.isNotBlank() }
             return generateAndCopyJson(
                 sessionId = sessionId,
-                freshFiles = gatheredFilesMap,
+                freshFiles = mergedFiles,
                 isFirstMessage = false,
                 assistantMessage = assistantMsg,
                 llmReasoning = reasoningStr
