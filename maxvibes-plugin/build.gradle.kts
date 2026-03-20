@@ -39,6 +39,26 @@ tasks {
         untilBuild.set("253.*")
     }
 
+    // Run plugin inside Android Studio instead of IDEA
+    // Adjust the path via ANDROID_STUDIO_PATH env var, or edit the defaults below:
+    //   macOS:   /Applications/Android Studio.app/Contents
+    //   Windows: C:/Program Files/Android Studio
+    //   Linux:   /opt/android-studio
+    register<org.jetbrains.intellij.tasks.RunIdeTask>("runIdeAndroidStudio") {
+        val androidStudioPath: String =
+            System.getenv("ANDROID_STUDIO_PATH")
+                ?: when {
+                    org.gradle.internal.os.OperatingSystem.current().isMacOsX ->
+                        "/Applications/Android Studio.app/Contents"
+
+                    org.gradle.internal.os.OperatingSystem.current().isWindows ->
+                        "C:/Program Files/Android Studio"
+
+                    else -> "/opt/android-studio"
+                }
+        ideDir.set(file(androidStudioPath))
+    }
+
     signPlugin {
         certificateChain.set(System.getenv("CERTIFICATE_CHAIN"))
         privateKey.set(System.getenv("PRIVATE_KEY"))

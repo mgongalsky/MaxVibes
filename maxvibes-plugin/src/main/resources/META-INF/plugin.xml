@@ -36,6 +36,10 @@
     <depends>com.intellij.modules.platform</depends>
     <depends>org.jetbrains.kotlin</depends>
 
+    <extensions defaultExtensionNs="org.jetbrains.kotlin">
+        <supportsKotlinPluginMode supportsK2="true"/>
+    </extensions>
+
     <extensions defaultExtensionNs="com.intellij">
         <applicationService
                 serviceImplementation="com.maxvibes.plugin.settings.MaxVibesSettings"/>
@@ -74,7 +78,7 @@
                     text="Modify with AI..."
                     description="Modify selected code using AI"
                     icon="AllIcons.Actions.Edit">
-                <keyboard-shortcut keymap="\$default" first-keystroke="ctrl alt M"/>
+                <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt M"/>
             </action>
 
             <action id="MaxVibes.AnalyzeCode"
@@ -82,7 +86,7 @@
                     text="Explain Code"
                     description="Get AI explanation of selected code"
                     icon="AllIcons.Actions.Preview">
-                <keyboard-shortcut keymap="\$default" first-keystroke="ctrl alt A"/>
+                <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt A"/>
             </action>
 
             <action id="MaxVibes.SmartModify"
