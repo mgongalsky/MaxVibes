@@ -380,7 +380,6 @@ class ConversationPanel(
             details.isVisible = !details.isVisible
             btn.text = if (details.isVisible) expandedHtml else summaryHtml
             messagesPanel.revalidate(); messagesPanel.repaint()
-            SwingUtilities.invokeLater { scrollPane.verticalScrollBar.value = scrollPane.verticalScrollBar.maximum }
         }
         return JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS); background = bg
