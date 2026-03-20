@@ -39,7 +39,9 @@ interface ChatPanelCallbacks {
         tokenInfo: String?,
         modifications: List<ModificationResult>,
         metaFiles: List<String> = emptyList(),
-        reasoning: String? = null
+        reasoning: String? = null,
+        requestedViews: List<com.maxvibes.domain.model.code.RequestedViewInfo> = emptyList(),
+        appliedModifications: List<AppliedModInfo> = emptyList()
     )
 
     fun appendIconToLastBubble(icon: String)
@@ -235,8 +237,6 @@ class ChatMessageController(
 
         val mainText = result.message
 
-        // Build token info and collect applied mod paths BEFORE persisting the message
-        // so the bubble footer can be reconstructed identically after IDE restart.
         val tokenInfo = buildTokenInfo(
             result.planningInputTokens, result.planningOutputTokens,
             result.chatInputTokens, result.chatOutputTokens
@@ -253,17 +253,19 @@ class ChatMessageController(
             updatedSession.id, MessageRole.ASSISTANT, mainText,
             appliedModificationPaths = appliedPaths,
             tokenInfo = tokenInfo,
-            appliedModifications = appliedMods
-            // reasoning: API mode doesn't expose a reasoning field yet — left null
+            appliedModifications = appliedMods,
+            requestedViews = result.requestedViews
         )
         callbacks.updateTokenDisplay()
 
         callbacks.addAssistantMessageBubble(
-            callbacks.formatMarkdown(mainText),
-            tokenInfo,
-            result.modifications,
-            emptyList(),
-            null
+            text = callbacks.formatMarkdown(mainText),
+            tokenInfo = tokenInfo,
+            modifications = result.modifications,
+            metaFiles = emptyList(),
+            reasoning = null,
+            requestedViews = result.requestedViews,
+            appliedModifications = appliedMods
         )
 
         result.commitMessage?.let { msg ->
@@ -306,7 +308,6 @@ class ChatMessageController(
 
                 val assistantText = result.assistantMessage
 
-                // Build tokenInfo before persisting so it survives IDE restart.
                 val tokenInfo: String? = if (!assistantText.isNullOrBlank()) {
                     val parts = mutableListOf<String>()
                     if (result.estimatedInputTokens > 0) parts += "~${fmt(result.estimatedInputTokens)} tokens"
@@ -316,24 +317,25 @@ class ChatMessageController(
                 } else null
 
                 if (!assistantText.isNullOrBlank()) {
-                    // Persist attachedFiles, tokenInfo, and reasoning so the bubble
-                    // footer is reconstructed identically after IDE restart.
                     updatedSession = chatTreeService.addMessage(
                         updatedSession.id, MessageRole.ASSISTANT, assistantText,
                         attachedFiles = result.freshFileNames,
                         tokenInfo = tokenInfo,
-                        reasoning = result.llmReasoning
+                        reasoning = result.llmReasoning,
+                        requestedViews = result.requestedViews
                     )
                 }
                 callbacks.updateTokenDisplay()
 
                 if (!assistantText.isNullOrBlank()) {
                     callbacks.addAssistantMessageBubble(
-                        callbacks.formatMarkdown(assistantText),
-                        tokenInfo,
-                        emptyList(),
-                        result.freshFileNames,
-                        result.llmReasoning
+                        text = callbacks.formatMarkdown(assistantText),
+                        tokenInfo = tokenInfo,
+                        modifications = emptyList(),
+                        metaFiles = result.freshFileNames,
+                        reasoning = result.llmReasoning,
+                        requestedViews = result.requestedViews,
+                        appliedModifications = emptyList()
                     )
                 } else {
                     callbacks.appendIconToLastBubble("\uD83D\uDCCB")
@@ -362,7 +364,6 @@ class ChatMessageController(
                 val text = result.message.trim().ifBlank { "Done." }
                 val tokenInfo = if (result.outputTokens > 0) "\u2193${fmt(result.outputTokens)}" else null
 
-                // Collect applied mod paths for footer reconstruction after IDE restart.
                 val appliedPaths = result.modifications
                     .filterIsInstance<ModificationResult.Success>()
                     .map { it.affectedPath.toString() }
@@ -371,7 +372,6 @@ class ChatMessageController(
                     .filterIsInstance<ModificationResult.Success>()
                     .map { AppliedModInfo(path = it.affectedPath.toString(), category = it.modification.toCategory()) }
 
-                // Persist full bubble metadata with the ASSISTANT message.
                 updatedSession = chatTreeService.addMessage(
                     updatedSession.id, MessageRole.ASSISTANT, text,
                     appliedModificationPaths = appliedPaths,
@@ -392,11 +392,13 @@ class ChatMessageController(
                     callbacks.updateTokenDisplay()
 
                     callbacks.addAssistantMessageBubble(
-                        callbacks.formatMarkdown(text),
-                        tokenInfo,
-                        result.modifications,
-                        emptyList(),
-                        result.llmReasoning
+                        text = callbacks.formatMarkdown(text),
+                        tokenInfo = tokenInfo,
+                        modifications = result.modifications,
+                        metaFiles = emptyList(),
+                        reasoning = result.llmReasoning,
+                        requestedViews = emptyList(),
+                        appliedModifications = appliedMods
                     )
                     result.commitMessage?.let { msg ->
                         callbacks.setCommitMessage(msg)
@@ -414,11 +416,13 @@ class ChatMessageController(
                     callbacks.updateTokenDisplay()
 
                     callbacks.addAssistantMessageBubble(
-                        callbacks.formatMarkdown(text),
-                        tokenInfo,
-                        result.modifications,
-                        emptyList(),
-                        result.llmReasoning
+                        text = callbacks.formatMarkdown(text),
+                        tokenInfo = tokenInfo,
+                        modifications = result.modifications,
+                        metaFiles = emptyList(),
+                        reasoning = result.llmReasoning,
+                        requestedViews = emptyList(),
+                        appliedModifications = appliedMods
                     )
                     result.commitMessage?.let { msg ->
                         callbacks.setCommitMessage(msg)

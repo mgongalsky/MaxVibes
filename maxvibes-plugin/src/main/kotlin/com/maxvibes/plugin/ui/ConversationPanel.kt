@@ -11,6 +11,10 @@ import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextArea
 import com.intellij.util.ui.JBUI
+import com.maxvibes.domain.model.code.CodeGranularity
+import com.maxvibes.domain.model.code.RequestedViewInfo
+import com.maxvibes.domain.model.modification.AppliedModInfo
+import com.maxvibes.domain.model.modification.ModificationCategory
 import com.maxvibes.domain.model.modification.ModificationResult
 import java.awt.*
 import java.awt.event.MouseAdapter
@@ -58,8 +62,20 @@ class ConversationPanel(
         tokenInfo: String? = null,
         modifications: List<ModificationResult> = emptyList(),
         metaFiles: List<String> = emptyList(),
-        reasoning: String? = null
-    ) = addComp(assistantBubble(text, tokenInfo, modifications, metaFiles, reasoning))
+        reasoning: String? = null,
+        requestedViews: List<RequestedViewInfo> = emptyList(),
+        appliedModifications: List<AppliedModInfo> = emptyList()
+    ) = addComp(
+        assistantBubble(
+            text,
+            tokenInfo,
+            modifications,
+            metaFiles,
+            reasoning,
+            requestedViews,
+            appliedModifications
+        )
+    )
 
     fun addSystemBubble(text: String) {
         if (text.isNotBlank()) addComp(systemBubble(text))
@@ -72,7 +88,6 @@ class ConversationPanel(
                 val current = area.text.trimEnd()
                 area.text = "$current  $icon"
             } else {
-                // Если текста нет (например, только код), добавляем системный пузырек
                 addSystemBubble(icon)
             }
             messagesPanel.revalidate(); messagesPanel.repaint()
@@ -151,13 +166,19 @@ class ConversationPanel(
         tokenInfo: String?,
         mods: List<ModificationResult>,
         metaFiles: List<String> = emptyList(),
-        reasoning: String? = null
+        reasoning: String? = null,
+        requestedViews: List<RequestedViewInfo> = emptyList(),
+        appliedModifications: List<AppliedModInfo> = emptyList()
     ): JPanel {
         val bg = JBColor(Color(0xEAF7EA), Color(0x1B2B1E))
         val ok = mods.filterIsInstance<ModificationResult.Success>()
         val fail = mods.filterIsInstance<ModificationResult.Failure>()
-        val hasDetails =
-            !tokenInfo.isNullOrBlank() || ok.isNotEmpty() || fail.isNotEmpty() || metaFiles.isNotEmpty() || !reasoning.isNullOrBlank()
+        val hasDetails = !tokenInfo.isNullOrBlank()
+                || ok.isNotEmpty() || fail.isNotEmpty()
+                || metaFiles.isNotEmpty()
+                || !reasoning.isNullOrBlank()
+                || requestedViews.isNotEmpty()
+                || appliedModifications.isNotEmpty()
 
         val segments = parseSegments(text)
         val contentPanel = buildSegmentsPanel(segments, bg)
@@ -165,7 +186,10 @@ class ConversationPanel(
         return bubble(bg, JBColor(Color(0x239B56), Color(0x58D68D))).also { p ->
             p.add(roleLabel("\uD83E\uDD16 MaxVibes", JBColor(Color(0x1D6A39), Color(0x82E0AA))), BorderLayout.NORTH)
             p.add(contentPanel, BorderLayout.CENTER)
-            if (hasDetails) p.add(collapsibleFooter(tokenInfo, ok, fail, bg, metaFiles, reasoning), BorderLayout.SOUTH)
+            if (hasDetails) p.add(
+                collapsibleFooter(tokenInfo, ok, fail, bg, metaFiles, reasoning, requestedViews, appliedModifications),
+                BorderLayout.SOUTH
+            )
         }
     }
 
@@ -215,7 +239,6 @@ class ConversationPanel(
             l = l.replace(Regex("\\*{3}(.+?)\\*{3}")) { it.groupValues[1].uppercase() }
             l = l.replace(Regex("\\*{2}(.+?)\\*{2}")) { it.groupValues[1].uppercase() }
             l = l.replace(Regex("(?<![*])\\*([^*]+?)\\*(?![*])")) { it.groupValues[1] }
-            // Убрал замену обратных кавычек на скобки, чтобы не портить вид путей и имен
             l
         }
     }
@@ -320,17 +343,32 @@ class ConversationPanel(
         })
     }
 
+    // ==================== Footer ====================
+
     private fun collapsibleFooter(
         tokenInfo: String?,
         ok: List<ModificationResult.Success>,
         fail: List<ModificationResult.Failure>,
         bg: Color,
         metaFiles: List<String> = emptyList(),
-        reasoning: String? = null
+        reasoning: String? = null,
+        requestedViews: List<RequestedViewInfo> = emptyList(),
+        appliedModifications: List<AppliedModInfo> = emptyList()
     ): JPanel {
-        val summaryHtml = buildSummaryHtml("&#9658;", tokenInfo, ok, fail, metaFiles, reasoning)
-        val expandedHtml = buildSummaryHtml("&#9660;", tokenInfo, ok, fail, metaFiles, reasoning)
-        val details = detailsPanel(tokenInfo, ok, fail, bg, metaFiles, reasoning).also { it.isVisible = false }
+        val summaryHtml =
+            buildSummaryHtml("&#9658;", tokenInfo, ok, fail, metaFiles, reasoning, requestedViews, appliedModifications)
+        val expandedHtml =
+            buildSummaryHtml("&#9660;", tokenInfo, ok, fail, metaFiles, reasoning, requestedViews, appliedModifications)
+        val details = detailsPanel(
+            tokenInfo,
+            ok,
+            fail,
+            bg,
+            metaFiles,
+            reasoning,
+            requestedViews,
+            appliedModifications
+        ).also { it.isVisible = false }
         val btn = JButton(summaryHtml).apply {
             font = font.deriveFont(Font.PLAIN, 12f)
             isFocusPainted = false; isContentAreaFilled = false; isBorderPainted = false
@@ -358,14 +396,47 @@ class ConversationPanel(
         ok: List<ModificationResult.Success>,
         fail: List<ModificationResult.Failure>,
         metaFiles: List<String>,
-        reasoning: String?
+        reasoning: String?,
+        requestedViews: List<RequestedViewInfo> = emptyList(),
+        appliedModifications: List<AppliedModInfo> = emptyList()
     ): String {
         val parts = mutableListOf<String>()
         if (!reasoning.isNullOrBlank()) parts += "<font color='#7D3C98'>&#129504;</font>"
         if (!tokenInfo.isNullOrBlank()) parts += "<font color='#D4821A'>&#128290; $tokenInfo</font>"
-        if (metaFiles.isNotEmpty()) parts += "<font color='#2980B9'>&#128193; ${metaFiles.size} files</font>"
-        if (ok.isNotEmpty()) parts += "<font color='#1E8449'>&#9989; ${ok.size}</font>"
-        if (fail.isNotEmpty()) parts += "<font color='#C0392B'>&#10060; ${fail.size}</font>"
+
+        // requestedViews breakdown (new) or legacy metaFiles
+        if (requestedViews.isNotEmpty()) {
+            val full = requestedViews.count { it.granularity == CodeGranularity.FULL }
+            val sigs = requestedViews.count {
+                it.granularity == CodeGranularity.SIGNATURES || it.granularity == CodeGranularity.OUTLINE
+            }
+            val elem = requestedViews.count { it.granularity == CodeGranularity.ELEMENT }
+            val segments = buildList {
+                if (full > 0) add("<font color='#2980B9'>$full full</font>")
+                if (sigs > 0) add("<font color='#D4AC0D'>$sigs sig</font>")
+                if (elem > 0) add("<font color='#27AE60'>$elem elem</font>")
+            }
+            parts += "&#128193; ${segments.joinToString(" &middot; ")}"
+        } else if (metaFiles.isNotEmpty()) {
+            parts += "<font color='#888888'>&#128193; ${metaFiles.size} files</font>"
+        }
+
+        // appliedModifications breakdown (new) or legacy ok/fail
+        if (appliedModifications.isNotEmpty()) {
+            val fileLevel = appliedModifications.count { it.category == ModificationCategory.FILE_LEVEL }
+            val elemLevel = appliedModifications.count { it.category == ModificationCategory.ELEMENT_LEVEL }
+            val imports = appliedModifications.count { it.category == ModificationCategory.IMPORT }
+            val segments = buildList {
+                if (fileLevel > 0) add("<font color='#1A5276'>$fileLevel file</font>")
+                if (elemLevel > 0) add("<font color='#1E8449'>$elemLevel elem</font>")
+                if (imports > 0) add("<font color='#B7950B'>$imports imp</font>")
+            }
+            parts += "&#9989; ${segments.joinToString(" &middot; ")}"
+        } else {
+            if (ok.isNotEmpty()) parts += "<font color='#1E8449'>&#9989; ${ok.size}</font>"
+            if (fail.isNotEmpty()) parts += "<font color='#C0392B'>&#10060; ${fail.size}</font>"
+        }
+
         val body = parts.joinToString("  &middot;  ")
         return "<html><font color='#7D3C98'>$arrow</font>&nbsp;&nbsp;$body</html>"
     }
@@ -376,18 +447,16 @@ class ConversationPanel(
         fail: List<ModificationResult.Failure>,
         bg: Color,
         metaFiles: List<String> = emptyList(),
-        reasoning: String? = null
+        reasoning: String? = null,
+        requestedViews: List<RequestedViewInfo> = emptyList(),
+        appliedModifications: List<AppliedModInfo> = emptyList()
     ) = JPanel().apply {
         layout = BoxLayout(this, BoxLayout.Y_AXIS); background = bg
         border = JBUI.Borders.empty(2, 8, 2, 0)
         maximumSize = Dimension(Int.MAX_VALUE, Int.MAX_VALUE)
 
         if (!reasoning.isNullOrBlank()) {
-            add(JBLabel("\uD83E\uDDE0 Reasoning:").apply {
-                font = font.deriveFont(Font.BOLD, 9f); foreground = JBColor.GRAY
-                alignmentX = Component.LEFT_ALIGNMENT
-                border = JBUI.Borders.empty(2, 0, 2, 0)
-            })
+            add(sectionLabel("\uD83E\uDDE0 Reasoning:"))
             add(contentArea(reasoning, bg).apply {
                 font = font.deriveFont(11f); foreground = JBColor(Color(0x444444), Color(0xAAAAAA))
                 alignmentX = Component.LEFT_ALIGNMENT
@@ -403,12 +472,28 @@ class ConversationPanel(
             })
         }
 
-        if (metaFiles.isNotEmpty()) {
-            add(JBLabel("\uD83D\uDCC1 Gathered files:").apply {
-                font = font.deriveFont(Font.BOLD, 9f); foreground = JBColor.GRAY
-                alignmentX = Component.LEFT_ALIGNMENT
-                border = JBUI.Borders.empty(2, 0, 2, 0)
-            })
+        // requestedViews (new) or legacy metaFiles
+        if (requestedViews.isNotEmpty()) {
+            add(sectionLabel("\uD83D\uDCC1 Requested:"))
+            requestedViews.forEach { view ->
+                val (color, lightColor, label) = when (view.granularity) {
+                    CodeGranularity.FULL -> Triple(Color(0x1A5276), Color(0x5DADE2), "[full]")
+                    CodeGranularity.SIGNATURES -> Triple(Color(0x9A7D0A), Color(0xF4D03F), "[sig]")
+                    CodeGranularity.OUTLINE -> Triple(Color(0x9A7D0A), Color(0xF4D03F), "[outline]")
+                    CodeGranularity.ELEMENT -> Triple(Color(0x1E8449), Color(0x58D68D), "[elem]")
+                }
+                val displayText = if (view.elementPath != null)
+                    "  \u2022 ${view.path} / ${view.elementPath}  $label"
+                else
+                    "  \u2022 ${view.path}  $label"
+                val navigateTo = if (view.elementPath != null)
+                    "file:${view.path}/${view.elementPath}"
+                else
+                    view.path
+                add(clickableLabel(displayText, color, lightColor) { onNavigateToPath(navigateTo) })
+            }
+        } else if (metaFiles.isNotEmpty()) {
+            add(sectionLabel("\uD83D\uDCC1 Gathered files:"))
             metaFiles.forEach { name ->
                 add(JBLabel("   \u2022 $name").apply {
                     font = Font(Font.MONOSPACED, Font.PLAIN, 10)
@@ -418,47 +503,70 @@ class ConversationPanel(
             }
         }
 
-        if (ok.isNotEmpty()) {
-            add(JBLabel("\u2705 Applied modifications:").apply {
-                font = font.deriveFont(Font.BOLD, 9f); foreground = JBColor.GRAY
-                alignmentX = Component.LEFT_ALIGNMENT
-                border = JBUI.Borders.empty(4, 0, 2, 0)
-            })
-            ok.forEach { mod ->
-                val labelText = "  \u2022 ${ChatNavigationHelper.formatElementPath(mod.affectedPath)}"
-                val pathStr = mod.affectedPath.toString()
-                add(JBLabel(labelText).apply {
-                    font = Font(Font.MONOSPACED, Font.PLAIN, 10)
-                    foreground = JBColor(Color(0x2471A3), Color(0x7FB3D3))
-                    cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-                    alignmentX = Component.LEFT_ALIGNMENT
-                    addMouseListener(object : MouseAdapter() {
-                        override fun mouseClicked(e: MouseEvent) = onNavigateToPath(pathStr)
-                        override fun mouseEntered(e: MouseEvent) {
-                            foreground = JBColor(Color(0x1A5276), Color(0xAED6F1))
-                        }
-
-                        override fun mouseExited(e: MouseEvent) {
-                            foreground = JBColor(Color(0x2471A3), Color(0x7FB3D3))
-                        }
+        // appliedModifications (new) or legacy ok/fail
+        if (appliedModifications.isNotEmpty()) {
+            add(sectionLabel("\u2705 Applied modifications:"))
+            appliedModifications.forEach { mod ->
+                val (color, lightColor) = when (mod.category) {
+                    ModificationCategory.FILE_LEVEL -> Pair(Color(0x1A5276), Color(0x5DADE2))
+                    ModificationCategory.ELEMENT_LEVEL -> Pair(Color(0x1E8449), Color(0x58D68D))
+                    ModificationCategory.IMPORT -> Pair(Color(0x9A7D0A), Color(0xF4D03F))
+                }
+                val displayText = "  \u2022 ${ChatNavigationHelper.formatElementPath(mod.path)}"
+                add(clickableLabel(displayText, color, lightColor) { onNavigateToPath(mod.path) })
+            }
+        } else {
+            if (ok.isNotEmpty()) {
+                add(sectionLabel("\u2705 Applied modifications:"))
+                ok.forEach { mod ->
+                    val pathStr = mod.affectedPath.toString()
+                    add(clickableLabel(
+                        "  \u2022 ${ChatNavigationHelper.formatElementPath(mod.affectedPath)}",
+                        Color(0x2471A3), Color(0x7FB3D3)
+                    ) { onNavigateToPath(pathStr) })
+                }
+            }
+            if (fail.isNotEmpty()) {
+                add(sectionLabel("\u274C Failed modifications:"))
+                fail.forEach { mod ->
+                    add(JBLabel("  \u2717 ${mod.error.message}").apply {
+                        font = font.deriveFont(10f)
+                        foreground = JBColor(Color(0xC0392B), Color(0xEC7063))
+                        alignmentX = Component.LEFT_ALIGNMENT
                     })
-                })
+                }
             }
         }
+    }
 
-        if (fail.isNotEmpty()) {
-            add(JBLabel("\u274C Failed modifications:").apply {
-                font = font.deriveFont(Font.BOLD, 9f); foreground = JBColor.GRAY
-                alignmentX = Component.LEFT_ALIGNMENT
-                border = JBUI.Borders.empty(4, 0, 2, 0)
-            })
-            fail.forEach { mod ->
-                add(JBLabel("  \u2717 ${mod.error.message}").apply {
-                    font = font.deriveFont(10f)
-                    foreground = JBColor(Color(0xC0392B), Color(0xEC7063))
-                    alignmentX = Component.LEFT_ALIGNMENT
-                })
+    // ==================== Helpers ====================
+
+    private fun sectionLabel(text: String) = JBLabel(text).apply {
+        font = font.deriveFont(Font.BOLD, 9f)
+        foreground = JBColor.GRAY
+        alignmentX = Component.LEFT_ALIGNMENT
+        border = JBUI.Borders.empty(2, 0, 2, 0)
+    }
+
+    private fun clickableLabel(
+        text: String,
+        normalColor: Color,
+        hoverColor: Color,
+        onClick: () -> Unit
+    ) = JBLabel(text).apply {
+        font = Font(Font.MONOSPACED, Font.PLAIN, 10)
+        foreground = JBColor(normalColor, hoverColor)
+        cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+        alignmentX = Component.LEFT_ALIGNMENT
+        addMouseListener(object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) = onClick()
+            override fun mouseEntered(e: MouseEvent) {
+                foreground = JBColor(hoverColor, normalColor)
             }
-        }
+
+            override fun mouseExited(e: MouseEvent) {
+                foreground = JBColor(normalColor, hoverColor)
+            }
+        })
     }
 }

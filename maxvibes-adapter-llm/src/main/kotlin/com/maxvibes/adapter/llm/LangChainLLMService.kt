@@ -34,6 +34,7 @@ import java.time.Duration
 import java.util.concurrent.atomic.AtomicReference
 import dev.langchain4j.model.chat.listener.ChatModelListener
 import dev.langchain4j.model.chat.listener.ChatModelResponseContext
+import com.maxvibes.adapter.llm.dto.RequestedViewInfoDTO
 
 /**
  * LLM Service implementation using LangChain4j 1.11.0 with AiServices.
@@ -284,7 +285,9 @@ class LangChainLLMService(
                         message = dto.message,
                         modifications = dto.modifications.mapNotNull { convertModification(it) },
                         requestedFiles = extractFileRequests(dto.message),
-                        reasoning = dto.reasoning
+                        reasoning = dto.reasoning,
+                        commitMessage = dto.commitMessage,
+                        requestedViews = dto.requestedViews.mapNotNull { convertRequestedView(it) }
                     )
                 }
             } catch (e: Throwable) {
@@ -511,6 +514,21 @@ Never include code blocks with proposed changes in your message body if you are 
             }
             else -> null
         }
+    }
+
+    private fun convertRequestedView(dto: com.maxvibes.adapter.llm.dto.RequestedViewInfoDTO): com.maxvibes.domain.model.code.RequestedViewInfo? {
+        val granularity = try {
+            com.maxvibes.domain.model.code.CodeGranularity.valueOf(dto.granularity.uppercase())
+        } catch (e: IllegalArgumentException) {
+            log("[LangChainLLMService] Unknown granularity '${dto.granularity}', defaulting to FULL")
+            com.maxvibes.domain.model.code.CodeGranularity.FULL
+        }
+        if (dto.path.isBlank()) return null
+        return com.maxvibes.domain.model.code.RequestedViewInfo(
+            path = dto.path,
+            granularity = granularity,
+            elementPath = dto.elementPath?.takeIf { it.isNotBlank() }
+        )
     }
 
     // ==================== Fallback Response Parsing (improved) ====================

@@ -185,9 +185,19 @@ class ChatPanel(
         tokenInfo: String?,
         modifications: List<ModificationResult>,
         metaFiles: List<String>,
-        reasoning: String?
+        reasoning: String?,
+        requestedViews: List<com.maxvibes.domain.model.code.RequestedViewInfo>,
+        appliedModifications: List<com.maxvibes.domain.model.modification.AppliedModInfo>
     ) {
-        conversationPanel.addAssistantBubble(text, tokenInfo, modifications, metaFiles, reasoning)
+        conversationPanel.addAssistantBubble(
+            text,
+            tokenInfo,
+            modifications,
+            metaFiles,
+            reasoning,
+            requestedViews,
+            appliedModifications
+        )
         registerElementPaths(modifications)
     }
 
@@ -343,24 +353,17 @@ class ChatPanel(
         if (session.messages.isEmpty()) {
             showWelcome()
         } else {
-            // Show branch ancestry as a system bubble at the top of the conversation.
             val path = chatTreeService.getSessionPath(session.id)
             if (path.size > 1) {
                 val chain = path.dropLast(1).joinToString(" \u203A ") { it.title.take(25) }
                 conversationPanel.addSystemBubble("\u2514 Branch of: $chain")
             }
 
-            // Delegate filtering and formatting to ConversationRenderer.
-            // DisplayMessage carries all bubble metadata so ASSISTANT footers are
-            // reconstructed identically after IDE restart.
             conversationRenderer.render(session.messages).forEach { msg ->
                 when (msg.role) {
                     MessageRole.USER -> conversationPanel.addUserBubble(msg.content)
 
                     MessageRole.ASSISTANT -> {
-                        // Reconstruct ModificationResult.Success list from persisted path strings.
-                        // A lightweight ReplaceElement stub carries the affectedPath so
-                        // navigation hyperlinks in the footer work the same as at first render.
                         val persistedMods = msg.appliedModificationPaths.mapNotNull { pathStr ->
                             runCatching {
                                 val elemPath = com.maxvibes.domain.model.code.ElementPath(pathStr)
@@ -379,9 +382,10 @@ class ChatPanel(
                             tokenInfo = msg.tokenInfo,
                             modifications = persistedMods,
                             metaFiles = msg.attachedFiles,
-                            reasoning = msg.reasoning
+                            reasoning = msg.reasoning,
+                            requestedViews = msg.requestedViews,
+                            appliedModifications = msg.appliedModifications
                         )
-                        // Re-register nav links so element hyperlinks are clickable after reload.
                         registerElementPaths(persistedMods)
                     }
 

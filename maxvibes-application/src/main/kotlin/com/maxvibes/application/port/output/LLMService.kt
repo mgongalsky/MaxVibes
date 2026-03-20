@@ -78,23 +78,15 @@ data class ChatContext(
     val planOnly: Boolean = false
 )
 
-/**
- * Result of a single LLM chat call.
- *
- * @property message Human-readable reply from the model.
- * @property modifications Code changes to apply via PSI.
- * @property requestedFiles Files the model wants to read next.
- * @property tokenUsage Per-call token stats; null if the provider didn't report them.
- * @property reasoning Optional chain-of-thought text from the model.
- * @property commitMessage Optional Git commit message suggested by the model.
- */
 data class ChatResponse(
     val message: String,
     val modifications: List<Modification> = emptyList(),
     val requestedFiles: List<String> = emptyList(),
     val tokenUsage: LLMCallTokenUsage? = null,
     val reasoning: String? = null,
-    val commitMessage: String? = null
+    val commitMessage: String? = null,
+    /** Typed view requests parsed from LLM JSON response — used for coloured bubble rendering */
+    val requestedViews: List<com.maxvibes.domain.model.code.RequestedViewInfo> = emptyList()
 )
 
 /**

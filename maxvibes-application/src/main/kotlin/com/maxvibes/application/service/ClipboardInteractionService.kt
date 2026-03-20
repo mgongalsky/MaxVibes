@@ -385,7 +385,6 @@ class ClipboardInteractionService(
     ): ClipboardStepResult {
         val state = sessionState ?: return error("No active session")
 
-        // Use codeViewRequests as single source of truth (already merges legacy requestedFiles as FULL)
         val hasFiles = response.codeViewRequests.isNotEmpty()
         val hasMods = response.modifications.isNotEmpty()
         val hasMessage = response.message.isNotBlank()
@@ -396,15 +395,12 @@ class ClipboardInteractionService(
         else emptyList<ModificationResult>()
 
         if (hasFiles) {
-            // Split by granularity: FULL requests use the caching gather path;
-            // partial views (SIGNATURES / OUTLINE / ELEMENT) go directly to PSI renderer.
             val fullRequests = response.codeViewRequests
                 .filter { it.granularity == com.maxvibes.domain.model.code.CodeGranularity.FULL }
                 .map { it.filePath }
             val partialRequests = response.codeViewRequests
                 .filter { it.granularity != com.maxvibes.domain.model.code.CodeGranularity.FULL }
 
-            // Gather full files (cached in session state)
             val fullFilesMap: Map<String, String> = if (fullRequests.isNotEmpty()) {
                 gatherRequestedFiles(fullRequests) ?: run {
                     return buildCompletedResult(
@@ -417,7 +413,6 @@ class ClipboardInteractionService(
                 }
             } else emptyMap()
 
-            // Render partial views via PSI (not cached — content depends on granularity)
             val partialFilesMap: Map<String, String> = partialRequests.associate { request ->
                 try {
                     val view = codeRepository.getCodeView(request)
@@ -433,12 +428,22 @@ class ClipboardInteractionService(
 
             val assistantMsg = response.message.trim().takeIf { it.isNotBlank() }
             val reasoningStr = response.reasoning?.takeIf { it.isNotBlank() }
+
+            val requestedViewInfos = response.codeViewRequests.map {
+                RequestedViewInfo(
+                    path = it.filePath,
+                    granularity = it.granularity,
+                    elementPath = it.elementPath
+                )
+            }
+
             return generateAndCopyJson(
                 sessionId = sessionId,
                 freshFiles = mergedFiles,
                 isFirstMessage = false,
                 assistantMessage = assistantMsg,
-                llmReasoning = reasoningStr
+                llmReasoning = reasoningStr,
+                requestedViews = requestedViewInfos
             )
         }
 
@@ -458,7 +463,8 @@ class ClipboardInteractionService(
         llmReasoning: String? = null,
         addHistory: Boolean = false,
         ideErrors: String? = null,
-        attachedContext: String? = null
+        attachedContext: String? = null,
+        requestedViews: List<RequestedViewInfo> = emptyList()
     ): ClipboardStepResult {
         val state = sessionState ?: return error("No active session")
 
@@ -490,7 +496,8 @@ class ClipboardInteractionService(
             estimatedInputTokens = totalTokens,
             llmReasoning = llmReasoning,
             freshFileNames = freshFiles.keys.map { it.substringAfterLast('/') },
-            previouslyGatheredCount = request.previouslyGatheredPaths.size
+            previouslyGatheredCount = request.previouslyGatheredPaths.size,
+            requestedViews = requestedViews
         )
     }
 
@@ -765,7 +772,8 @@ sealed class ClipboardStepResult {
         val estimatedInputTokens: Int = 0,
         val llmReasoning: String? = null,
         val freshFileNames: List<String> = emptyList(),
-        val previouslyGatheredCount: Int = 0
+        val previouslyGatheredCount: Int = 0,
+        val requestedViews: List<com.maxvibes.domain.model.code.RequestedViewInfo> = emptyList()
     ) : ClipboardStepResult()
 
     data class Completed(

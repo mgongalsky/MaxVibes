@@ -15,6 +15,9 @@ class ChatResponseDTO {
 
     @Description("Optional: a concise Git commit message summarizing the changes made (in English, conventional commits format preferred, e.g. 'feat: add commit message generation'). Include when you've completed a coding task and there are actual code modifications, or when the user explicitly asks for a commit message. Leave null if no code changes were made.")
     var commitMessage: String? = null
+
+    @Description("List of file/element views requested from the project. Each entry describes what was requested and at what granularity.")
+    var requestedViews: List<RequestedViewInfoDTO> = emptyList()
 }
 
 class ModificationDTO {
@@ -46,6 +49,17 @@ Supported segments: class[Name], interface[Name], object[Name], function[Name], 
     var importPath: String = ""
 
     override fun toString(): String = "ModificationDTO(type=$type, path=$path, content=${content.take(50)}...)"
+}
+
+class RequestedViewInfoDTO {
+    @Description("File path as used in the request (e.g. 'src/main/kotlin/com/example/Foo.kt')")
+    var path: String = ""
+
+    @Description("Granularity of the view: FULL, SIGNATURES, OUTLINE, or ELEMENT")
+    var granularity: String = "FULL"
+
+    @Description("Element path within the file, required when granularity is ELEMENT (e.g. 'class[Foo]/function[bar]')")
+    var elementPath: String? = null
 }
 
 /**
