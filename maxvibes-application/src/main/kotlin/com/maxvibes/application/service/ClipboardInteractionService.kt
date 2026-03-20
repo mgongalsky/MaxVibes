@@ -164,21 +164,26 @@ class ClipboardInteractionService(
         globalContextFiles: List<String> = emptyList(),
         addHistory: Boolean = false
     ): ClipboardStepResult {
+        // Auto-restore workspace after IDE restart if sessionState was lost
+        if (sessionState == null) {
+            log("sessionState is null in continueDialog — attempting workspace restore for session $sessionId")
+            if (!ensureWorkspace(sessionId)) {
+                return error("Cannot restore session state for session $sessionId. Please start a new task.")
+            }
+            log("Workspace restored successfully, continuing dialog")
+        }
+
         val state = sessionState
             ?: return error("No active clipboard session. Start a new task first.")
 
         log("Continuing dialog: addHistory=$addHistory")
 
-        // planOnly is a dialog-level flag — persist it in session state if explicitly provided.
-        // attachedContext and ideErrors are NOT stored in session state; they are one-shot
-        // per-message context passed directly to generateAndCopyJson.
         if (planOnly != null) {
             sessionState = state.copy(planOnly = planOnly)
         }
 
         addToHistory(ChatRole.USER, message)
 
-        // In minimal mode the LLM already has globalContextFiles — re-sending them wastes tokens
         val filesToGather = if (addHistory) globalContextFiles else emptyList()
         val freshFiles = gatherRequestedFiles(filesToGather) ?: emptyMap()
         return generateAndCopyJson(
@@ -209,19 +214,23 @@ class ClipboardInteractionService(
     }
 
     private suspend fun handlePastedResponseInternal(sessionId: String, rawText: String): ClipboardStepResult {
+        // Auto-restore workspace after IDE restart if sessionState was lost
+        if (sessionState == null) {
+            log("sessionState is null in handlePastedResponse — attempting workspace restore for session $sessionId")
+            if (!ensureWorkspace(sessionId)) {
+                return error("Cannot restore session state for session $sessionId. Please start a new task.")
+            }
+            log("Workspace restored successfully, processing pasted response")
+        }
+
         val state = sessionState
             ?: return error("No active clipboard session. Start a new task first.")
 
         log("Parsing pasted response (${rawText.length} chars)...")
 
-        // --- Validate BEFORE touching session state ---
-        // The state machine transition (AWAITING_PASTE -> SESSION_ACTIVE) must only happen
-        // on a successful parse. If parsing fails we stay in AWAITING_PASTE so the user
-        // can paste the corrected LLM response without restarting.
         val validationResult = responseValidator.validate(rawText, clipboardPort)
 
         if (validationResult !is ValidationResult.Valid) {
-            // Build diagnostic JSON and copy it to clipboard for the LLM
             val details = when (validationResult) {
                 is ValidationResult.ParseFailure -> validationResult.details
                 ValidationResult.EmptyInput -> ParseFailureDetails.NoJsonFound(
@@ -246,7 +255,6 @@ class ClipboardInteractionService(
                 )
             )
 
-            // Session stays in AWAITING_PASTE — no transition fired
             return ClipboardStepResult.ParseError(
                 humanMessage = "Could not parse LLM response (${details.reasonCode()}). " +
                         if (copied) "Diagnostic JSON copied to clipboard — paste it into the LLM and paste the corrected response back here."
@@ -257,7 +265,6 @@ class ClipboardInteractionService(
             )
         }
 
-        // --- Parse succeeded — now transition the state machine ---
         val transitioned = sessionManager.transition(sessionId, ClipboardEvent.ResponsePasted)
         if (!transitioned) {
             return error("Cannot accept response paste: session is not in AWAITING_PASTE state.")
@@ -279,9 +286,6 @@ class ClipboardInteractionService(
             addToHistory(ChatRole.ASSISTANT, response.message)
         }
 
-        // Persist requested file paths into the last ASSISTANT message in the domain.
-        // Required for redoLastRequest Scenario B — when the in-memory workspace
-        // belongs to a different session after the user switches chats.
         if (response.requestedFiles.isNotEmpty()) {
             persistRequestedFilesIntoDomain(sessionId, response.requestedFiles)
         }
@@ -467,62 +471,34 @@ class ClipboardInteractionService(
     }
 
     /**
-     * Re-generates and copies the clipboard JSON for the given session.
+     * Restores the in-memory [sessionState] from persisted domain data.
      *
-     * Does NOT add messages to history, does NOT trigger state machine transitions.
-     * Simply rebuilds the JSON payload and copies it to the clipboard.
+     * Used to recover after IDE restart when [sessionState] is null but
+     * [ClipboardSessionStatus] in XML is SESSION_ACTIVE or AWAITING_PASTE.
      *
-     * Two scenarios:
-     * - **A**: In-memory workspace belongs to this session → reuse it, call [generateAndCopyJson] directly.
-     * - **B**: Workspace belongs to another session → rebuild minimal workspace from domain
-     *   (fresh projectContext + last user message + last requestedFiles), then call [generateAndCopyJson].
+     * Reads the last user message and project context, rebuilds a minimal
+     * [ClipboardSessionState], and sets [sessionStateOwner].
+     *
+     * @return true if workspace was successfully restored; false if domain data
+     *         is insufficient (e.g. session has no user messages yet).
      */
-    suspend fun redoLastRequest(
-        sessionId: String,
-        globalContextFiles: List<String>
-    ): ClipboardStepResult {
-
-        // --- Scenario A: workspace already belongs to this session ---
-        if (sessionStateOwner == sessionId && sessionState != null) {
-            log("Redo scenario A: reusing existing workspace for session $sessionId")
-            val freshFiles = gatherRequestedFiles(globalContextFiles) ?: emptyMap()
-            return generateAndCopyJson(
-                sessionId = sessionId,
-                freshFiles = freshFiles,
-                isFirstMessage = false
-            )
-        }
-
-        // --- Scenario B: workspace belongs to another session, rebuild from domain ---
-        log("Redo scenario B: rebuilding workspace from domain for session $sessionId")
-
+    private suspend fun ensureWorkspace(sessionId: String): Boolean {
         val session = chatSessionRepository.getSessionById(sessionId)
-            ?: return error("Session not found: $sessionId")
-
-        if (session.clipboardStatus == ClipboardSessionStatus.IDLE) {
-            return error("No active clipboard session for this chat.")
-        }
+            ?: return false
 
         val lastUserMessage = session.messages
             .lastOrNull { it.role == MessageRole.USER }
             ?.content
-            ?: return error("No user message found in session $sessionId")
+            ?: return false
 
-        // File paths from the last LLM response only (not the entire accumulated list)
-        val lastRequestedFiles = session.messages
-            .lastOrNull { it.role == MessageRole.ASSISTANT && it.requestedFiles.isNotEmpty() }
-            ?.requestedFiles
-            ?: emptyList()
-
-        // Fresh project context is required to build the file tree in the JSON
         val projectContextResult = contextProvider.getProjectContext()
         if (projectContextResult is Result.Failure) {
-            return error("Failed to get project context: ${projectContextResult.error.message}")
+            log("ERROR: Failed to get project context during workspace restore: ${projectContextResult.error.message}")
+            return false
         }
         val projectContext = (projectContextResult as Result.Success).value
         val prompts = promptPort?.getPrompts() ?: PromptTemplates.EMPTY
 
-        // Build minimal workspace with just enough data for generateAndCopyJson
         sessionState = ClipboardSessionState(
             currentMessage = lastUserMessage,
             projectContext = projectContext,
@@ -540,6 +516,44 @@ class ClipboardInteractionService(
             planOnly = false
         )
         sessionStateOwner = sessionId
+        log("Workspace restored from domain: sessionId=$sessionId, messages=${session.messages.size}")
+        return true
+    }
+
+    suspend fun redoLastRequest(
+        sessionId: String,
+        globalContextFiles: List<String>
+    ): ClipboardStepResult {
+
+        // --- Scenario A: workspace already belongs to this session ---
+        if (sessionStateOwner == sessionId && sessionState != null) {
+            log("Redo scenario A: reusing existing workspace for session $sessionId")
+            val freshFiles = gatherRequestedFiles(globalContextFiles) ?: emptyMap()
+            return generateAndCopyJson(
+                sessionId = sessionId,
+                freshFiles = freshFiles,
+                isFirstMessage = false
+            )
+        }
+
+        // --- Scenario B: workspace belongs to another session or was lost — rebuild from domain ---
+        log("Redo scenario B: rebuilding workspace from domain for session $sessionId")
+
+        val session = chatSessionRepository.getSessionById(sessionId)
+            ?: return error("Session not found: $sessionId")
+
+        if (session.clipboardStatus == ClipboardSessionStatus.IDLE) {
+            return error("No active clipboard session for this chat.")
+        }
+
+        if (!ensureWorkspace(sessionId)) {
+            return error("Cannot restore session state for session $sessionId. No user message found.")
+        }
+
+        val lastRequestedFiles = session.messages
+            .lastOrNull { it.role == MessageRole.ASSISTANT && it.requestedFiles.isNotEmpty() }
+            ?.requestedFiles
+            ?: emptyList()
 
         val filesToGather = (globalContextFiles + lastRequestedFiles).distinct()
         val freshFiles = gatherRequestedFiles(filesToGather) ?: emptyMap()
