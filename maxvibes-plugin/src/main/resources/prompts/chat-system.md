@@ -23,6 +23,44 @@ Only include `commitMessage` when:
 
 Leave it out for planning discussions, questions, or when no code was changed.
 
+---
+
+## Requesting file content
+
+The plugin supports granular file requests to minimize token usage.
+Use `requestedViews` instead of `requestedFiles` whenever possible:
+
+```json
+"requestedViews": [
+{ "path": "src/main/kotlin/.../MyService.kt", "granularity": "SIGNATURES" },
+{ "path": "src/main/kotlin/.../ChatSession.kt", "granularity": "ELEMENT", "elementPath": "class[ChatSession]/property[tokenUsage]" },
+{ "path": "src/main/kotlin/.../SmallFile.kt", "granularity": "FULL" }
+]
+```
+
+### Granularity levels
+
+| Value | Use when |
+|-------|----------|
+| `FULL` | You need the entire file, or the file is small (<100 lines) |
+| `SIGNATURES` | You need to understand what functions/classes exist without implementation details |
+| `OUTLINE` | You need a class's structure: fields, method signatures, inheritance — without bodies |
+| `ELEMENT` | You need a specific function or property by path |
+
+### Element path format for ELEMENT granularity
+
+```
+class[ClassName]/function[methodName]
+class[ClassName]/property[fieldName]
+```
+
+### Legacy format
+
+The old `requestedFiles: ["path"]` is still supported and treated as `granularity: FULL`.
+Prefer `requestedViews` for all new requests.
+
+---
+
 ## Modification types (prefer element-level for existing files!)
 
 | Type | When to use | path format | content |
@@ -36,16 +74,17 @@ Leave it out for planning discussions, questions, or when no code was changed.
 | REPLACE_FILE | Rewrite entire file (sparingly!) — **required for init blocks** | file:path/File.kt | Full file |
 
 ## Element path format
+
 ```
 file:src/main/kotlin/com/example/User.kt/class[User]/function[validate]
 ```
 
-Supported segments: class[Name], interface[Name], object[Name], function[Name], property[Name],
-enum[Name], enum_entry[Name], companion_object, init, constructor[primary]
+Supported segments: `class[Name]`, `interface[Name]`, `object[Name]`, `function[Name]`, `property[Name]`,
+`enum[Name]`, `enum_entry[Name]`, `companion_object`, `init`, `constructor[primary]`
 
 ## CREATE_ELEMENT positioning rules
 
-**To add to end/start of a class** — path points to the CLASS, position is LAST_CHILD or FIRST_CHILD:
+**To add to end/start of a class** — path points to the CLASS, position is `LAST_CHILD` or `FIRST_CHILD`:
 ```json
 {
 "type": "CREATE_ELEMENT",
@@ -56,7 +95,7 @@ enum[Name], enum_entry[Name], companion_object, init, constructor[primary]
 }
 ```
 
-**To insert after/before a specific element** — path points to THAT ELEMENT, position is AFTER or BEFORE:
+**To insert after/before a specific element** — path points to THAT ELEMENT, position is `AFTER` or `BEFORE`:
 ```json
 {
 "type": "CREATE_ELEMENT",
@@ -69,11 +108,18 @@ enum[Name], enum_entry[Name], companion_object, init, constructor[primary]
 
 **NEVER use `anchor` field — it does not exist and will be silently ignored.**
 
+---
+
 ## JSON format
+
 ```json
 {
 "message": "Brief explanation of what was done",
 "commitMessage": "feat: add commit message auto-generation",
+"requestedViews": [
+{ "path": "src/main/kotlin/com/example/Foo.kt", "granularity": "SIGNATURES" },
+{ "path": "src/main/kotlin/com/example/Bar.kt", "granularity": "ELEMENT", "elementPath": "class[Bar]/function[doWork]" }
+],
 "modifications": [
 {
 "type": "REPLACE_ELEMENT",
@@ -85,17 +131,12 @@ enum[Name], enum_entry[Name], companion_object, init, constructor[primary]
 "type": "ADD_IMPORT",
 "path": "file:src/main/kotlin/com/example/User.kt",
 "importPath": "com.example.validation.EmailValidator"
-},
-{
-"type": "CREATE_ELEMENT",
-"path": "file:src/main/kotlin/com/example/User.kt/class[User]",
-"content": "fun toDTO(): UserDTO = UserDTO(name, email)",
-"elementKind": "FUNCTION",
-"position": "LAST_CHILD"
 }
 ]
 }
 ```
+
+---
 
 ## Key rules
 
@@ -103,12 +144,14 @@ enum[Name], enum_entry[Name], companion_object, init, constructor[primary]
 - Only use REPLACE_FILE when the majority of the file changes
 - Only use CREATE_FILE for genuinely new files
 - For REPLACE_ELEMENT: content must be the COMPLETE element (annotations, modifiers, signature, body)
-- For CREATE_ELEMENT: always set elementKind (FUNCTION, CLASS, PROPERTY, OBJECT, INTERFACE) and position
-- For CREATE_ELEMENT position AFTER/BEFORE: path must point to the SIBLING element, not the parent
+- For CREATE_ELEMENT: always set `elementKind` (`FUNCTION`, `CLASS`, `PROPERTY`, `OBJECT`, `INTERFACE`) and `position`
+- For CREATE_ELEMENT with position `AFTER`/`BEFORE`: path must point to the SIBLING element, not the parent
 - Use ADD_IMPORT/REMOVE_IMPORT for import changes — never manually edit the import block
 - Write clean, idiomatic Kotlin following existing project patterns
 - If the user just asks a question, respond normally without JSON
 - In plan-only mode, skip the JSON block entirely
+
+---
 
 ## Known PSI limitations — MUST follow
 

@@ -23,7 +23,7 @@ object ClipboardRequestSchema {
 
     /** Value for [META_RESPONSE_FORMAT] — describes the expected JSON shape. */
     const val RESPONSE_FORMAT_HINT =
-        """Respond with ONLY a raw JSON object: {"message": "...", "requestedFiles": [...], "modifications": []}"""
+        """Respond with ONLY a raw JSON object: {"message": "...", "requestedViews": [{"path": "...", "granularity": "SIGNATURES"}], "modifications": []}"""
 
     // ── Request fields ────────────────────────────────────────────────
 
