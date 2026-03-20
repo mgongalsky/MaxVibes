@@ -2,6 +2,8 @@ package com.maxvibes.plugin.ui
 
 import com.maxvibes.domain.model.chat.ChatMessage
 import com.maxvibes.domain.model.chat.MessageRole
+import com.maxvibes.domain.model.code.RequestedViewInfo
+import com.maxvibes.domain.model.modification.AppliedModInfo
 
 /**
  * Transforms a list of [ChatMessage] into [DisplayMessage] objects ready for UI rendering.
@@ -32,19 +34,6 @@ class ConversationRenderer {
     /** Exact content of clipboard paste placeholders — filtered from display entirely. */
     private val pastedResponseMarker = "[Pasted LLM response]"
 
-    /**
-     * Transforms raw session messages into display-ready messages.
-     *
-     * Pipeline:
-     * 1. Filter out messages that should never be shown (clipboard placeholders, blanks).
-     * 2. Format content — strip technical annotations from USER messages.
-     * 3. Skip USER messages that become blank after formatting.
-     * 4. Carry bubble metadata from [ChatMessage] into [DisplayMessage] so ASSISTANT
-     *    bubbles can fully reconstruct their footer after session reload.
-     *
-     * @param messages raw messages from [com.maxvibes.domain.model.chat.ChatSession.messages]
-     * @return filtered and formatted messages ready for rendering in [ConversationPanel]
-     */
     fun render(messages: List<ChatMessage>): List<DisplayMessage> {
         return messages
             .filter { shouldDisplay(it) }
@@ -63,7 +52,9 @@ class ConversationRenderer {
                     attachedFiles = message.attachedFiles,
                     appliedModificationPaths = message.appliedModificationPaths,
                     reasoning = message.reasoning,
-                    tokenInfo = message.tokenInfo
+                    tokenInfo = message.tokenInfo,
+                    requestedViews = message.requestedViews,
+                    appliedModifications = message.appliedModifications
                 )
             }
     }
@@ -103,26 +94,14 @@ class ConversationRenderer {
     }
 }
 
-/**
- * A message processed by [ConversationRenderer] and ready for rendering in the UI.
- *
- * Unlike the raw [ChatMessage] domain object, [DisplayMessage]:
- * - Is guaranteed to have non-blank, clean content.
- * - Has been filtered (no clipboard placeholders).
- * - Has had technical annotations stripped from USER messages.
- * - Carries bubble metadata ([attachedFiles], [appliedModificationPaths], [reasoning],
- *   [tokenInfo]) so the ASSISTANT bubble footer is identical before and after IDE restart.
- *
- * @param attachedFiles        Files that were gathered and sent TO the LLM in this round.
- * @param appliedModificationPaths String-encoded ElementPath values for applied mods.
- * @param reasoning            Optional LLM reasoning block shown in the footer.
- * @param tokenInfo            Human-readable token summary for the footer.
- */
 data class DisplayMessage(
     val role: MessageRole,
     val content: String,
     val attachedFiles: List<String> = emptyList(),
     val appliedModificationPaths: List<String> = emptyList(),
     val reasoning: String? = null,
-    val tokenInfo: String? = null
+    val tokenInfo: String? = null,
+    // ── новые поля ──
+    val requestedViews: List<RequestedViewInfo> = emptyList(),
+    val appliedModifications: List<AppliedModInfo> = emptyList()
 )
