@@ -14,10 +14,78 @@ import com.maxvibes.domain.model.chat.ChatMessage
 import com.maxvibes.domain.model.chat.ChatSession
 import com.maxvibes.domain.model.chat.MessageRole
 import com.maxvibes.domain.model.chat.TokenUsage
+import com.maxvibes.domain.model.code.CodeGranularity
+import com.maxvibes.domain.model.code.RequestedViewInfo
 import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
+import com.maxvibes.domain.model.modification.AppliedModInfo
+import com.maxvibes.domain.model.modification.ModificationCategory
 import com.maxvibes.plugin.service.MaxVibesLogger
 import java.time.Instant
 import java.util.UUID
+
+@Tag("requestedView")
+class XmlRequestedViewInfo {
+    @Attribute("path")
+    var path: String = ""
+
+    /** Enum name of CodeGranularity. Default FULL for forward compat. */
+    @Attribute("granularity")
+    var granularity: String = "FULL"
+
+    /** Non-null only for ELEMENT granularity. */
+    @Attribute("elementPath")
+    var elementPath: String? = null
+
+    constructor()
+
+    constructor(path: String, granularity: String, elementPath: String?) {
+        this.path = path; this.granularity = granularity; this.elementPath = elementPath
+    }
+
+    fun toDomain(): RequestedViewInfo = RequestedViewInfo(
+        path = path,
+        granularity = try {
+            CodeGranularity.valueOf(granularity)
+        } catch (_: IllegalArgumentException) {
+            CodeGranularity.FULL
+        },
+        elementPath = elementPath
+    )
+
+    companion object {
+        fun fromDomain(v: RequestedViewInfo) =
+            XmlRequestedViewInfo(v.path, v.granularity.name, v.elementPath)
+    }
+}
+
+@Tag("appliedMod")
+class XmlAppliedModInfo {
+    @Attribute("path")
+    var path: String = ""
+
+    /** Enum name of ModificationCategory. Default ELEMENT_LEVEL for forward compat. */
+    @Attribute("category")
+    var category: String = "ELEMENT_LEVEL"
+
+    constructor()
+
+    constructor(path: String, category: String) {
+        this.path = path; this.category = category
+    }
+
+    fun toDomain(): AppliedModInfo = AppliedModInfo(
+        path = path,
+        category = try {
+            ModificationCategory.valueOf(category)
+        } catch (_: IllegalArgumentException) {
+            ModificationCategory.ELEMENT_LEVEL
+        }
+    )
+
+    companion object {
+        fun fromDomain(m: AppliedModInfo) = XmlAppliedModInfo(m.path, m.category.name)
+    }
+}
 
 /**
  * XML DTO for a single chat message.
@@ -55,6 +123,14 @@ class XmlChatMessage {
     @XCollection(style = XCollection.Style.v2, elementTypes = [String::class])
     var appliedModificationPaths: MutableList<String> = mutableListOf()
 
+    /** Typed view requests with granularity. Empty for messages predating this field. */
+    @XCollection(style = XCollection.Style.v2)
+    var requestedViews: MutableList<XmlRequestedViewInfo> = mutableListOf()
+
+    /** Typed applied modifications with category. Empty for messages predating this field. */
+    @XCollection(style = XCollection.Style.v2)
+    var appliedModifications: MutableList<XmlAppliedModInfo> = mutableListOf()
+
     /**
      * LLM reasoning / thinking block. Stored as a nested tag (not attribute) because
      * reasoning text can be very long — XML attributes are not suited for multi-line text.
@@ -76,6 +152,8 @@ class XmlChatMessage {
         requestedFiles: List<String> = emptyList(),
         attachedFiles: List<String> = emptyList(),
         appliedModificationPaths: List<String> = emptyList(),
+        requestedViews: List<RequestedViewInfo> = emptyList(),
+        appliedModifications: List<AppliedModInfo> = emptyList(),
         reasoning: String? = null,
         tokenInfo: String? = null
     ) {
@@ -86,6 +164,8 @@ class XmlChatMessage {
         this.requestedFiles = requestedFiles.toMutableList()
         this.attachedFiles = attachedFiles.toMutableList()
         this.appliedModificationPaths = appliedModificationPaths.toMutableList()
+        this.requestedViews = requestedViews.map { XmlRequestedViewInfo.fromDomain(it) }.toMutableList()
+        this.appliedModifications = appliedModifications.map { XmlAppliedModInfo.fromDomain(it) }.toMutableList()
         this.reasoning = reasoning
         this.tokenInfo = tokenInfo
     }
@@ -99,6 +179,8 @@ class XmlChatMessage {
         requestedFiles = requestedFiles.toList(),
         attachedFiles = attachedFiles.toList(),
         appliedModificationPaths = appliedModificationPaths.toList(),
+        requestedViews = requestedViews.map { it.toDomain() },
+        appliedModifications = appliedModifications.map { it.toDomain() },
         reasoning = reasoning,
         tokenInfo = tokenInfo
     )
@@ -113,6 +195,8 @@ class XmlChatMessage {
             requestedFiles = msg.requestedFiles,
             attachedFiles = msg.attachedFiles,
             appliedModificationPaths = msg.appliedModificationPaths,
+            requestedViews = msg.requestedViews,
+            appliedModifications = msg.appliedModifications,
             reasoning = msg.reasoning,
             tokenInfo = msg.tokenInfo
         )
