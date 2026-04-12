@@ -860,7 +860,10 @@ class ChatPanel(
             attachedErrors = messageController.attachedErrors,
             contextFilesCount = chatTreeService.getGlobalContextFiles().size,
             tokenUsage = session.tokenUsage.takeIf { !it.isEmpty() },
-            clipboardStatus = session.clipboardStatus
+            clipboardStatus = session.clipboardStatus,
+            availablePrompts = service.specificPromptService.getAvailablePromptNames(),
+            selectedSpecificPromptName = service.specificPromptService
+                .validatePromptName(chatTreeService.getActiveSession()?.selectedSpecificPromptName)
         )
     }
 

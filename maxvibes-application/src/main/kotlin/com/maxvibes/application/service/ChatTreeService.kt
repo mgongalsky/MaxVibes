@@ -153,6 +153,13 @@ class ChatTreeService(private val repository: ChatSessionRepository) {
         return updated
     }
 
+    /**
+     * Persists the given session directly (e.g. after a domain-level mutation like withSelectedPrompt).
+     */
+    fun saveSession(session: ChatSession) {
+        repository.saveSession(session)
+    }
+
     fun clearSession(sessionId: String): ChatSession? {
         val session = repository.getSessionById(sessionId) ?: return null
         val cleared = session.cleared()

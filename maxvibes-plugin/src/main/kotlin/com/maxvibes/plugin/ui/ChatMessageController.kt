@@ -672,6 +672,17 @@ Check:
     }
 
     /**
+     * Updates the selected specific prompt for the currently active session.
+     * Null means "Just Code" — no specific prompt.
+     */
+    fun selectSpecificPrompt(name: String?) {
+        val session = chatTreeService.getActiveSession() ?: return
+        val updated = session.withSelectedPrompt(name)
+        chatTreeService.saveSession(updated)
+        callbacks.onSessionChanged(updated)
+    }
+
+    /**
      * Dispatches a user message to the appropriate mode handler.
      *
      * @param userInput   raw text from the input field
@@ -724,14 +735,6 @@ Check:
         sendApiMessage(fullTask, session, history, isDryRun, isPlanOnly, chatTreeService.getGlobalContextFiles(), errs)
     }
 
-    /**
-     * Routes a Clipboard-mode message via [ClipboardInteractionService.handleUserInput].
-     *
-     * The service handles state-based routing (IDLE / SESSION_ACTIVE / AWAITING_PASTE) internally.
-     *
-     * @param addHistory when true, previously gathered file paths are forwarded to the service
-     *   so they appear in the Clipboard JSON payload
-     */
     private fun dispatchClipboardMessage(
         userInput: String,
         trace: String?,
@@ -746,6 +749,9 @@ Check:
 
         // Capture history BEFORE mutating session.
         val history = session.messages.map { it.toChatMessageDTO() }
+
+        val specificPromptContent = service.specificPromptService
+            .resolvePromptContent(chatTreeService.getActiveSession()?.selectedSpecificPromptName)
 
         when (currentStatus) {
             ClipboardSessionStatus.AWAITING_PASTE -> {
@@ -784,7 +790,8 @@ Check:
                 planOnly = isPlanOnly,
                 ideErrors = errs,
                 globalContextFiles = globalContextFiles,
-                addHistory = addHistory
+                addHistory = addHistory,
+                specificPromptContent = specificPromptContent
             )
         }
     }

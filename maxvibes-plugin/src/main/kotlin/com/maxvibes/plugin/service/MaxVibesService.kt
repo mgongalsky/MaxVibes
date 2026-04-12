@@ -30,6 +30,8 @@ import com.maxvibes.adapter.psi.context.IntellijIdeErrorsAdapter
 import com.maxvibes.application.service.ChatTreeService
 import com.maxvibes.plugin.chat.ChatHistoryService
 import com.maxvibes.application.service.ClipboardSessionManager
+import com.maxvibes.application.port.output.SpecificPromptRepository
+import com.maxvibes.application.service.SpecificPromptService
 
 /**
  * Main service for MaxVibes plugin.
@@ -303,6 +305,14 @@ class MaxVibesService(private val project: Project) {
             repository = chatSessionRepository,
             logger = loggerPort
         )
+    }
+    val specificPromptRepository: SpecificPromptRepository by lazy {
+        FileSpecificPromptRepository.forProject(
+            project.basePath ?: System.getProperty("user.home")
+        )
+    }
+    val specificPromptService: SpecificPromptService by lazy {
+        SpecificPromptService(specificPromptRepository)
     }
 
     companion object {
