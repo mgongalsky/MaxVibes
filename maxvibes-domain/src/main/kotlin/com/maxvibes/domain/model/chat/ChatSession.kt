@@ -4,24 +4,6 @@ import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 import java.time.Instant
 import java.util.UUID
 
-/**
- * Immutable domain model representing a single chat session (branch in the session tree).
- *
- * A session holds the full message history, token usage statistics, tree position metadata,
- * and — since the per-session clipboard state refactor — the current [clipboardStatus].
- *
- * All mutation returns a new copy; the original object is never modified.
- *
- * @param id Unique session identifier (UUID)..
- * @param title Human-readable session title, auto-derived from the first user message.
- * @param parentId ID of the parent session, or null if this is a root session.
- * @param depth Depth in the session tree (0 = root).
- * @param messages Ordered list of messages in this session.
- * @param tokenUsage Accumulated token counters (planning + chat).
- * @param createdAt Creation timestamp (epoch millis).
- * @param updatedAt Last modification timestamp (epoch millis).
- * @param clipboardStatus Current state of the clipboard dialog for this session.
- */
 data class ChatSession(
     val id: String = UUID.randomUUID().toString(),
     val title: String = "New Chat",
@@ -31,8 +13,9 @@ data class ChatSession(
     val tokenUsage: TokenUsage = TokenUsage.EMPTY,
     val createdAt: Long = Instant.now().toEpochMilli(),
     val updatedAt: Long = Instant.now().toEpochMilli(),
+    val clipboardStatus: ClipboardSessionStatus = ClipboardSessionStatus.IDLE,
     // Last field — default value ensures backward compatibility with all existing call sites.
-    val clipboardStatus: ClipboardSessionStatus = ClipboardSessionStatus.IDLE
+    val selectedSpecificPromptName: String? = null
 ) {
     /** True if this session has no parent (i.e., it is a root-level session). */
     val isRoot: Boolean get() = parentId == null
@@ -85,12 +68,13 @@ data class ChatSession(
 
     /**
      * Returns a new session with [clipboardStatus] set to [status] and [updatedAt] refreshed.
-     *
-     * Use this instead of raw [copy] to ensure the timestamp is always kept in sync
-     * with clipboard state transitions.
-     *
-     * @param status The new clipboard dialog status for this session.
      */
     fun withClipboardStatus(status: ClipboardSessionStatus): ChatSession =
         copy(clipboardStatus = status, updatedAt = Instant.now().toEpochMilli())
+
+    /**
+     * Returns a new session with [selectedSpecificPromptName] updated and [updatedAt] refreshed.
+     */
+    fun withSelectedPrompt(name: String?): ChatSession =
+        copy(selectedSpecificPromptName = name, updatedAt = Instant.now().toEpochMilli())
 }

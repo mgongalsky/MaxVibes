@@ -245,6 +245,13 @@ class XmlChatSession {
     @Attribute("clipboardStatus")
     var clipboardStatus: String = "IDLE"
 
+    /**
+     * Selected specific prompt name for this session.
+     * Empty string = null ("Just Code"). Default empty for backward compat.
+     */
+    @Attribute("selectedSpecificPromptName")
+    var selectedSpecificPromptName: String = ""
+
     constructor()
 
     fun toTokenUsage(): TokenUsage = TokenUsage(
@@ -272,7 +279,8 @@ class XmlChatSession {
             ClipboardSessionStatus.valueOf(clipboardStatus)
         } catch (_: IllegalArgumentException) {
             ClipboardSessionStatus.IDLE
-        }
+        },
+        selectedSpecificPromptName = selectedSpecificPromptName.takeIf { it.isNotEmpty() }
     )
 
     companion object {
@@ -291,6 +299,7 @@ class XmlChatSession {
             xml.createdAt = session.createdAt
             xml.updatedAt = session.updatedAt
             xml.clipboardStatus = session.clipboardStatus.name
+            xml.selectedSpecificPromptName = session.selectedSpecificPromptName ?: ""
             return xml
         }
     }
