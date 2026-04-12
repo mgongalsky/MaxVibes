@@ -33,7 +33,12 @@ data class ClipboardRequest(
     /** Ошибки компиляции (из IDE) */
     val ideErrors: String? = null,
     /** Plan-only mode: discussion without code modifications */
-    val planOnly: Boolean = false
+    val planOnly: Boolean = false,
+    /**
+     * Optional task-scoped prompt injected alongside the system instruction.
+     * Null when "Just Code" mode is active (no specific prompt selected).
+     */
+    val specificPrompt: String? = null
 )
 
 data class ClipboardHistoryEntry(
