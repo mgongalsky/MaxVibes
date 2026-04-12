@@ -1,9 +1,7 @@
 package com.maxvibes.application.service
 
 import com.maxvibes.application.port.output.*
-import com.maxvibes.domain.model.code.CodeElement
-import com.maxvibes.domain.model.code.ElementKind
-import com.maxvibes.domain.model.code.ElementPath
+import com.maxvibes.domain.model.code.*
 import com.maxvibes.domain.model.context.*
 import com.maxvibes.domain.model.interaction.*
 import com.maxvibes.domain.model.modification.Modification
@@ -114,6 +112,10 @@ class ClipboardMinimalModeTest {
         override suspend fun exists(path: ElementPath): Boolean = false
         override suspend fun validateSyntax(content: String): Result<Unit, CodeRepositoryError> =
             Result.Success(Unit)
+
+        override suspend fun getCodeView(request: CodeViewRequest): CodeView {
+            TODO("Not yet implemented")
+        }
     }
 
     /** Returns non-blank prompts so full-context assertions can detect them. */
