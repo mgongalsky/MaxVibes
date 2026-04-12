@@ -134,6 +134,24 @@ class ChatPanel(
         isFocusPainted = false
     }
 
+    /** Button to edit the currently selected specific prompt file. */
+    private val editPromptButton = JButton("✏").apply {
+        font = font.deriveFont(12f)
+        toolTipText = "Open current prompt file for editing"
+        preferredSize = Dimension(26, 22)
+        isFocusPainted = false
+        isEnabled = false
+    }
+
+    /** Button to delete the currently selected specific prompt file. */
+    private val deletePromptButton = JButton("−").apply {
+        font = font.deriveFont(Font.BOLD, 13f)
+        toolTipText = "Delete current prompt file"
+        preferredSize = Dimension(26, 22)
+        isFocusPainted = false
+        isEnabled = false
+    }
+
     /** Single dropdown button showing the active specific prompt. */
     private val promptSelectButton = JButton("Just Code ▾").apply {
         font = font.deriveFont(11f)
@@ -251,6 +269,8 @@ class ChatPanel(
         maximizeButton.isEnabled = enabled
         promptSelectButton.isEnabled = enabled
         newPromptButton.isEnabled = enabled
+        editPromptButton.isEnabled = enabled
+        deletePromptButton.isEnabled = enabled
     }
 
     override fun setStatus(text: String) {
@@ -530,6 +550,8 @@ class ChatPanel(
         sessionsButton.addActionListener { onShowSessions() }
         promptSelectButton.addActionListener { showPromptSelectionPopup() }
         newPromptButton.addActionListener { createNewPromptFile() }
+        editPromptButton.addActionListener { editCurrentPromptFile() }
+        deletePromptButton.addActionListener { deleteCurrentPromptFile() }
 
         newChatButton.addActionListener {
             messageController.clearAttachmentsAfterSend()
@@ -878,12 +900,17 @@ class ChatPanel(
             "Active prompt: $displayName — click to change"
         else
             "No specific prompt active — click to select"
+        val hasPrompt = state.selectedSpecificPromptName != null
+        editPromptButton.isEnabled = hasPrompt
+        deletePromptButton.isEnabled = hasPrompt
     }
 
     private fun buildPromptPanel(): JPanel {
         return JPanel(FlowLayout(FlowLayout.RIGHT, 4, 2)).apply {
             background = JBColor.background()
             add(newPromptButton)
+            add(editPromptButton)
+            add(deletePromptButton)
             add(promptSelectButton)
         }
     }
@@ -938,6 +965,52 @@ class ChatPanel(
 
         statusLabel.text = "Created: ${candidate.name} — add your prompt text and save"
         // Refresh the dropdown so the new file appears immediately
+        render(buildState())
+    }
+
+    private fun editCurrentPromptFile() {
+        val name = buildState().selectedSpecificPromptName ?: return
+        val basePath = project.basePath ?: return
+        val dir = java.io.File(basePath, ".maxvibes/prompts/specific")
+        val file = listOf("md", "txt")
+            .map { java.io.File(dir, "$name.$it") }
+            .firstOrNull { it.exists() } ?: return
+        val vFile = com.intellij.openapi.vfs.LocalFileSystem.getInstance()
+            .refreshAndFindFileByIoFile(file)
+        if (vFile != null) {
+            com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project).openFile(vFile, true)
+        }
+    }
+
+    private fun deleteCurrentPromptFile() {
+        val name = buildState().selectedSpecificPromptName ?: return
+        val confirm = JOptionPane.showConfirmDialog(
+            this,
+            "Delete prompt \"$name\"?\nThe file will be permanently removed from disk.",
+            "Delete Prompt",
+            JOptionPane.YES_NO_OPTION,
+            JOptionPane.WARNING_MESSAGE
+        )
+        if (confirm != JOptionPane.YES_OPTION) return
+
+        val basePath = project.basePath ?: return
+        val dir = java.io.File(basePath, ".maxvibes/prompts/specific")
+        val file = listOf("md", "txt")
+            .map { java.io.File(dir, "$name.$it") }
+            .firstOrNull { it.exists() }
+
+        if (file == null || !file.delete()) {
+            statusLabel.text = "Failed to delete prompt file"
+            return
+        }
+
+        // Reset selection in all sessions that had this prompt
+        val session = chatTreeService.getActiveSession()
+        if (session.selectedSpecificPromptName == name) {
+            messageController.selectSpecificPrompt(null)
+        }
+
+        statusLabel.text = "Deleted prompt: $name"
         render(buildState())
     }
 
