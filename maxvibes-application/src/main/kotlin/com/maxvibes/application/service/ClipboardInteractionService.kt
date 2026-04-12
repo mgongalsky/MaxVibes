@@ -68,12 +68,6 @@ class ClipboardInteractionService(
 
     // ==================== Public API ====================
 
-    /**
-     * Unified entry point for clipboard-mode UI interactions.
-     *
-     * Routes to [startTask], [continueDialog], or [handlePastedResponse] based on the
-     * current session status, so UI code does not need to track internal states.
-     */
     suspend fun handleUserInput(
         sessionId: String,
         userInput: String,
@@ -82,7 +76,8 @@ class ClipboardInteractionService(
         planOnly: Boolean = false,
         ideErrors: String? = null,
         globalContextFiles: List<String> = emptyList(),
-        addHistory: Boolean = false
+        addHistory: Boolean = false,
+        specificPromptContent: String? = null
     ): ClipboardStepResult = when (currentStatus(sessionId)) {
         ClipboardSessionStatus.AWAITING_PASTE -> handlePastedResponse(sessionId, userInput)
         ClipboardSessionStatus.SESSION_ACTIVE -> continueDialog(
@@ -92,7 +87,8 @@ class ClipboardInteractionService(
             planOnly = planOnly,
             ideErrors = ideErrors,
             globalContextFiles = globalContextFiles,
-            addHistory = addHistory
+            addHistory = addHistory,
+            specificPromptContent = specificPromptContent
         )
 
         ClipboardSessionStatus.IDLE -> startTask(
@@ -103,7 +99,8 @@ class ClipboardInteractionService(
             planOnly = planOnly,
             ideErrors = ideErrors,
             globalContextFiles = globalContextFiles,
-            addHistory = addHistory
+            addHistory = addHistory,
+            specificPromptContent = specificPromptContent
         )
     }
 
@@ -115,7 +112,8 @@ class ClipboardInteractionService(
         planOnly: Boolean = false,
         ideErrors: String? = null,
         globalContextFiles: List<String> = emptyList(),
-        addHistory: Boolean = false
+        addHistory: Boolean = false,
+        specificPromptContent: String? = null
     ): ClipboardStepResult {
         log("Starting clipboard session: planOnly=$planOnly, addHistory=$addHistory")
 
@@ -132,9 +130,6 @@ class ClipboardInteractionService(
 
         log("Project: ${projectContext.name}, files in tree: ${projectContext.fileTree.totalFiles}")
 
-        // Initialise in-memory workspace for this dialog.
-        // attachedContext and ideErrors are NOT stored here — they are one-shot per-message
-        // context forwarded directly to generateAndCopyJson so they don't bleed into future turns.
         sessionState = ClipboardSessionState(
             currentMessage = currentMessage,
             projectContext = projectContext,
@@ -153,7 +148,8 @@ class ClipboardInteractionService(
             isFirstMessage = true,
             addHistory = addHistory,
             ideErrors = ideErrors,
-            attachedContext = attachedContext
+            attachedContext = attachedContext,
+            specificPromptContent = specificPromptContent
         )
     }
 
@@ -164,9 +160,9 @@ class ClipboardInteractionService(
         planOnly: Boolean? = null,
         ideErrors: String? = null,
         globalContextFiles: List<String> = emptyList(),
-        addHistory: Boolean = false
+        addHistory: Boolean = false,
+        specificPromptContent: String? = null
     ): ClipboardStepResult {
-        // Auto-restore workspace after IDE restart if sessionState was lost
         if (sessionState == null) {
             log("sessionState is null in continueDialog — attempting workspace restore for session $sessionId")
             if (!ensureWorkspace(sessionId)) {
@@ -194,7 +190,8 @@ class ClipboardInteractionService(
             isFirstMessage = false,
             addHistory = addHistory,
             ideErrors = ideErrors,
-            attachedContext = attachedContext
+            attachedContext = attachedContext,
+            specificPromptContent = specificPromptContent
         )
     }
 
@@ -464,7 +461,8 @@ class ClipboardInteractionService(
         addHistory: Boolean = false,
         ideErrors: String? = null,
         attachedContext: String? = null,
-        requestedViews: List<RequestedViewInfo> = emptyList()
+        requestedViews: List<RequestedViewInfo> = emptyList(),
+        specificPromptContent: String? = null
     ): ClipboardStepResult {
         val state = sessionState ?: return error("No active session")
 
@@ -475,7 +473,8 @@ class ClipboardInteractionService(
             addHistory = addHistory,
             planOnlySuffix = PLAN_ONLY_SUFFIX,
             ideErrors = ideErrors,
-            attachedContext = attachedContext
+            attachedContext = attachedContext,
+            specificPromptContent = specificPromptContent
         )
 
         val copied = clipboardPort.copyRequestToClipboard(request)
