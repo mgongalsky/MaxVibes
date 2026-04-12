@@ -123,6 +123,23 @@ class ChatPanel(
         toolTipText = "Floating Mode / Dock"; font = font.deriveFont(11f); isFocusPainted = false
     }
 
+    /** Label showing the currently selected specific prompt name. */
+    private val promptNameLabel = JBLabel("Just Code").apply {
+        font = font.deriveFont(11f)
+        foreground = JBColor(Color(0x616161), Color(0x9E9E9E))
+        toolTipText = "Currently active task prompt"
+        minimumSize = Dimension(200, 0)
+        preferredSize = Dimension(300, 20)
+    }
+
+    /** Button to open the prompt selection popup. */
+    private val promptSelectButton = JButton("▾").apply {
+        font = font.deriveFont(11f)
+        toolTipText = "Select task prompt"
+        preferredSize = Dimension(28, 20)
+        isFocusPainted = false
+    }
+
     private val service: MaxVibesService by lazy { MaxVibesService.getInstance(project) }
     private val chatTreeService get() = service.chatTreeService
     private val promptService: PromptService by lazy { PromptService.getInstance(project) }
@@ -230,6 +247,7 @@ class ChatPanel(
         contextFilesButton.isEnabled = enabled
         claudeInstrButton.isEnabled = enabled
         maximizeButton.isEnabled = enabled
+        promptSelectButton.isEnabled = enabled
     }
 
     override fun setStatus(text: String) {
@@ -457,11 +475,17 @@ class ChatPanel(
             add(JPanel(BorderLayout()).apply {
                 border = JBUI.Borders.customLine(JBColor.border(), 1); add(inputArea, BorderLayout.CENTER)
             }, BorderLayout.CENTER)
-            add(JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
+            add(JPanel(BorderLayout()).apply {
                 background = JBColor.background()
-                add(attachErrorsButton.apply { preferredSize = Dimension(85, 26) })
-                add(attachTraceButton.apply { preferredSize = Dimension(80, 26) })
-                add(addHistoryCheckbox); add(planOnlyCheckbox); add(dryRunCheckbox); add(copyJsonButton); add(sendButton)
+                add(buildPromptPanel(), BorderLayout.NORTH)
+                add(JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
+                    background = JBColor.background()
+                    add(attachErrorsButton.apply { preferredSize = Dimension(85, 26) })
+                    add(attachTraceButton.apply { preferredSize = Dimension(80, 26) })
+                    add(addHistoryCheckbox); add(planOnlyCheckbox); add(dryRunCheckbox); add(copyJsonButton); add(
+                    sendButton
+                )
+                }, BorderLayout.CENTER)
             }, BorderLayout.SOUTH)
         }
 
@@ -501,6 +525,7 @@ class ChatPanel(
         sendButton.addActionListener { sendMessage() }
         copyJsonButton.addActionListener { messageController.redoClipboardJson() }
         sessionsButton.addActionListener { onShowSessions() }
+        promptSelectButton.addActionListener { showPromptSelectionPopup() }
 
         newChatButton.addActionListener {
             messageController.clearAttachmentsAfterSend()
@@ -834,13 +859,6 @@ class ChatPanel(
         windowedButton.toolTipText = if (isFloating) "Dock Tool Window" else "Floating Mode"
     }
 
-    /**
-     * Updates all UI components based on the provided state snapshot.
-     * Single point of UI refresh — foundation for MVP pattern.
-     *
-     * Note: input enable/disable is handled via [setInputEnabled] (called by the controller).
-     * render() only updates labels, indicators, and control visibility.
-     */
     fun render(state: ChatPanelState) {
         updateBreadcrumb()
         updateModeUI(state)
@@ -848,6 +866,42 @@ class ChatPanel(
         updateTokenDisplay()
         updateContextIndicator()
         updateToolWindowIcons()
+        val displayName = state.selectedSpecificPromptName ?: "Just Code"
+        promptNameLabel.text = displayName
+        promptNameLabel.toolTipText = if (state.selectedSpecificPromptName != null)
+            "Active prompt: $displayName"
+        else
+            "No specific prompt active (Just Code)"
+    }
+
+    private fun buildPromptPanel(): JPanel {
+        return JPanel(BorderLayout()).apply {
+            background = JBColor.background()
+            border = JBUI.Borders.empty(2, 4)
+            add(promptNameLabel, BorderLayout.CENTER)
+            add(promptSelectButton, BorderLayout.EAST)
+        }
+    }
+
+    private fun showPromptSelectionPopup() {
+        val state = buildState()
+        val items = mutableListOf("Just Code") + state.availablePrompts
+        val popup = JPopupMenu()
+        items.forEach { name ->
+            val item = JMenuItem(name).apply {
+                val isSelected = if (name == "Just Code")
+                    state.selectedSpecificPromptName == null
+                else
+                    name == state.selectedSpecificPromptName
+                font = if (isSelected) font.deriveFont(Font.BOLD) else font
+                addActionListener {
+                    val selectedName = if (name == "Just Code") null else name
+                    messageController.selectSpecificPrompt(selectedName)
+                }
+            }
+            popup.add(item)
+        }
+        popup.show(promptSelectButton, 0, promptSelectButton.height)
     }
 
     private fun buildState(): ChatPanelState {
