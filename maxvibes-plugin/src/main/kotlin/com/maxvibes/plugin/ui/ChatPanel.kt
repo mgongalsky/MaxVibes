@@ -123,20 +123,14 @@ class ChatPanel(
         toolTipText = "Floating Mode / Dock"; font = font.deriveFont(11f); isFocusPainted = false
     }
 
-    /** Label showing the currently selected specific prompt name. */
-    private val promptNameLabel = JBLabel("Just Code").apply {
-        font = font.deriveFont(11f)
-        foreground = JBColor(Color(0x616161), Color(0x9E9E9E))
-        toolTipText = "Currently active task prompt"
-        minimumSize = Dimension(200, 0)
-        preferredSize = Dimension(300, 20)
-    }
+    /** Single dropdown button showing the active specific prompt name. */
+    private val promptNameLabel = JBLabel("") // unused placeholder — kept for binary compat
 
-    /** Button to open the prompt selection popup. */
-    private val promptSelectButton = JButton("▾").apply {
+    /** Single dropdown button showing the active specific prompt. */
+    private val promptSelectButton = JButton("Just Code ▾").apply {
         font = font.deriveFont(11f)
         toolTipText = "Select task prompt"
-        preferredSize = Dimension(28, 20)
+        preferredSize = Dimension(200, 22)
         isFocusPainted = false
     }
 
@@ -867,19 +861,17 @@ class ChatPanel(
         updateContextIndicator()
         updateToolWindowIcons()
         val displayName = state.selectedSpecificPromptName ?: "Just Code"
-        promptNameLabel.text = displayName
-        promptNameLabel.toolTipText = if (state.selectedSpecificPromptName != null)
-            "Active prompt: $displayName"
+        promptSelectButton.text = "$displayName ▾"
+        promptSelectButton.toolTipText = if (state.selectedSpecificPromptName != null)
+            "Active prompt: $displayName — click to change"
         else
-            "No specific prompt active (Just Code)"
+            "No specific prompt active — click to select"
     }
 
     private fun buildPromptPanel(): JPanel {
-        return JPanel(BorderLayout()).apply {
+        return JPanel(FlowLayout(FlowLayout.RIGHT, 4, 2)).apply {
             background = JBColor.background()
-            border = JBUI.Borders.empty(2, 4)
-            add(promptNameLabel, BorderLayout.CENTER)
-            add(promptSelectButton, BorderLayout.EAST)
+            add(promptSelectButton)
         }
     }
 
