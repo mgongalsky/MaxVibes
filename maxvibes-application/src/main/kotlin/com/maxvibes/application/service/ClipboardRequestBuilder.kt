@@ -24,7 +24,8 @@ internal object ClipboardRequestBuilder {
         addHistory: Boolean = false,
         planOnlySuffix: String = "",
         ideErrors: String? = null,
-        attachedContext: String? = null
+        attachedContext: String? = null,
+        specificPromptContent: String? = null
     ): ClipboardRequest {
         // Minimal-mode: LLM already has full context in its chat window — send only the delta.
         val isMinimal = !isFirstMessage && !addHistory
@@ -73,7 +74,10 @@ internal object ClipboardRequestBuilder {
             // ideErrors: one-shot per-message diagnostics — NOT stored in session state.
             // Always forwarded when provided; ignored in subsequent turns where null is passed.
             ideErrors = ideErrors,
-            planOnly = if (isMinimal) false else state.planOnly
+            planOnly = if (isMinimal) false else state.planOnly,
+            // specificPromptContent is passed through unconditionally — even in minimal mode.
+            // The LLM needs the task-scoped prompt in every message to retain task context.
+            specificPrompt = specificPromptContent
         )
     }
 
