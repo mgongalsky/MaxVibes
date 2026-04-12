@@ -81,7 +81,10 @@ class ChatTreeService(private val repository: ChatSessionRepository) {
     // ==================== Mutations ====================
 
     fun createNewSession(): ChatSession {
-        val session = ChatSession()
+        val inheritedPrompt = repository.getActiveSessionId()
+            ?.let { repository.getSessionById(it) }
+            ?.selectedSpecificPromptName
+        val session = ChatSession(selectedSpecificPromptName = inheritedPrompt)
         repository.saveSession(session)
         repository.setActiveSessionId(session.id)
         trimOldSessions()
@@ -93,7 +96,8 @@ class ChatTreeService(private val repository: ChatSessionRepository) {
         val session = ChatSession(
             parentId = parentSessionId,
             depth = parent.depth + 1,
-            title = branchTitle ?: "Branch of: ${parent.title.take(30)}"
+            title = branchTitle ?: "Branch of: ${parent.title.take(30)}",
+            selectedSpecificPromptName = parent.selectedSpecificPromptName
         )
         repository.saveSession(session)
         repository.setActiveSessionId(session.id)
