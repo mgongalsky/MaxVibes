@@ -57,6 +57,9 @@ object ClipboardRequestSchema {
     /** IDE-reported errors (compiler, inspections) attached to request. */
     const val FIELD_IDE_ERRORS = "ideErrors"
 
+    /** Optional task-scoped prompt injected alongside the system instruction. Absent when "Just Code" mode is active. */
+    const val FIELD_SPECIFIC_PROMPT = "specificPrompt"
+
     // ── Chat history entry fields ──────────────────────────────────────
 
     /** Role of the speaker in a history entry ("user" / "assistant"). */

@@ -35,13 +35,6 @@ class JsonClipboardProtocolCodec : ClipboardProtocolCodec {
 
     // ── Encode ────────────────────────────────────────────────────────
 
-    /**
-     * Serializes [request] into a JSON string suitable for the system clipboard.
-     *
-     * Only non-default / non-blank fields are included in the output to keep
-     * the payload compact. Optional boolean flags (e.g. [ClipboardRequest.planOnly])
-     * are omitted when false.
-     */
     override fun encode(request: ClipboardRequest): String {
         val obj = buildJsonObject {
             // Meta-fields: instruct the LLM how to behave and format its response
@@ -51,6 +44,11 @@ class JsonClipboardProtocolCodec : ClipboardProtocolCodec {
             // System prompt — omitted when blank to save tokens
             if (request.systemInstruction.isNotBlank()) {
                 put(ClipboardRequestSchema.FIELD_SYSTEM_INSTRUCTION, request.systemInstruction)
+            }
+
+            // Task-scoped specific prompt — omitted when null ("Just Code" mode)
+            request.specificPrompt?.takeIf { it.isNotBlank() }?.let {
+                put(ClipboardRequestSchema.FIELD_SPECIFIC_PROMPT, it)
             }
 
             // Current user message for this turn (always present)

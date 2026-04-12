@@ -126,6 +126,14 @@ class ChatPanel(
     /** Single dropdown button showing the active specific prompt name. */
     private val promptNameLabel = JBLabel("") // unused placeholder — kept for binary compat
 
+    /** Button to create a new specific prompt file. */
+    private val newPromptButton = JButton("+").apply {
+        font = font.deriveFont(Font.BOLD, 12f)
+        toolTipText = "Create new task prompt file in .maxvibes/prompts/specific/"
+        preferredSize = Dimension(26, 22)
+        isFocusPainted = false
+    }
+
     /** Single dropdown button showing the active specific prompt. */
     private val promptSelectButton = JButton("Just Code ▾").apply {
         font = font.deriveFont(11f)
@@ -242,6 +250,7 @@ class ChatPanel(
         claudeInstrButton.isEnabled = enabled
         maximizeButton.isEnabled = enabled
         promptSelectButton.isEnabled = enabled
+        newPromptButton.isEnabled = enabled
     }
 
     override fun setStatus(text: String) {
@@ -520,6 +529,7 @@ class ChatPanel(
         copyJsonButton.addActionListener { messageController.redoClipboardJson() }
         sessionsButton.addActionListener { onShowSessions() }
         promptSelectButton.addActionListener { showPromptSelectionPopup() }
+        newPromptButton.addActionListener { createNewPromptFile() }
 
         newChatButton.addActionListener {
             messageController.clearAttachmentsAfterSend()
@@ -621,6 +631,7 @@ class ChatPanel(
         val userInput = inputArea.text.trim()
         if (userInput.isBlank()) return
         val addHistory = addHistoryCheckbox.isSelected
+        val state = buildState()
         inputArea.text = ""
         addHistoryCheckbox.isSelected = false
         messageController.sendMessage(
@@ -628,7 +639,8 @@ class ChatPanel(
             planOnlyCheckbox.isSelected,
             dryRunCheckbox.isSelected,
             modeManager.currentMode,
-            addHistory
+            addHistory,
+            state.selectedSpecificPromptName
         )
     }
 
@@ -871,6 +883,7 @@ class ChatPanel(
     private fun buildPromptPanel(): JPanel {
         return JPanel(FlowLayout(FlowLayout.RIGHT, 4, 2)).apply {
             background = JBColor.background()
+            add(newPromptButton)
             add(promptSelectButton)
         }
     }
@@ -894,6 +907,38 @@ class ChatPanel(
             popup.add(item)
         }
         popup.show(promptSelectButton, 0, promptSelectButton.height)
+    }
+
+    private fun createNewPromptFile() {
+        val basePath = project.basePath ?: return
+        val dir = java.io.File(basePath, ".maxvibes/prompts/specific")
+        if (!dir.exists()) dir.mkdirs()
+
+        // Find a unique filename
+        var candidate = java.io.File(dir, "new_prompt.md")
+        var counter = 1
+        while (candidate.exists()) {
+            candidate = java.io.File(dir, "new_prompt_$counter.md")
+            counter++
+        }
+
+        try {
+            candidate.writeText("# ${candidate.nameWithoutExtension}\n\nDescribe your task-specific prompt here.\n")
+        } catch (e: Exception) {
+            statusLabel.text = "Failed to create prompt file: ${e.message}"
+            return
+        }
+
+        // Open the file in the IDE editor
+        val vFile = com.intellij.openapi.vfs.LocalFileSystem.getInstance()
+            .refreshAndFindFileByIoFile(candidate)
+        if (vFile != null) {
+            com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project).openFile(vFile, true)
+        }
+
+        statusLabel.text = "Created: ${candidate.name} — add your prompt text and save"
+        // Refresh the dropdown so the new file appears immediately
+        render(buildState())
     }
 
     private fun buildState(): ChatPanelState {

@@ -682,22 +682,13 @@ Check:
         callbacks.onSessionChanged(updated)
     }
 
-    /**
-     * Dispatches a user message to the appropriate mode handler.
-     *
-     * @param userInput   raw text from the input field
-     * @param isPlanOnly  whether plan-only mode is active
-     * @param isDryRun    whether dry-run mode is active (API/CheapAPI only)
-     * @param mode        current interaction mode
-     * @param addHistory  when true, previously gathered file paths are included in the
-     *   Clipboard request so a fresh LLM chat can re-request context it needs
-     */
     fun sendMessage(
         userInput: String,
         isPlanOnly: Boolean,
         isDryRun: Boolean,
         mode: InteractionMode,
-        addHistory: Boolean = false
+        addHistory: Boolean = false,
+        selectedSpecificPromptName: String? = null
     ) {
         val trace = attachedTrace
         val errs = attachedErrors
@@ -709,12 +700,21 @@ Check:
                 "isPlanOnly" to isPlanOnly,
                 "hasTrace" to (trace != null),
                 "hasErrors" to (errs != null),
-                "addHistory" to addHistory
+                "addHistory" to addHistory,
+                "specificPrompt" to (selectedSpecificPromptName ?: "null")
             )
         )
         when (mode) {
             InteractionMode.API -> dispatchApiMessage(userInput, trace, errs, isPlanOnly, isDryRun)
-            InteractionMode.CLIPBOARD -> dispatchClipboardMessage(userInput, trace, errs, isPlanOnly, addHistory)
+            InteractionMode.CLIPBOARD -> dispatchClipboardMessage(
+                userInput,
+                trace,
+                errs,
+                isPlanOnly,
+                addHistory,
+                selectedSpecificPromptName
+            )
+
             InteractionMode.CHEAP_API -> dispatchCheapApiMessage(userInput, trace, errs, isPlanOnly, isDryRun)
         }
     }
@@ -740,7 +740,8 @@ Check:
         trace: String?,
         errs: String?,
         isPlanOnly: Boolean,
-        addHistory: Boolean = false
+        addHistory: Boolean = false,
+        selectedSpecificPromptName: String? = null
     ) {
         val cs = service.clipboardService
         var session = chatTreeService.getActiveSession()
@@ -750,17 +751,16 @@ Check:
         // Capture history BEFORE mutating session.
         val history = session.messages.map { it.toChatMessageDTO() }
 
-        val specificPromptContent = service.specificPromptService
-            .resolvePromptContent(chatTreeService.getActiveSession()?.selectedSpecificPromptName)
+        // Resolve prompt content from the name already captured in the UI state snapshot —
+        // avoids a second repository read that could race with a just-saved selectSpecificPrompt.
+        val specificPromptContent = service.specificPromptService.resolvePromptContent(selectedSpecificPromptName)
 
         when (currentStatus) {
             ClipboardSessionStatus.AWAITING_PASTE -> {
-                // Pasting an LLM response — decorate the last bubble with a paste icon, no user bubble.
                 callbacks.appendIconToLastBubble("\uD83D\uDCE5")
             }
 
             else -> {
-                // New task or continuation — record message and show user bubble.
                 val fullMsg = buildString {
                     append(userInput)
                     if (!trace.isNullOrBlank()) append("\n[trace: ${trace.lines().size} lines]")
