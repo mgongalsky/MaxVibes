@@ -6,7 +6,7 @@ import com.maxvibes.application.port.output.PromptTemplates
 import com.maxvibes.domain.model.context.FileNode
 import com.maxvibes.domain.model.context.FileTree
 import com.maxvibes.domain.model.context.ProjectContext
-import com.maxvibes.domain.model.interaction.ClipboardPhase
+import com.maxvibes.domain.model.interaction.InteractionPhase
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
@@ -58,7 +58,7 @@ class ClipboardRequestBuilderTest {
             freshFiles = emptyMap(),
             isFirstMessage = true
         )
-        assertEquals(ClipboardPhase.PLANNING, req.phase)
+        assertEquals(InteractionPhase.PLANNING, req.phase)
     }
 
     @Test
@@ -68,7 +68,7 @@ class ClipboardRequestBuilderTest {
             freshFiles = mapOf("src/Foo.kt" to "class Foo"),
             isFirstMessage = true
         )
-        assertEquals(ClipboardPhase.CHAT, req.phase)
+        assertEquals(InteractionPhase.CHAT, req.phase)
     }
 
     @Test
@@ -78,7 +78,7 @@ class ClipboardRequestBuilderTest {
             freshFiles = emptyMap(),
             isFirstMessage = false
         )
-        assertEquals(ClipboardPhase.CHAT, req.phase)
+        assertEquals(InteractionPhase.CHAT, req.phase)
     }
 
     // ── Minimal mode ──────────────────────────────────────────────────

@@ -44,7 +44,7 @@ class ClipboardMinimalModeTest {
 
         override fun copyRawText(text: String): Boolean = true
 
-        override fun parseResponse(rawText: String): ClipboardResponse? = null
+        override fun parseResponse(rawText: String): InteractionResponse? = null
     }
 
     /** Returns a minimal but valid [ProjectContext] with a non-blank file tree. */

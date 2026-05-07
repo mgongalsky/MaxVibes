@@ -1,8 +1,8 @@
 package com.maxvibes.application.service
 
 import com.maxvibes.application.port.output.ChatRole
-import com.maxvibes.domain.model.interaction.ClipboardHistoryEntry
-import com.maxvibes.domain.model.interaction.ClipboardPhase
+import com.maxvibes.domain.model.interaction.InteractionHistoryEntry
+import com.maxvibes.domain.model.interaction.InteractionPhase
 import com.maxvibes.domain.model.interaction.ClipboardRequest
 
 /**
@@ -50,7 +50,7 @@ internal object ClipboardRequestBuilder {
         return ClipboardRequest(
             // Phase is PLANNING only when neither session nor turn has gathered any files yet.
             phase = if (state.allGatheredFiles.isEmpty() && freshFiles.isEmpty())
-                ClipboardPhase.PLANNING else ClipboardPhase.CHAT,
+                InteractionPhase.PLANNING else InteractionPhase.CHAT,
             currentMessage = taskContent,
             projectName = state.projectContext.name,
             systemInstruction = systemInstruction,
@@ -59,7 +59,7 @@ internal object ClipboardRequestBuilder {
             previouslyGatheredPaths = previousPaths,
             // Chat history: fully serialized in full mode; empty in minimal mode.
             chatHistory = if (isMinimal) emptyList() else state.dialogHistory.map { msg ->
-                ClipboardHistoryEntry(
+                InteractionHistoryEntry(
                     role = when (msg.role) {
                         ChatRole.USER -> "user"
                         ChatRole.ASSISTANT -> "assistant"

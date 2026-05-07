@@ -24,11 +24,11 @@ class JsonClipboardProtocolCodecTest {
         fileTree: String = "",
         freshFiles: Map<String, String> = emptyMap(),
         previouslyGatheredPaths: List<String> = emptyList(),
-        chatHistory: List<ClipboardHistoryEntry> = emptyList(),
+        chatHistory: List<InteractionHistoryEntry> = emptyList(),
         attachedContext: String? = null,
         ideErrors: String? = null
     ) = ClipboardRequest(
-        phase = ClipboardPhase.CHAT,
+        phase = InteractionPhase.CHAT,
         currentMessage = currentMessage,
         projectName = "TestProject",
         systemInstruction = systemInstruction,
@@ -107,8 +107,8 @@ class JsonClipboardProtocolCodecTest {
     @Test
     fun `encode chatHistory serialized with role and content`() {
         val history = listOf(
-            ClipboardHistoryEntry(role = "user", content = "hello"),
-            ClipboardHistoryEntry(role = "assistant", content = "world")
+            InteractionHistoryEntry(role = "user", content = "hello"),
+            InteractionHistoryEntry(role = "assistant", content = "world")
         )
         val result = codec.encode(minimalRequest(chatHistory = history))
 

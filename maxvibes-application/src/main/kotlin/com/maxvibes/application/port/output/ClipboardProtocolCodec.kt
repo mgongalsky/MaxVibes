@@ -1,7 +1,7 @@
 package com.maxvibes.application.port.output
 
 import com.maxvibes.domain.model.interaction.ClipboardRequest
-import com.maxvibes.domain.model.interaction.ClipboardResponse
+import com.maxvibes.domain.model.interaction.InteractionResponse
 
 /**
  * Port for serializing and deserializing the Clipboard mode JSON protocol.
@@ -28,7 +28,7 @@ interface ClipboardProtocolCodec {
     fun encode(request: ClipboardRequest): String
 
     /**
-     * Decodes a raw LLM response text into a [ClipboardResponse].
+     * Decodes a raw LLM response text into a [InteractionResponse].
      *
      * Handles the following response formats:
      * - Raw JSON object (`{...}`)
@@ -39,5 +39,5 @@ interface ClipboardProtocolCodec {
      * @param rawText raw string received from the LLM
      * @return parsed [ClipboardResponse], or `null` if the input is blank and contains no JSON
      */
-    fun decode(rawText: String): ClipboardResponse?
+    fun decode(rawText: String): InteractionResponse?
 }

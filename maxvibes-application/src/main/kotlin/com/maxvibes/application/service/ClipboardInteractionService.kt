@@ -376,7 +376,7 @@ class ClipboardInteractionService(
 
     private suspend fun processUnifiedResponse(
         sessionId: String,
-        response: ClipboardResponse,
+        response: InteractionResponse,
         inputTokens: Int = 0,
         outputTokens: Int = 0
     ): ClipboardStepResult {
@@ -627,7 +627,7 @@ class ClipboardInteractionService(
 
     // ==================== Modifications ====================
 
-    private suspend fun applyModifications(clipboardMods: List<ClipboardModification>): List<ModificationResult> {
+    private suspend fun applyModifications(clipboardMods: List<InteractionModification>): List<ModificationResult> {
         val modifications = clipboardMods.mapNotNull { convertModification(it) }
         if (modifications.isEmpty()) return emptyList()
 
@@ -647,7 +647,7 @@ class ClipboardInteractionService(
     // ==================== Result Building ====================
 
     private fun buildCompletedResult(
-        response: ClipboardResponse,
+        response: InteractionResponse,
         modResults: List<ModificationResult>,
         extraMessage: String = "",
         inputTokens: Int = 0,
@@ -706,7 +706,7 @@ class ClipboardInteractionService(
         return ClipboardStepResult.Error(message)
     }
 
-    private fun convertModification(mod: ClipboardModification): Modification? {
+    private fun convertModification(mod: InteractionModification): Modification? {
         if (mod.type.isBlank() || mod.path.isBlank()) return null
         val elementPath = ElementPath(mod.path)
         val elementKind = try {
@@ -764,7 +764,7 @@ class ClipboardInteractionService(
 
 sealed class ClipboardStepResult {
     data class WaitingForResponse(
-        val phase: ClipboardPhase,
+        val phase: InteractionPhase,
         val statusMessage: String,
         val assistantMessage: String? = null,
         val jsonRequest: ClipboardRequest,

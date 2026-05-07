@@ -3,7 +3,7 @@ package com.maxvibes.plugin.clipboard
 import com.maxvibes.application.port.output.ClipboardPort
 import com.maxvibes.application.port.output.ClipboardProtocolCodec
 import com.maxvibes.domain.model.interaction.ClipboardRequest
-import com.maxvibes.domain.model.interaction.ClipboardResponse
+import com.maxvibes.domain.model.interaction.InteractionResponse
 import com.maxvibes.plugin.service.MaxVibesLogger
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
@@ -61,14 +61,14 @@ class ClipboardAdapter(
     }
 
     /**
-     * Decodes [rawText] (raw LLM output) into a [ClipboardResponse] via [codec].
+     * Decodes [rawText] (raw LLM output) into a [InteractionResponse] via [codec].
      *
      * Logs a debug entry on success and a warning when the codec returns null
      * (i.e. the input contained no recognisable JSON).
      *
      * @return parsed response, or null if the text is not a valid protocol reply.
      */
-    override fun parseResponse(rawText: String): ClipboardResponse? {
+    override fun parseResponse(rawText: String): InteractionResponse? {
         val result = codec.decode(rawText)
 
         // Log outcome — success path includes message/files/mods counts

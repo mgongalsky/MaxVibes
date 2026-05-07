@@ -1,7 +1,7 @@
 package com.maxvibes.application.service
 
-import com.maxvibes.domain.model.interaction.ClipboardResponse
-import com.maxvibes.domain.model.interaction.ClipboardModification
+import com.maxvibes.domain.model.interaction.InteractionResponse
+import com.maxvibes.domain.model.interaction.InteractionModification
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
@@ -17,7 +17,7 @@ import org.junit.jupiter.api.Test
  * - Error payload: [buildErrorFeedbackJson] produces valid, informative JSON
  * - Real-world examples: inputs observed from LLM misbehaviour in production
  */
-class ClipboardResponseValidatorTest {
+class InteractionResponseValidatorTest {
 
     private val validator = ClipboardResponseValidator()
 
@@ -25,7 +25,7 @@ class ClipboardResponseValidatorTest {
 
     @Test
     fun `valid minimal JSON returns Valid`() {
-        val port = StubClipboardPort(ClipboardResponse(message = "Hello"))
+        val port = StubClipboardPort(InteractionResponse(message = "Hello"))
         val result = validator.validate("{\"message\":\"Hello\"}", port)
         assertTrue(result is ValidationResult.Valid)
         assertEquals("Hello", (result as ValidationResult.Valid).response.message)
@@ -33,11 +33,11 @@ class ClipboardResponseValidatorTest {
 
     @Test
     fun `valid JSON with modifications and requestedFiles returns Valid`() {
-        val response = ClipboardResponse(
+        val response = InteractionResponse(
             message = "Done",
             requestedFiles = listOf("src/main/Foo.kt"),
             modifications = listOf(
-                ClipboardModification(type = "REPLACE_FILE", path = "src/main/Foo.kt", content = "...")
+                InteractionModification(type = "REPLACE_FILE", path = "src/main/Foo.kt", content = "...")
             )
         )
         val port = StubClipboardPort(response)
@@ -181,7 +181,7 @@ class ClipboardResponseValidatorTest {
 
     @Test
     fun `real LLM response with preamble text and JSON returns Valid when codec handles it`() {
-        val response = ClipboardResponse(message = "Here are the changes")
+        val response = InteractionResponse(message = "Here are the changes")
         val port = StubClipboardPort(response)
         // Simulates: LLM writes explanation text, then a JSON block
         val input = "Sure! Here are my changes:\n\n{\"message\":\"Here are the changes\",\"modifications\":[]}"
@@ -238,11 +238,11 @@ class ClipboardResponseValidatorTest {
 
 /** Stub [ClipboardPort] that always returns [response] from [parseResponse] and does nothing for clipboard writes. */
 private class StubClipboardPort(
-    private val response: ClipboardResponse?
+    private val response: InteractionResponse?
 ) : com.maxvibes.application.port.output.ClipboardPort {
     override fun copyRequestToClipboard(request: com.maxvibes.domain.model.interaction.ClipboardRequest) = true
     override fun copyRawText(text: String) = true
-    override fun parseResponse(rawText: String): ClipboardResponse? = response
+    override fun parseResponse(rawText: String): InteractionResponse? = response
 }
 
 /** Stub [ClipboardPort] whose [parseResponse] always throws [exception]. */
@@ -251,5 +251,5 @@ private class ThrowingClipboardPort(
 ) : com.maxvibes.application.port.output.ClipboardPort {
     override fun copyRequestToClipboard(request: com.maxvibes.domain.model.interaction.ClipboardRequest) = true
     override fun copyRawText(text: String) = true
-    override fun parseResponse(rawText: String): ClipboardResponse? = throw exception
+    override fun parseResponse(rawText: String): InteractionResponse? = throw exception
 }

@@ -2,7 +2,7 @@ package com.maxvibes.application.service
 
 import com.maxvibes.application.port.output.ClipboardPort
 import com.maxvibes.application.port.output.ClipboardRequestSchema
-import com.maxvibes.domain.model.interaction.ClipboardResponse
+import com.maxvibes.domain.model.interaction.InteractionResponse
 
 /**
  * Validates raw LLM responses and produces diagnostic error payloads on parse failure.
@@ -147,7 +147,7 @@ class ClipboardResponseValidator {
 /** Outcome of [ClipboardResponseValidator.validate]. */
 sealed class ValidationResult {
     /** The response was successfully decoded. */
-    data class Valid(val response: ClipboardResponse) : ValidationResult()
+    data class Valid(val response: InteractionResponse) : ValidationResult()
 
     /** Parsing failed with a structured diagnosis. */
     data class ParseFailure(val details: ParseFailureDetails) : ValidationResult()

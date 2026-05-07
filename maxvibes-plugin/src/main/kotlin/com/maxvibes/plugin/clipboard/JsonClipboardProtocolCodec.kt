@@ -11,7 +11,7 @@ import com.maxvibes.domain.model.code.CodeViewRequest
  * Pure [ClipboardProtocolCodec] implementation backed by kotlinx.serialization.
  *
  * Encodes [ClipboardRequest] → pretty-printed JSON and decodes raw LLM
- * response text → [ClipboardResponse]. Contains zero IntelliJ Platform SDK
+ * response text → [InteractionResponse]. Contains zero IntelliJ Platform SDK
  * imports — only stdlib and kotlinx.serialization — so it is directly
  * unit-testable without an IDE environment.
  *
@@ -105,7 +105,7 @@ class JsonClipboardProtocolCodec : ClipboardProtocolCodec {
     // ── Decode ────────────────────────────────────────────────────────
 
     /**
-     * Decodes a raw LLM response into a [ClipboardResponse].
+     * Decodes a raw LLM response into a [InteractionResponse].
      *
      * Tries the following extraction strategies in order of preference:
      * 1. ` ```json ` … ` ``` ` fenced block
@@ -117,7 +117,7 @@ class JsonClipboardProtocolCodec : ClipboardProtocolCodec {
      * but the input is non-blank. Returns `null` for blank input or when
      * parsing fails completely.
      */
-    override fun decode(rawText: String): ClipboardResponse? {
+    override fun decode(rawText: String): InteractionResponse? {
         val text = rawText.trim()
         if (text.isBlank()) return null
 
@@ -142,7 +142,7 @@ class JsonClipboardProtocolCodec : ClipboardProtocolCodec {
         // No JSON found — treat non-empty text without braces as a plain message
         if (jsonText == null) {
             return if (text.isNotBlank() && !text.contains("{")) {
-                ClipboardResponse(message = text)
+                InteractionResponse(message = text)
             } else null
         }
 
@@ -160,7 +160,7 @@ class JsonClipboardProtocolCodec : ClipboardProtocolCodec {
             try {
                 embedded?.let { parseUnifiedResponse(it) }
             } catch (_: Exception) {
-                if (surroundingText.isNotBlank()) ClipboardResponse(message = surroundingText) else null
+                if (surroundingText.isNotBlank()) InteractionResponse(message = surroundingText) else null
             }
         }
     }
@@ -168,17 +168,17 @@ class JsonClipboardProtocolCodec : ClipboardProtocolCodec {
     // ── Private helpers ───────────────────────────────────────────────
 
     /**
-     * Parses a JSON string into a [ClipboardResponse] using lenient mode.
+     * Parses a JSON string into a [InteractionResponse] using lenient mode.
      *
      * Handles both the legacy `requestedFiles` array and the new `requestedViews`
-     * array. The two sources are merged into [ClipboardResponse.codeViewRequests]:
+     * array. The two sources are merged into [InteractionResponse.codeViewRequests]:
      * entries from `requestedViews` take precedence over entries from `requestedFiles`
-     * when paths collide. Legacy [ClipboardResponse.requestedFiles] is preserved
+     * when paths collide. Legacy [InteractionResponse.requestedFiles] is preserved
      * unchanged for backward compatibility with existing service call-sites.
      *
      * @throws kotlinx.serialization.SerializationException if [jsonText] is not valid JSON
      */
-    private fun parseUnifiedResponse(jsonText: String): ClipboardResponse {
+    private fun parseUnifiedResponse(jsonText: String): InteractionResponse {
         val obj = lenientJson.parseToJsonElement(jsonText).jsonObject
 
         // Legacy requestedFiles — kept as-is for backward compatibility
@@ -197,7 +197,7 @@ class JsonClipboardProtocolCodec : ClipboardProtocolCodec {
         val mergedRequests: List<CodeViewRequest> = (fromViews + fromFiles)
             .distinctBy { it.filePath }
 
-        return ClipboardResponse(
+        return InteractionResponse(
             message = obj[ClipboardRequestSchema.RESP_MESSAGE]?.jsonPrimitive?.contentOrNull ?: "",
             reasoning = obj[ClipboardRequestSchema.RESP_REASONING]?.jsonPrimitive?.contentOrNull,
             requestedFiles = legacyFiles,
@@ -214,10 +214,10 @@ class JsonClipboardProtocolCodec : ClipboardProtocolCodec {
      * Returns `null` (and silently skips the entry) if mandatory fields
      * [ClipboardRequestSchema.MOD_TYPE] or [ClipboardRequestSchema.MOD_PATH] are absent.
      */
-    private fun parseModification(obj: JsonObject): ClipboardModification? {
+    private fun parseModification(obj: JsonObject): InteractionModification? {
         val type = obj[ClipboardRequestSchema.MOD_TYPE]?.jsonPrimitive?.contentOrNull ?: return null
         val path = obj[ClipboardRequestSchema.MOD_PATH]?.jsonPrimitive?.contentOrNull ?: return null
-        return ClipboardModification(
+        return InteractionModification(
             type = type,
             path = path,
             content = obj[ClipboardRequestSchema.MOD_CONTENT]?.jsonPrimitive?.contentOrNull ?: "",
@@ -284,7 +284,7 @@ class JsonClipboardProtocolCodec : ClipboardProtocolCodec {
     /**
      * Extracts human-readable prose before and after a matched JSON block.
      *
-     * Used to populate [ClipboardResponse.message] when the LLM places
+     * Used to populate [InteractionResponse.message] when the LLM places
      * an explanation outside the JSON object.
      *
      * @param fullText  the complete raw LLM response

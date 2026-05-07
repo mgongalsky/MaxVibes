@@ -5,7 +5,7 @@ import com.maxvibes.domain.model.code.CodeViewRequest
 /**
  * Фаза clipboard-протокола — используется внутренне для трекинга.
  */
-enum class ClipboardPhase {
+enum class InteractionPhase {
     /** Фаза 1: задача + file tree -> список нужных файлов */
     PLANNING,
 
@@ -14,7 +14,7 @@ enum class ClipboardPhase {
 }
 
 data class ClipboardRequest(
-    val phase: ClipboardPhase,
+    val phase: InteractionPhase,
     /** Текущее сообщение пользователя в этом ходу диалога. */
     val currentMessage: String,
     val projectName: String,
@@ -27,7 +27,7 @@ data class ClipboardRequest(
     /** Пути ранее собранных файлов (для контекста, без содержимого) */
     val previouslyGatheredPaths: List<String> = emptyList(),
     /** История чата (полная) */
-    val chatHistory: List<ClipboardHistoryEntry> = emptyList(),
+    val chatHistory: List<InteractionHistoryEntry> = emptyList(),
     /** Дополнительный контекст (ошибки, трейсы) */
     val attachedContext: String? = null,
     /** Ошибки компиляции (из IDE) */
@@ -41,12 +41,12 @@ data class ClipboardRequest(
     val specificPrompt: String? = null
 )
 
-data class ClipboardHistoryEntry(
+data class InteractionHistoryEntry(
     val role: String, // "user" | "assistant"
     val content: String
 )
 
-data class ClipboardResponse(
+data class InteractionResponse(
     /** Текстовое сообщение пользователю (обязательно рекомендуется). */
     val message: String = "",
     /** Обоснование или пояснение от LLM. */
@@ -65,7 +65,7 @@ data class ClipboardResponse(
      */
     val codeViewRequests: List<CodeViewRequest> = emptyList(),
     /** Модификации кода. */
-    val modifications: List<ClipboardModification> = emptyList(),
+    val modifications: List<InteractionModification> = emptyList(),
     /** Сгенерированный commit message — плагин автоматически вставит его в поле коммита в IDE. */
     val commitMessage: String? = null
 )
@@ -73,7 +73,7 @@ data class ClipboardResponse(
 /**
  * Модификация в clipboard-формате.
  */
-data class ClipboardModification(
+data class InteractionModification(
     val type: String,       // CREATE_FILE, REPLACE_FILE, REPLACE_ELEMENT, CREATE_ELEMENT, DELETE_ELEMENT, ADD_IMPORT, REMOVE_IMPORT
     val path: String,
     val content: String = "",

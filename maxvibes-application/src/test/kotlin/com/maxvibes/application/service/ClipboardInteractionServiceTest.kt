@@ -101,7 +101,7 @@ class ClipboardInteractionServiceTest {
         coEvery { contextProvider.gatherFiles(any()) } returns Result.Success(gathered)
     }
 
-    private fun simpleResponse(message: String = "Done.") = ClipboardResponse(message = message)
+    private fun simpleResponse(message: String = "Done.") = InteractionResponse(message = message)
 
     /**
      * Builds a minimal [ChatSession] mock for [redoLastRequest] Scenario B tests.
@@ -236,7 +236,7 @@ class ClipboardInteractionServiceTest {
         )
         stubGatherFiles(mapOf("src/Bar.kt" to "bar"))
         every { sessionManager.statusFor(SESSION_ID) } returns ClipboardSessionStatus.AWAITING_PASTE
-        every { clipboardPort.parseResponse(any()) } returns ClipboardResponse(
+        every { clipboardPort.parseResponse(any()) } returns InteractionResponse(
             message = "need Bar",
             requestedFiles = listOf("src/Bar.kt")
         )
@@ -286,7 +286,7 @@ class ClipboardInteractionServiceTest {
         val result = service.startTask(sessionId = SESSION_ID, currentMessage = "Do X")
 
         assertInstanceOf(ClipboardStepResult.WaitingForResponse::class.java, result)
-        assertEquals(ClipboardPhase.PLANNING, (result as ClipboardStepResult.WaitingForResponse).phase)
+        assertEquals(InteractionPhase.PLANNING, (result as ClipboardStepResult.WaitingForResponse).phase)
     }
 
     @Test
@@ -336,7 +336,7 @@ class ClipboardInteractionServiceTest {
             globalContextFiles = listOf("src/Foo.kt")
         )
 
-        assertEquals(ClipboardPhase.CHAT, capturedRequest.captured.phase)
+        assertEquals(InteractionPhase.CHAT, capturedRequest.captured.phase)
     }
 
     // ==================== continueDialog basics ====================
@@ -405,7 +405,7 @@ class ClipboardInteractionServiceTest {
         every { sessionManager.statusFor(SESSION_ID) } returns ClipboardSessionStatus.AWAITING_PASTE
 
         stubGatherFiles(mapOf("src/Foo.kt" to "foo-content"))
-        every { clipboardPort.parseResponse(any()) } returns ClipboardResponse(
+        every { clipboardPort.parseResponse(any()) } returns InteractionResponse(
             message = "need Foo",
             requestedFiles = listOf("src/Foo.kt")
         )
@@ -437,7 +437,7 @@ class ClipboardInteractionServiceTest {
         service.startTask(sessionId = SESSION_ID, currentMessage = "Task")
         every { sessionManager.statusFor(SESSION_ID) } returns ClipboardSessionStatus.AWAITING_PASTE
         every { clipboardPort.parseResponse(any()) } returns
-                ClipboardResponse(message = "Done", commitMessage = "feat: add X")
+                InteractionResponse(message = "Done", commitMessage = "feat: add X")
 
         val result = service.handlePastedResponse(sessionId = SESSION_ID, rawText = "{...}")
 

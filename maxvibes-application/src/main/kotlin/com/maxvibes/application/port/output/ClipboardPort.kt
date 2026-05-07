@@ -1,7 +1,7 @@
 package com.maxvibes.application.port.output
 
 import com.maxvibes.domain.model.interaction.ClipboardRequest
-import com.maxvibes.domain.model.interaction.ClipboardResponse
+import com.maxvibes.domain.model.interaction.InteractionResponse
 
 /**
  * Port for clipboard-based LLM interaction.
@@ -26,10 +26,10 @@ interface ClipboardPort {
     fun copyRawText(text: String): Boolean
 
     /**
-     * Parses [rawText] (raw LLM output) into a [ClipboardResponse].
+     * Parses [rawText] (raw LLM output) into a [InteractionResponse].
      *
      * Supports raw JSON, ```json``` fenced blocks, and JSON embedded in free-form text.
      * @return parsed response, or null if no recognisable JSON was found
      */
-    fun parseResponse(rawText: String): ClipboardResponse?
+    fun parseResponse(rawText: String): InteractionResponse?
 }
