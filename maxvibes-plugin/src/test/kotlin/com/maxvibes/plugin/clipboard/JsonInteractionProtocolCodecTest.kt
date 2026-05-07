@@ -1,19 +1,19 @@
 package com.maxvibes.plugin.clipboard
 
-import com.maxvibes.application.port.output.ClipboardRequestSchema
+import com.maxvibes.application.port.output.InteractionRequestSchema
 import com.maxvibes.domain.model.interaction.*
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
 /**
- * Unit tests for [JsonClipboardProtocolCodec].
+ * Unit tests for [JsonInteractionProtocolCodec].
  *
  * No IDE, no mocks — just pure encode/decode logic.
  * Run via `./gradlew test` or the IntelliJ IDEA runner.
  */
-class JsonClipboardProtocolCodecTest {
+class JsonInteractionProtocolCodecTest {
 
-    private val codec = JsonClipboardProtocolCodec()
+    private val codec = JsonInteractionProtocolCodec()
 
     // ── Helpers ───────────────────────────────────────────────────────
 
@@ -47,11 +47,11 @@ class JsonClipboardProtocolCodecTest {
     fun `encode contains _protocol marker`() {
         val result = codec.encode(minimalRequest())
         assertTrue(
-            result.contains("\"${ClipboardRequestSchema.META_PROTOCOL}\""),
+            result.contains("\"${InteractionRequestSchema.META_PROTOCOL}\""),
             "Expected _protocol key in output"
         )
         assertTrue(
-            result.contains(ClipboardRequestSchema.PROTOCOL_MARKER),
+            result.contains(InteractionRequestSchema.PROTOCOL_MARKER),
             "Expected protocol marker value in output"
         )
     }
@@ -60,7 +60,7 @@ class JsonClipboardProtocolCodecTest {
     fun `encode contains _responseFormat hint`() {
         val result = codec.encode(minimalRequest())
         assertTrue(
-            result.contains("\"${ClipboardRequestSchema.META_RESPONSE_FORMAT}\""),
+            result.contains("\"${InteractionRequestSchema.META_RESPONSE_FORMAT}\""),
             "Expected _responseFormat key in output"
         )
     }
@@ -69,13 +69,13 @@ class JsonClipboardProtocolCodecTest {
     fun `encode planOnly=true adds field, planOnly=false omits it`() {
         val withPlan = codec.encode(minimalRequest(planOnly = true))
         assertTrue(
-            withPlan.contains("\"${ClipboardRequestSchema.FIELD_PLAN_ONLY}\""),
+            withPlan.contains("\"${InteractionRequestSchema.FIELD_PLAN_ONLY}\""),
             "planOnly=true should produce planOnly field"
         )
 
         val withoutPlan = codec.encode(minimalRequest(planOnly = false))
         assertFalse(
-            withoutPlan.contains("\"${ClipboardRequestSchema.FIELD_PLAN_ONLY}\""),
+            withoutPlan.contains("\"${InteractionRequestSchema.FIELD_PLAN_ONLY}\""),
             "planOnly=false should omit planOnly field"
         )
     }
@@ -84,7 +84,7 @@ class JsonClipboardProtocolCodecTest {
     fun `encode empty fileTree omits field`() {
         val result = codec.encode(minimalRequest(fileTree = ""))
         assertFalse(
-            result.contains("\"${ClipboardRequestSchema.FIELD_FILE_TREE}\""),
+            result.contains("\"${InteractionRequestSchema.FIELD_FILE_TREE}\""),
             "Blank fileTree should be omitted"
         )
     }
@@ -97,7 +97,7 @@ class JsonClipboardProtocolCodecTest {
             )
         )
         assertTrue(
-            result.contains("\"${ClipboardRequestSchema.FIELD_FILES}\""),
+            result.contains("\"${InteractionRequestSchema.FIELD_FILES}\""),
             "Expected 'files' key"
         )
         assertTrue(result.contains("src/Foo.kt"), "Expected file path in output")
@@ -112,9 +112,9 @@ class JsonClipboardProtocolCodecTest {
         )
         val result = codec.encode(minimalRequest(chatHistory = history))
 
-        assertTrue(result.contains("\"${ClipboardRequestSchema.FIELD_CHAT_HISTORY}\""))
-        assertTrue(result.contains("\"${ClipboardRequestSchema.HISTORY_ROLE}\""))
-        assertTrue(result.contains("\"${ClipboardRequestSchema.HISTORY_CONTENT}\""))
+        assertTrue(result.contains("\"${InteractionRequestSchema.FIELD_CHAT_HISTORY}\""))
+        assertTrue(result.contains("\"${InteractionRequestSchema.HISTORY_ROLE}\""))
+        assertTrue(result.contains("\"${InteractionRequestSchema.HISTORY_CONTENT}\""))
         assertTrue(result.contains("\"user\""))
         assertTrue(result.contains("\"assistant\""))
         assertTrue(result.contains("\"hello\""))
@@ -125,7 +125,7 @@ class JsonClipboardProtocolCodecTest {
     fun `encode attachedContext goes into errorTrace field`() {
         val result = codec.encode(minimalRequest(attachedContext = "java.lang.NullPointerException\n\tat Foo.kt:42"))
         assertTrue(
-            result.contains("\"${ClipboardRequestSchema.FIELD_ERROR_TRACE}\""),
+            result.contains("\"${InteractionRequestSchema.FIELD_ERROR_TRACE}\""),
             "Expected errorTrace key in output"
         )
         assertTrue(result.contains("NullPointerException"))
@@ -135,7 +135,7 @@ class JsonClipboardProtocolCodecTest {
     fun `encode ideErrors goes into ideErrors field`() {
         val result = codec.encode(minimalRequest(ideErrors = "Unresolved reference: bar"))
         assertTrue(
-            result.contains("\"${ClipboardRequestSchema.FIELD_IDE_ERRORS}\""),
+            result.contains("\"${InteractionRequestSchema.FIELD_IDE_ERRORS}\""),
             "Expected ideErrors key in output"
         )
         assertTrue(result.contains("Unresolved reference: bar"))
@@ -243,9 +243,9 @@ class JsonClipboardProtocolCodecTest {
         val response = codec.decode(input)
         assertNotNull(response)
         assertEquals(
-            ClipboardRequestSchema.DEFAULT_ELEMENT_KIND,
+            InteractionRequestSchema.DEFAULT_ELEMENT_KIND,
             response!!.modifications[0].elementKind,
-            "Missing elementKind should default to ${ClipboardRequestSchema.DEFAULT_ELEMENT_KIND}"
+            "Missing elementKind should default to ${InteractionRequestSchema.DEFAULT_ELEMENT_KIND}"
         )
     }
 

@@ -1,24 +1,24 @@
 package com.maxvibes.plugin.clipboard
 
-import com.maxvibes.application.port.output.ClipboardProtocolCodec
-import com.maxvibes.application.port.output.ClipboardRequestSchema
+import com.maxvibes.application.port.output.InteractionProtocolCodec
+import com.maxvibes.application.port.output.InteractionRequestSchema
 import com.maxvibes.domain.model.interaction.*
 import kotlinx.serialization.json.*
 import com.maxvibes.domain.model.code.CodeGranularity
 import com.maxvibes.domain.model.code.CodeViewRequest
 
 /**
- * Pure [ClipboardProtocolCodec] implementation backed by kotlinx.serialization.
+ * Pure [InteractionProtocolCodec] implementation backed by kotlinx.serialization.
  *
  * Encodes [ClipboardRequest] → pretty-printed JSON and decodes raw LLM
  * response text → [InteractionResponse]. Contains zero IntelliJ Platform SDK
  * imports — only stdlib and kotlinx.serialization — so it is directly
  * unit-testable without an IDE environment.
  *
- * Field name constants are sourced exclusively from [ClipboardRequestSchema];
+ * Field name constants are sourced exclusively from [InteractionRequestSchema];
  * never hardcode string keys here.
  */
-class JsonClipboardProtocolCodec : ClipboardProtocolCodec {
+class JsonInteractionProtocolCodec : InteractionProtocolCodec {
 
     /** Strict pretty-print encoder for outgoing requests. */
     private val json = Json {
@@ -38,54 +38,54 @@ class JsonClipboardProtocolCodec : ClipboardProtocolCodec {
     override fun encode(request: ClipboardRequest): String {
         val obj = buildJsonObject {
             // Meta-fields: instruct the LLM how to behave and format its response
-            put(ClipboardRequestSchema.META_PROTOCOL, ClipboardRequestSchema.PROTOCOL_MARKER)
-            put(ClipboardRequestSchema.META_RESPONSE_FORMAT, ClipboardRequestSchema.RESPONSE_FORMAT_HINT)
+            put(InteractionRequestSchema.META_PROTOCOL, InteractionRequestSchema.PROTOCOL_MARKER)
+            put(InteractionRequestSchema.META_RESPONSE_FORMAT, InteractionRequestSchema.RESPONSE_FORMAT_HINT)
 
             // System prompt — omitted when blank to save tokens
             if (request.systemInstruction.isNotBlank()) {
-                put(ClipboardRequestSchema.FIELD_SYSTEM_INSTRUCTION, request.systemInstruction)
+                put(InteractionRequestSchema.FIELD_SYSTEM_INSTRUCTION, request.systemInstruction)
             }
 
             // Task-scoped specific prompt — omitted when null ("Just Code" mode)
             request.specificPrompt?.takeIf { it.isNotBlank() }?.let {
-                put(ClipboardRequestSchema.FIELD_SPECIFIC_PROMPT, it)
+                put(InteractionRequestSchema.FIELD_SPECIFIC_PROMPT, it)
             }
 
             // Current user message for this turn (always present)
-            put(ClipboardRequestSchema.FIELD_CURRENT_MESSAGE, request.currentMessage)
-            put(ClipboardRequestSchema.FIELD_PROJECT_NAME, request.projectName)
+            put(InteractionRequestSchema.FIELD_CURRENT_MESSAGE, request.currentMessage)
+            put(InteractionRequestSchema.FIELD_PROJECT_NAME, request.projectName)
 
             // Optional flags
             if (request.planOnly) {
-                put(ClipboardRequestSchema.FIELD_PLAN_ONLY, true)
+                put(InteractionRequestSchema.FIELD_PLAN_ONLY, true)
             }
 
             // Project file tree snapshot
             if (request.fileTree.isNotBlank()) {
-                put(ClipboardRequestSchema.FIELD_FILE_TREE, request.fileTree)
+                put(InteractionRequestSchema.FIELD_FILE_TREE, request.fileTree)
             }
 
             // Full file contents for freshly-requested files
             if (request.freshFiles.isNotEmpty()) {
-                putJsonObject(ClipboardRequestSchema.FIELD_FILES) {
+                putJsonObject(InteractionRequestSchema.FIELD_FILES) {
                     request.freshFiles.forEach { (path, content) -> put(path, content) }
                 }
             }
 
             // Paths already gathered in a previous round-trip (no content, just references)
             if (request.previouslyGatheredPaths.isNotEmpty()) {
-                putJsonArray(ClipboardRequestSchema.FIELD_PREVIOUSLY_GATHERED) {
+                putJsonArray(InteractionRequestSchema.FIELD_PREVIOUSLY_GATHERED) {
                     request.previouslyGatheredPaths.forEach { add(it) }
                 }
             }
 
             // Multi-turn conversation history
             if (request.chatHistory.isNotEmpty()) {
-                putJsonArray(ClipboardRequestSchema.FIELD_CHAT_HISTORY) {
+                putJsonArray(InteractionRequestSchema.FIELD_CHAT_HISTORY) {
                     request.chatHistory.forEach { entry ->
                         addJsonObject {
-                            put(ClipboardRequestSchema.HISTORY_ROLE, entry.role)
-                            put(ClipboardRequestSchema.HISTORY_CONTENT, entry.content)
+                            put(InteractionRequestSchema.HISTORY_ROLE, entry.role)
+                            put(InteractionRequestSchema.HISTORY_CONTENT, entry.content)
                         }
                     }
                 }
@@ -93,10 +93,10 @@ class JsonClipboardProtocolCodec : ClipboardProtocolCodec {
 
             // Optional error context (stack traces, IDE diagnostics)
             request.attachedContext?.takeIf { it.isNotBlank() }?.let {
-                put(ClipboardRequestSchema.FIELD_ERROR_TRACE, it)
+                put(InteractionRequestSchema.FIELD_ERROR_TRACE, it)
             }
             request.ideErrors?.takeIf { it.isNotBlank() }?.let {
-                put(ClipboardRequestSchema.FIELD_IDE_ERRORS, it)
+                put(InteractionRequestSchema.FIELD_IDE_ERRORS, it)
             }
         }
         return json.encodeToString(JsonObject.serializer(), obj)
@@ -182,7 +182,7 @@ class JsonClipboardProtocolCodec : ClipboardProtocolCodec {
         val obj = lenientJson.parseToJsonElement(jsonText).jsonObject
 
         // Legacy requestedFiles — kept as-is for backward compatibility
-        val legacyFiles: List<String> = obj[ClipboardRequestSchema.RESP_REQUESTED_FILES]?.jsonArray
+        val legacyFiles: List<String> = obj[InteractionRequestSchema.RESP_REQUESTED_FILES]?.jsonArray
             ?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
 
         // 1. Legacy requestedFiles → CodeViewRequest(path, FULL)
@@ -190,7 +190,7 @@ class JsonClipboardProtocolCodec : ClipboardProtocolCodec {
             .map { CodeViewRequest(it, CodeGranularity.FULL) }
 
         // 2. New requestedViews → CodeViewRequest with explicit granularity
-        val fromViews: List<CodeViewRequest> = obj[ClipboardRequestSchema.REQUESTED_VIEWS]?.jsonArray
+        val fromViews: List<CodeViewRequest> = obj[InteractionRequestSchema.REQUESTED_VIEWS]?.jsonArray
             ?.toCodeViewRequests() ?: emptyList()
 
         // 3. Merge: requestedViews wins on duplicate path
@@ -198,13 +198,13 @@ class JsonClipboardProtocolCodec : ClipboardProtocolCodec {
             .distinctBy { it.filePath }
 
         return InteractionResponse(
-            message = obj[ClipboardRequestSchema.RESP_MESSAGE]?.jsonPrimitive?.contentOrNull ?: "",
-            reasoning = obj[ClipboardRequestSchema.RESP_REASONING]?.jsonPrimitive?.contentOrNull,
+            message = obj[InteractionRequestSchema.RESP_MESSAGE]?.jsonPrimitive?.contentOrNull ?: "",
+            reasoning = obj[InteractionRequestSchema.RESP_REASONING]?.jsonPrimitive?.contentOrNull,
             requestedFiles = legacyFiles,
             codeViewRequests = mergedRequests,
-            modifications = obj[ClipboardRequestSchema.RESP_MODIFICATIONS]?.jsonArray
+            modifications = obj[InteractionRequestSchema.RESP_MODIFICATIONS]?.jsonArray
                 ?.mapNotNull { parseModification(it.jsonObject) } ?: emptyList(),
-            commitMessage = obj[ClipboardRequestSchema.RESP_COMMIT_MESSAGE]?.jsonPrimitive?.contentOrNull
+            commitMessage = obj[InteractionRequestSchema.RESP_COMMIT_MESSAGE]?.jsonPrimitive?.contentOrNull
         )
     }
 
@@ -212,20 +212,20 @@ class JsonClipboardProtocolCodec : ClipboardProtocolCodec {
      * Parses a single `modifications[]` entry.
      *
      * Returns `null` (and silently skips the entry) if mandatory fields
-     * [ClipboardRequestSchema.MOD_TYPE] or [ClipboardRequestSchema.MOD_PATH] are absent.
+     * [InteractionRequestSchema.MOD_TYPE] or [InteractionRequestSchema.MOD_PATH] are absent.
      */
     private fun parseModification(obj: JsonObject): InteractionModification? {
-        val type = obj[ClipboardRequestSchema.MOD_TYPE]?.jsonPrimitive?.contentOrNull ?: return null
-        val path = obj[ClipboardRequestSchema.MOD_PATH]?.jsonPrimitive?.contentOrNull ?: return null
+        val type = obj[InteractionRequestSchema.MOD_TYPE]?.jsonPrimitive?.contentOrNull ?: return null
+        val path = obj[InteractionRequestSchema.MOD_PATH]?.jsonPrimitive?.contentOrNull ?: return null
         return InteractionModification(
             type = type,
             path = path,
-            content = obj[ClipboardRequestSchema.MOD_CONTENT]?.jsonPrimitive?.contentOrNull ?: "",
-            elementKind = obj[ClipboardRequestSchema.MOD_ELEMENT_KIND]?.jsonPrimitive?.contentOrNull
-                ?: ClipboardRequestSchema.DEFAULT_ELEMENT_KIND,
-            position = obj[ClipboardRequestSchema.MOD_POSITION]?.jsonPrimitive?.contentOrNull
-                ?: ClipboardRequestSchema.DEFAULT_POSITION,
-            importPath = obj[ClipboardRequestSchema.MOD_IMPORT_PATH]?.jsonPrimitive?.contentOrNull ?: ""
+            content = obj[InteractionRequestSchema.MOD_CONTENT]?.jsonPrimitive?.contentOrNull ?: "",
+            elementKind = obj[InteractionRequestSchema.MOD_ELEMENT_KIND]?.jsonPrimitive?.contentOrNull
+                ?: InteractionRequestSchema.DEFAULT_ELEMENT_KIND,
+            position = obj[InteractionRequestSchema.MOD_POSITION]?.jsonPrimitive?.contentOrNull
+                ?: InteractionRequestSchema.DEFAULT_POSITION,
+            importPath = obj[InteractionRequestSchema.MOD_IMPORT_PATH]?.jsonPrimitive?.contentOrNull ?: ""
         )
     }
 
@@ -241,9 +241,9 @@ class JsonClipboardProtocolCodec : ClipboardProtocolCodec {
     internal fun findEmbeddedJson(text: String): String? {
         // Look for the leftmost occurrence of any known indicator key
         val indicators = listOf(
-            "\"${ClipboardRequestSchema.RESP_REQUESTED_FILES}\"",
-            "\"${ClipboardRequestSchema.RESP_MODIFICATIONS}\"",
-            "\"${ClipboardRequestSchema.RESP_MESSAGE}\""
+            "\"${InteractionRequestSchema.RESP_REQUESTED_FILES}\"",
+            "\"${InteractionRequestSchema.RESP_MODIFICATIONS}\"",
+            "\"${InteractionRequestSchema.RESP_MESSAGE}\""
         )
         val startIndex = indicators
             .mapNotNull { indicator ->
@@ -322,16 +322,16 @@ class JsonClipboardProtocolCodec : ClipboardProtocolCodec {
             val obj = element.jsonObject
 
             // path is mandatory — skip entry if blank or absent
-            val path = obj[ClipboardRequestSchema.VIEW_PATH]?.jsonPrimitive?.contentOrNull
+            val path = obj[InteractionRequestSchema.VIEW_PATH]?.jsonPrimitive?.contentOrNull
                 ?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
 
             // granularity is optional; unknown values fall back to FULL
-            val granularity = obj[ClipboardRequestSchema.VIEW_GRANULARITY]?.jsonPrimitive?.contentOrNull
+            val granularity = obj[InteractionRequestSchema.VIEW_GRANULARITY]?.jsonPrimitive?.contentOrNull
                 ?.let { raw -> runCatching { CodeGranularity.valueOf(raw) }.getOrElse { CodeGranularity.FULL } }
                 ?: CodeGranularity.FULL
 
             // elementPath is optional (required only for ELEMENT granularity)
-            val elementPath = obj[ClipboardRequestSchema.VIEW_ELEMENT_PATH]?.jsonPrimitive?.contentOrNull
+            val elementPath = obj[InteractionRequestSchema.VIEW_ELEMENT_PATH]?.jsonPrimitive?.contentOrNull
                 ?.takeIf { it.isNotBlank() }
 
             CodeViewRequest(path, granularity, elementPath)

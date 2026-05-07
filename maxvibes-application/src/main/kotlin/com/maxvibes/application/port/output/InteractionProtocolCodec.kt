@@ -10,17 +10,17 @@ import com.maxvibes.domain.model.interaction.InteractionResponse
  * Implemented in the plugin layer by `JsonClipboardProtocolCodec`, which
  * lets unit tests exercise the full encode/decode cycle without an IDE mock.
  *
- * Field name constants are defined in [ClipboardRequestSchema].
+ * Field name constants are defined in [InteractionRequestSchema].
  */
-interface ClipboardProtocolCodec {
+interface InteractionProtocolCodec {
 
     /**
      * Encodes a [ClipboardRequest] into a JSON string ready to be placed
      * on the system clipboard for the LLM to consume.
      *
      * The resulting JSON is pretty-printed and includes the meta-fields
-     * [ClipboardRequestSchema.META_PROTOCOL] and
-     * [ClipboardRequestSchema.META_RESPONSE_FORMAT] at the top level.
+     * [InteractionRequestSchema.META_PROTOCOL] and
+     * [InteractionRequestSchema.META_RESPONSE_FORMAT] at the top level.
      *
      * @param request domain request object to serialize
      * @return pretty-printed JSON string

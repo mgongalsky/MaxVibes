@@ -1,7 +1,7 @@
 package com.maxvibes.application.service
 
 import com.maxvibes.application.port.output.ClipboardPort
-import com.maxvibes.application.port.output.ClipboardRequestSchema
+import com.maxvibes.application.port.output.InteractionRequestSchema
 import com.maxvibes.domain.model.interaction.InteractionResponse
 
 /**
@@ -58,8 +58,8 @@ class ClipboardResponseValidator {
      * @return pretty-printed JSON string ready to be placed on the system clipboard
      */
     fun buildErrorFeedbackJson(details: ParseFailureDetails, originalPreview: String): String {
-        val protocol = ClipboardRequestSchema.META_PROTOCOL
-        val protocolMarker = ClipboardRequestSchema.PROTOCOL_MARKER
+        val protocol = InteractionRequestSchema.META_PROTOCOL
+        val protocolMarker = InteractionRequestSchema.PROTOCOL_MARKER
         val task =
             "Your previous response could not be parsed by the MaxVibes IDE plugin. Please resend it as a corrected JSON object."
         val reason = details.reasonCode()

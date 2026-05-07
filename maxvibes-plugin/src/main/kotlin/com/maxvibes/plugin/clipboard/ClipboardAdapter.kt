@@ -1,7 +1,7 @@
 package com.maxvibes.plugin.clipboard
 
 import com.maxvibes.application.port.output.ClipboardPort
-import com.maxvibes.application.port.output.ClipboardProtocolCodec
+import com.maxvibes.application.port.output.InteractionProtocolCodec
 import com.maxvibes.domain.model.interaction.ClipboardRequest
 import com.maxvibes.domain.model.interaction.InteractionResponse
 import com.maxvibes.plugin.service.MaxVibesLogger
@@ -9,7 +9,7 @@ import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 
 class ClipboardAdapter(
-    private val codec: ClipboardProtocolCodec = JsonClipboardProtocolCodec()
+    private val codec: InteractionProtocolCodec = JsonInteractionProtocolCodec()
 ) : ClipboardPort {
 
     // ==================== ClipboardPort ====================

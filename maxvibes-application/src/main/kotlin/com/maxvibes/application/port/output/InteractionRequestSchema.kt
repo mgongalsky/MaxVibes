@@ -7,7 +7,7 @@ package com.maxvibes.application.port.output
  * a protocol field — add/update the constant here, then reference it
  * in [JsonClipboardProtocolCodec]. Never hardcode field names elsewhere.
  */
-object ClipboardRequestSchema {
+object InteractionRequestSchema {
 
     // ── Meta fields (LLM behavior markers) ────────────────────────────
 
