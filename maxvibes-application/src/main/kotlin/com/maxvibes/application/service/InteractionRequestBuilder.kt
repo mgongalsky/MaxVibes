@@ -15,7 +15,7 @@ import com.maxvibes.domain.model.interaction.ClipboardRequest
  * both the Generate and Copy JSON flows delegate here via
  * [ClipboardInteractionService.generateAndCopyJson].
  */
-internal object ClipboardRequestBuilder {
+internal object InteractionRequestBuilder {
 
     fun build(
         state: ClipboardSessionState,

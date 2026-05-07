@@ -13,7 +13,7 @@ import com.maxvibes.domain.model.interaction.InteractionResponse
  * Stateless — safe to use as a private field. No IntelliJ SDK dependencies,
  * fully testable via Gradle in the application module.
  */
-class ClipboardResponseValidator {
+class InteractionResponseValidator {
 
     // ── Public API ────────────────────────────────────────────────────
 
@@ -144,7 +144,7 @@ class ClipboardResponseValidator {
 
 // ── Result types ─────────────────────────────────────────────────────
 
-/** Outcome of [ClipboardResponseValidator.validate]. */
+/** Outcome of [InteractionResponseValidator.validate]. */
 sealed class ValidationResult {
     /** The response was successfully decoded. */
     data class Valid(val response: InteractionResponse) : ValidationResult()

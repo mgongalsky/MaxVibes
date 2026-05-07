@@ -6,7 +6,7 @@ import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
 /**
- * Unit tests for [ClipboardResponseValidator].
+ * Unit tests for [InteractionResponseValidator].
  *
  * The [StubClipboardPort] simulates [ClipboardPort] responses without touching the AWT clipboard,
  * so all tests run cleanly in a headless Gradle environment.
@@ -19,7 +19,7 @@ import org.junit.jupiter.api.Test
  */
 class InteractionResponseValidatorTest {
 
-    private val validator = ClipboardResponseValidator()
+    private val validator = InteractionResponseValidator()
 
     // ── Happy path ────────────────────────────────────────────────────
 
@@ -174,7 +174,7 @@ class InteractionResponseValidatorTest {
         val json = validator.buildErrorFeedbackJson(details, originalPreview = longPreview)
         // The raw payload must not contain more than PREVIEW_LENGTH x-chars in a row
         val maxChunkOfX = Regex("x+").findAll(json).maxOfOrNull { it.value.length } ?: 0
-        assertTrue(maxChunkOfX <= ClipboardResponseValidator.PREVIEW_LENGTH, "Preview was not truncated")
+        assertTrue(maxChunkOfX <= InteractionResponseValidator.PREVIEW_LENGTH, "Preview was not truncated")
     }
 
     // ── Real-world examples ───────────────────────────────────────────

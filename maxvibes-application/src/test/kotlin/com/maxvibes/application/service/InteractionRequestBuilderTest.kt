@@ -10,7 +10,7 @@ import com.maxvibes.domain.model.interaction.InteractionPhase
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
-class ClipboardRequestBuilderTest {
+class InteractionRequestBuilderTest {
 
     // ── Fixture helpers ───────────────────────────────────────────────
 
@@ -26,7 +26,7 @@ class ClipboardRequestBuilderTest {
      * All parameters are optional so each test only specifies what it cares about.
      *
      * Note: [attachedContext] and [ideErrors] are no longer stored in session state —
-     * they are one-shot per-message values passed directly to [ClipboardRequestBuilder.build].
+     * they are one-shot per-message values passed directly to [InteractionRequestBuilder.build].
      */
     private fun makeState(
         currentMessage: String = "fix the bug",
@@ -53,7 +53,7 @@ class ClipboardRequestBuilderTest {
 
     @Test
     fun `phase is PLANNING when no gathered files and no fresh files`() {
-        val req = ClipboardRequestBuilder.build(
+        val req = InteractionRequestBuilder.build(
             state = makeState(),
             freshFiles = emptyMap(),
             isFirstMessage = true
@@ -63,7 +63,7 @@ class ClipboardRequestBuilderTest {
 
     @Test
     fun `phase is CHAT when fresh files are present`() {
-        val req = ClipboardRequestBuilder.build(
+        val req = InteractionRequestBuilder.build(
             state = makeState(),
             freshFiles = mapOf("src/Foo.kt" to "class Foo"),
             isFirstMessage = true
@@ -73,7 +73,7 @@ class ClipboardRequestBuilderTest {
 
     @Test
     fun `phase is CHAT when session already gathered files`() {
-        val req = ClipboardRequestBuilder.build(
+        val req = InteractionRequestBuilder.build(
             state = makeState(gatheredFiles = mapOf("src/Bar.kt" to "class Bar")),
             freshFiles = emptyMap(),
             isFirstMessage = false
@@ -89,7 +89,7 @@ class ClipboardRequestBuilderTest {
             ChatMessageDTO(ChatRole.USER, "first message"),
             ChatMessageDTO(ChatRole.ASSISTANT, "response")
         )
-        val req = ClipboardRequestBuilder.build(
+        val req = InteractionRequestBuilder.build(
             state = makeState(history = history),
             freshFiles = emptyMap(),
             isFirstMessage = false,
@@ -107,7 +107,7 @@ class ClipboardRequestBuilderTest {
             ChatMessageDTO(ChatRole.ASSISTANT, "reply"),
             ChatMessageDTO(ChatRole.USER, "second")
         )
-        val req = ClipboardRequestBuilder.build(
+        val req = InteractionRequestBuilder.build(
             state = makeState(currentMessage = "original", history = history),
             freshFiles = emptyMap(),
             isFirstMessage = false,
@@ -119,7 +119,7 @@ class ClipboardRequestBuilderTest {
     @Test
     fun `minimal mode omits attachedContext`() {
         // attachedContext is passed directly to build() — in minimal mode it must be dropped.
-        val req = ClipboardRequestBuilder.build(
+        val req = InteractionRequestBuilder.build(
             state = makeState(),
             freshFiles = emptyMap(),
             isFirstMessage = false,
@@ -131,7 +131,7 @@ class ClipboardRequestBuilderTest {
 
     @Test
     fun `minimal mode sets planOnly to false`() {
-        val req = ClipboardRequestBuilder.build(
+        val req = InteractionRequestBuilder.build(
             state = makeState(planOnly = true),
             freshFiles = emptyMap(),
             isFirstMessage = false,
@@ -148,7 +148,7 @@ class ClipboardRequestBuilderTest {
             ChatMessageDTO(ChatRole.USER, "hi"),
             ChatMessageDTO(ChatRole.ASSISTANT, "hello")
         )
-        val req = ClipboardRequestBuilder.build(
+        val req = InteractionRequestBuilder.build(
             state = makeState(history = history),
             freshFiles = emptyMap(),
             isFirstMessage = false,
@@ -161,7 +161,7 @@ class ClipboardRequestBuilderTest {
 
     @Test
     fun `full mode includes previouslyGatheredPaths`() {
-        val req = ClipboardRequestBuilder.build(
+        val req = InteractionRequestBuilder.build(
             state = makeState(gatheredFiles = mapOf("a.kt" to "A", "b.kt" to "B")),
             freshFiles = emptyMap(),
             isFirstMessage = false,
@@ -173,7 +173,7 @@ class ClipboardRequestBuilderTest {
 
     @Test
     fun `first message uses planningSystem prompt when no gathered files`() {
-        val req = ClipboardRequestBuilder.build(
+        val req = InteractionRequestBuilder.build(
             state = makeState(),
             freshFiles = emptyMap(),
             isFirstMessage = true
@@ -183,7 +183,7 @@ class ClipboardRequestBuilderTest {
 
     @Test
     fun `chat system prompt used after files gathered`() {
-        val req = ClipboardRequestBuilder.build(
+        val req = InteractionRequestBuilder.build(
             state = makeState(gatheredFiles = mapOf("x.kt" to "")),
             freshFiles = emptyMap(),
             isFirstMessage = false,
@@ -194,7 +194,7 @@ class ClipboardRequestBuilderTest {
 
     @Test
     fun `planOnly appends suffix to chat system prompt`() {
-        val req = ClipboardRequestBuilder.build(
+        val req = InteractionRequestBuilder.build(
             state = makeState(planOnly = true, gatheredFiles = mapOf("x.kt" to "")),
             freshFiles = emptyMap(),
             isFirstMessage = false,
@@ -209,7 +209,7 @@ class ClipboardRequestBuilderTest {
     @Test
     fun `ideErrors is present in full mode`() {
         // ideErrors is now passed directly to build(), not stored in session state.
-        val req = ClipboardRequestBuilder.build(
+        val req = InteractionRequestBuilder.build(
             state = makeState(),
             freshFiles = emptyMap(),
             isFirstMessage = true,
@@ -221,7 +221,7 @@ class ClipboardRequestBuilderTest {
     @Test
     fun `ideErrors is present in minimal mode`() {
         // IDE errors are always forwarded — they are per-turn diagnostics, not accumulated context.
-        val req = ClipboardRequestBuilder.build(
+        val req = InteractionRequestBuilder.build(
             state = makeState(),
             freshFiles = emptyMap(),
             isFirstMessage = false,
@@ -234,7 +234,7 @@ class ClipboardRequestBuilderTest {
     @Test
     fun `ideErrors is null when not passed`() {
         // Confirms that without explicit attachment the field stays null — the core bug fix.
-        val req = ClipboardRequestBuilder.build(
+        val req = InteractionRequestBuilder.build(
             state = makeState(),
             freshFiles = emptyMap(),
             isFirstMessage = false,

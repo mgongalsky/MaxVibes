@@ -55,7 +55,7 @@ class ClipboardInteractionService(
     private var sessionStateOwner: String? = null
 
     /** Validator used to diagnose parse failures and produce LLM-facing error payloads. */
-    private val responseValidator = ClipboardResponseValidator()
+    private val responseValidator = InteractionResponseValidator()
 
     // ==================== Status Routing ====================
 
@@ -240,7 +240,7 @@ class ClipboardInteractionService(
             }
             val errorJson = responseValidator.buildErrorFeedbackJson(
                 details = details,
-                originalPreview = rawText.trim().take(ClipboardResponseValidator.PREVIEW_LENGTH)
+                originalPreview = rawText.trim().take(InteractionResponseValidator.PREVIEW_LENGTH)
             )
             val copied = clipboardPort.copyRawText(errorJson)
             val detail = details.humanDescription()
@@ -466,7 +466,7 @@ class ClipboardInteractionService(
     ): ClipboardStepResult {
         val state = sessionState ?: return error("No active session")
 
-        val request = ClipboardRequestBuilder.build(
+        val request = InteractionRequestBuilder.build(
             state = state,
             freshFiles = freshFiles,
             isFirstMessage = isFirstMessage,
