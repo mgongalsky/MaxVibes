@@ -755,6 +755,17 @@ class ChatPanel(
                         modeIndicator.cursor = Cursor.getDefaultCursor()
                         modeIndicator.toolTipText = null
                     }
+
+                    // TODO Step 5/8: AWAITING_APPROVE is Claude Code-specific; clipboard mode
+                    //  should never see it. Treat as IDLE-equivalent visual fallback for now.
+                    ClipboardSessionStatus.AWAITING_APPROVE -> {
+                        modeIndicator.text = "\uD83D\uDCCB"
+                        modeIndicator.isVisible = true
+                        sendButton.text = "Generate"
+                        copyJsonButton.isVisible = false
+                        modeIndicator.cursor = Cursor.getDefaultCursor()
+                        modeIndicator.toolTipText = null
+                    }
                 }
                 dryRunCheckbox.isVisible = false
             }
@@ -762,6 +773,16 @@ class ChatPanel(
             InteractionMode.CHEAP_API -> {
                 modeIndicator.text = "\uD83D\uDCB0"
                 modeIndicator.isVisible = true
+                sendButton.text = "Send"
+                dryRunCheckbox.isVisible = true
+                copyJsonButton.isVisible = false
+                addHistoryCheckbox.isVisible = false
+            }
+
+            // TODO Step 5/8: CLAUDE_CODE UI wiring is implemented in the Claude Code feature.
+            //  For now, fall back to API-mode visuals so the panel keeps rendering.
+            InteractionMode.CLAUDE_CODE -> {
+                modeIndicator.isVisible = false
                 sendButton.text = "Send"
                 dryRunCheckbox.isVisible = true
                 copyJsonButton.isVisible = false
@@ -868,6 +889,8 @@ class ChatPanel(
             InteractionMode.API -> "API \u2014 direct LLM calls"
             InteractionMode.CLIPBOARD -> "Clipboard \u2014 paste JSON into Claude/ChatGPT"
             InteractionMode.CHEAP_API -> "Cheap API \u2014 budget model"
+            // TODO Step 5/8: replace with proper Claude Code label once mode is wired up.
+            InteractionMode.CLAUDE_CODE -> "Claude Code \u2014 local CLI process (in development)"
         }
         val session = chatTreeService.getActiveSession()
         val ctxCount = chatTreeService.getGlobalContextFiles().size

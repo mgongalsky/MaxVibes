@@ -716,6 +716,9 @@ Check:
             )
 
             InteractionMode.CHEAP_API -> dispatchCheapApiMessage(userInput, trace, errs, isPlanOnly, isDryRun)
+            // TODO Step 5/8: route to ClaudeCodeInteractionService
+            InteractionMode.CLAUDE_CODE -> { /* TODO Step 5/8 */
+            }
         }
     }
 
@@ -777,6 +780,8 @@ Check:
             ClipboardSessionStatus.AWAITING_PASTE -> "Processing response..."
             ClipboardSessionStatus.SESSION_ACTIVE -> "Continuing..."
             ClipboardSessionStatus.IDLE -> "Generating JSON..."
+            // TODO Step 5/8: proper status text for Claude Code approve flow
+            ClipboardSessionStatus.AWAITING_APPROVE -> "Awaiting approval..."
         }
         callbacks.setStatus(statusText)
 

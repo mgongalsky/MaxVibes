@@ -14,8 +14,21 @@ data class ChatSession(
     val createdAt: Long = Instant.now().toEpochMilli(),
     val updatedAt: Long = Instant.now().toEpochMilli(),
     val clipboardStatus: ClipboardSessionStatus = ClipboardSessionStatus.IDLE,
-    // Last field — default value ensures backward compatibility with all existing call sites.
-    val selectedSpecificPromptName: String? = null
+    val selectedSpecificPromptName: String? = null,
+    /**
+     * Claude Code session id returned by the CLI's first system event.
+     * Used for `claude --resume <id>` after IDE/process restart.
+     * Null if no Claude Code exchange has happened yet for this session.
+     */
+    val claudeCodeSessionId: String? = null,
+    /**
+     * When true, the next Claude Code send must include the full context
+     * (system prompt, history, file tree). Set to true:
+     *  - when the session is created (no claude-side state yet),
+     *  - after a failed `--resume` attempt that fell back to a fresh process.
+     * Cleared to false after the first successful send.
+     */
+    val claudeCodeNeedsFullContext: Boolean = true
 ) {
     /** True if this session has no parent (i.e., it is a root-level session). */
     val isRoot: Boolean get() = parentId == null

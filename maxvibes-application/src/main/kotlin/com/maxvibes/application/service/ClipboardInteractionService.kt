@@ -102,6 +102,12 @@ class ClipboardInteractionService(
             addHistory = addHistory,
             specificPromptContent = specificPromptContent
         )
+
+        // TODO Step 5/8: AWAITING_APPROVE is Claude Code-specific and should never reach this service.
+        //  Returning an Error keeps the when exhaustive without committing to behavior here.
+        ClipboardSessionStatus.AWAITING_APPROVE -> ClipboardStepResult.Error(
+            "AWAITING_APPROVE is not handled by ClipboardInteractionService (Claude Code mode — see Step 5/8)"
+        )
     }
 
     suspend fun startTask(

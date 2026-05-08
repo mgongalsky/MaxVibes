@@ -27,5 +27,18 @@ enum class ClipboardSessionStatus {
      * The request JSON has been copied to the system clipboard and the plugin is waiting
      * for the user to paste the LLM response back into the IDE.
      */
-    AWAITING_PASTE
+    AWAITING_PASTE,
+
+    /**
+     * Claude Code mode only.
+     *
+     * The plugin received a response from the Claude Code process and is waiting
+     * for the user to press Approve to either:
+     *  - gather requested files and send the next request, or
+     *  - confirm and apply modifications (when auto-apply is disabled).
+     *
+     * Distinct from [AWAITING_PASTE] — there is no clipboard step here, the response
+     * is already in plugin memory; only user confirmation is needed to proceed.
+     */
+    AWAITING_APPROVE
 }
