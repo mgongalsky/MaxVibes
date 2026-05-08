@@ -11,7 +11,7 @@ import java.io.File
 
 /**
  * Сервис для управления промптами.
- * Читает из .maxvibes/prompts/ в проекте, или дефолт из resources.
+ * Читает из .maxvibes/prompts/ в проекте, или дефолт из resources/inline.
  */
 @Service(Service.Level.PROJECT)
 class PromptService(private val project: Project) : PromptPort {
@@ -20,6 +20,8 @@ class PromptService(private val project: Project) : PromptPort {
         private const val PROMPTS_DIR = ".maxvibes/prompts"
         private const val CHAT_SYSTEM_FILE = "chat-system.md"
         private const val PLANNING_SYSTEM_FILE = "planning-system.md"
+        private const val CLAUDE_CODE_SYSTEM_FILE = "claude-code-system.md"
+        private const val CLAUDE_CODE_SYSTEM_RESOURCE = "/prompts/claude-code-system.md"
 
         fun getInstance(project: Project): PromptService {
             return project.getService(PromptService::class.java)
@@ -62,6 +64,19 @@ class PromptService(private val project: Project) : PromptPort {
         }
     }
 
+    override fun claudeCodeSystem(): String {
+        val customFile = File(promptsDir, CLAUDE_CODE_SYSTEM_FILE)
+        if (customFile.exists() && customFile.canRead()) {
+            try {
+                return customFile.readText()
+            } catch (_: Exception) {
+                // fall through to resource
+            }
+        }
+        return loadResource(CLAUDE_CODE_SYSTEM_RESOURCE)
+            ?: error("Missing classpath resource: $CLAUDE_CODE_SYSTEM_RESOURCE")
+    }
+
     private fun loadPrompt(fileName: String, default: String): String {
         val customFile = File(promptsDir, fileName)
 
@@ -74,6 +89,12 @@ class PromptService(private val project: Project) : PromptPort {
         } else {
             default
         }
+    }
+
+    private fun loadResource(path: String): String? {
+        return PromptService::class.java.getResourceAsStream(path)
+            ?.bufferedReader(Charsets.UTF_8)
+            ?.use { it.readText() }
     }
 
     private fun openInEditor(file: VirtualFile) {
