@@ -32,14 +32,24 @@ class MaxVibesSettings : PersistentStateComponent<MaxVibesSettings.State> {
         var enableMockFallback: Boolean = true,
 
         // ===== Interaction Mode =====
-        var interactionMode: String = "API",  // API, CLIPBOARD, CHEAP_API
+        var interactionMode: String = "API",  // API, CLIPBOARD, CHEAP_API, CLAUDE_CODE
 
         // ===== Cheap LLM (for CHEAP_API mode) =====
         var cheapProvider: String = "ANTHROPIC",
         var cheapModelId: String = "claude-haiku-4-5-20251001",
         var cheapOllamaBaseUrl: String = "http://localhost:11434",
         var cheapTemperature: Double = 0.1,
-        var cheapMaxTokens: Int = 16384
+        var cheapMaxTokens: Int = 16384,
+
+        // ===== Claude Code (CLI mode) =====
+        // Path can be a name in PATH ("claude") or an absolute path.
+        var claudeCodePath: String = "claude",
+        // Extra CLI args separated by whitespace, e.g. --allowedTools ""
+        var claudeCodeExtraArgs: String = "",
+        // Timeout for waiting on a single stream-json response turn.
+        var claudeCodeReadTimeoutSec: Int = 120,
+        // Timeout for waiting for the process to spawn and emit system/init.
+        var claudeCodeStartTimeoutSec: Int = 30
     )
 
     private var myState = State()
@@ -54,55 +64,105 @@ class MaxVibesSettings : PersistentStateComponent<MaxVibesSettings.State> {
 
     var provider: String
         get() = myState.provider
-        set(value) { myState.provider = value }
+        set(value) {
+            myState.provider = value
+        }
 
     var modelId: String
         get() = myState.modelId
-        set(value) { myState.modelId = value }
+        set(value) {
+            myState.modelId = value
+        }
 
     var ollamaBaseUrl: String
         get() = myState.ollamaBaseUrl
-        set(value) { myState.ollamaBaseUrl = value }
+        set(value) {
+            myState.ollamaBaseUrl = value
+        }
 
     var temperature: Double
         get() = myState.temperature
-        set(value) { myState.temperature = value }
+        set(value) {
+            myState.temperature = value
+        }
 
     var maxTokens: Int
         get() = myState.maxTokens
-        set(value) { myState.maxTokens = value }
+        set(value) {
+            myState.maxTokens = value
+        }
 
     var enableMockFallback: Boolean
         get() = myState.enableMockFallback
-        set(value) { myState.enableMockFallback = value }
+        set(value) {
+            myState.enableMockFallback = value
+        }
 
     // ===== Interaction Mode =====
 
     var interactionMode: String
         get() = myState.interactionMode
-        set(value) { myState.interactionMode = value }
+        set(value) {
+            myState.interactionMode = value
+        }
 
     // ===== Cheap LLM =====
 
     var cheapProvider: String
         get() = myState.cheapProvider
-        set(value) { myState.cheapProvider = value }
+        set(value) {
+            myState.cheapProvider = value
+        }
 
     var cheapModelId: String
         get() = myState.cheapModelId
-        set(value) { myState.cheapModelId = value }
+        set(value) {
+            myState.cheapModelId = value
+        }
 
     var cheapOllamaBaseUrl: String
         get() = myState.cheapOllamaBaseUrl
-        set(value) { myState.cheapOllamaBaseUrl = value }
+        set(value) {
+            myState.cheapOllamaBaseUrl = value
+        }
 
     var cheapTemperature: Double
         get() = myState.cheapTemperature
-        set(value) { myState.cheapTemperature = value }
+        set(value) {
+            myState.cheapTemperature = value
+        }
 
     var cheapMaxTokens: Int
         get() = myState.cheapMaxTokens
-        set(value) { myState.cheapMaxTokens = value }
+        set(value) {
+            myState.cheapMaxTokens = value
+        }
+
+    // ===== Claude Code =====
+
+    var claudeCodePath: String
+        get() = myState.claudeCodePath
+        set(value) {
+            myState.claudeCodePath = value
+        }
+
+    var claudeCodeExtraArgs: String
+        get() = myState.claudeCodeExtraArgs
+        set(value) {
+            myState.claudeCodeExtraArgs = value
+        }
+
+    var claudeCodeReadTimeoutSec: Int
+        get() = myState.claudeCodeReadTimeoutSec
+        set(value) {
+            myState.claudeCodeReadTimeoutSec = value
+        }
+
+    var claudeCodeStartTimeoutSec: Int
+        get() = myState.claudeCodeStartTimeoutSec
+        set(value) {
+            myState.claudeCodeStartTimeoutSec = value
+        }
 
     // ========== Secure API Key Storage ==========
 

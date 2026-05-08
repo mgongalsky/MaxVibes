@@ -1,7 +1,9 @@
 // maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/settings/MaxVibesSettingsPanel.kt
 package com.maxvibes.plugin.settings
 
+import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.ui.ComboBox
+import com.intellij.openapi.ui.TextFieldWithBrowseButton
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPasswordField
 import com.intellij.ui.components.JBTextField
@@ -10,7 +12,6 @@ import com.intellij.util.ui.JBUI
 import com.maxvibes.adapter.llm.LLMServiceFactory
 import com.maxvibes.adapter.llm.config.LLMProviderConfig
 import com.maxvibes.adapter.llm.config.LLMProviderType
-import kotlinx.coroutines.runBlocking
 import java.awt.BorderLayout
 import java.awt.FlowLayout
 import javax.swing.*
@@ -34,6 +35,12 @@ class MaxVibesSettingsPanel {
     private val mockFallbackCheckBox: JCheckBox
     private val testConnectionButton: JButton
     private val statusLabel: JBLabel
+
+    // Claude Code section
+    private val claudeCodePathField: TextFieldWithBrowseButton
+    private val claudeCodeExtraArgsField: JBTextField
+    private val claudeCodeReadTimeoutField: JBTextField
+    private val claudeCodeStartTimeoutField: JBTextField
 
     // Panels for conditional display
     private val openAIPanel: JPanel
@@ -90,6 +97,25 @@ class MaxVibesSettingsPanel {
 
         testConnectionButton = JButton("Test Connection")
         statusLabel = JBLabel(" ")
+
+        // Claude Code fields
+        claudeCodePathField = TextFieldWithBrowseButton().apply {
+            textField.columns = 30
+            (textField as? JBTextField)?.emptyText?.text = "claude (in PATH) or absolute path"
+            @Suppress("DEPRECATION")
+            addBrowseFolderListener(
+                "Claude Code Binary",
+                "Path to the claude CLI binary",
+                null,
+                FileChooserDescriptorFactory.createSingleFileDescriptor()
+            )
+        }
+        claudeCodeExtraArgsField = JBTextField().apply {
+            columns = 30
+            emptyText.text = "e.g. --allowedTools \"\""
+        }
+        claudeCodeReadTimeoutField = JBTextField().apply { columns = 6 }
+        claudeCodeStartTimeoutField = JBTextField().apply { columns = 6 }
 
         // Create provider-specific panels
         openAIPanel = createOpenAIPanel()
@@ -188,6 +214,12 @@ class MaxVibesSettingsPanel {
             .addSeparator()
             .addLabeledComponent(JBLabel("Model:"), modelPanel)
             .addLabeledComponent(JBLabel("Temperature:"), temperaturePanel)
+            .addSeparator()
+            .addComponent(JBLabel("Claude Code (CLI mode):"))
+            .addLabeledComponent(JBLabel("Binary path:"), claudeCodePathField)
+            .addLabeledComponent(JBLabel("Extra CLI args:"), claudeCodeExtraArgsField)
+            .addLabeledComponent(JBLabel("Read timeout (sec):"), claudeCodeReadTimeoutField)
+            .addLabeledComponent(JBLabel("Start timeout (sec):"), claudeCodeStartTimeoutField)
             .addSeparator()
             .addComponent(mockFallbackCheckBox)
             .addComponent(testPanel)
@@ -292,13 +324,13 @@ class MaxVibesSettingsPanel {
                 val info = service.getProviderInfo()
 
                 SwingUtilities.invokeLater {
-                    statusLabel.text = "✓ Connected: $info"
+                    statusLabel.text = "\u2713 Connected: $info"
                     statusLabel.foreground = java.awt.Color(0, 128, 0)
                     testConnectionButton.isEnabled = true
                 }
             } catch (e: Exception) {
                 SwingUtilities.invokeLater {
-                    statusLabel.text = "✗ Error: ${e.message?.take(50)}"
+                    statusLabel.text = "\u2717 Error: ${e.message?.take(50)}"
                     statusLabel.foreground = java.awt.Color(200, 0, 0)
                     testConnectionButton.isEnabled = true
                 }
@@ -318,12 +350,14 @@ class MaxVibesSettingsPanel {
                 modelId = modelId,
                 temperature = temp
             )
+
             "ANTHROPIC" -> LLMProviderConfig(
                 providerType = LLMProviderType.ANTHROPIC,
                 apiKey = String(anthropicKeyField.password),
                 modelId = modelId,
                 temperature = temp
             )
+
             "OLLAMA" -> LLMProviderConfig(
                 providerType = LLMProviderType.OLLAMA,
                 apiKey = "",
@@ -331,6 +365,7 @@ class MaxVibesSettingsPanel {
                 baseUrl = ollamaUrlField.text,
                 temperature = temp
             )
+
             else -> throw IllegalStateException("Unknown provider: $providerKey")
         }
     }
@@ -371,6 +406,12 @@ class MaxVibesSettingsPanel {
         // Mock fallback
         mockFallbackCheckBox.isSelected = settings.enableMockFallback
 
+        // Claude Code
+        claudeCodePathField.text = settings.claudeCodePath
+        claudeCodeExtraArgsField.text = settings.claudeCodeExtraArgs
+        claudeCodeReadTimeoutField.text = settings.claudeCodeReadTimeoutSec.toString()
+        claudeCodeStartTimeoutField.text = settings.claudeCodeStartTimeoutSec.toString()
+
         // Reset status
         statusLabel.text = " "
     }
@@ -385,15 +426,36 @@ class MaxVibesSettingsPanel {
         // Save API keys securely
         settings.openAIApiKey = String(openAIKeyField.password)
         settings.anthropicApiKey = String(anthropicKeyField.password)
+
+        // Claude Code — defensive int parsing falls back to current value if input is garbage
+        settings.claudeCodePath = claudeCodePathField.text.trim().ifBlank { "claude" }
+        settings.claudeCodeExtraArgs = claudeCodeExtraArgsField.text
+        settings.claudeCodeReadTimeoutSec =
+            claudeCodeReadTimeoutField.text.trim().toIntOrNull()?.coerceAtLeast(1)
+                ?: settings.claudeCodeReadTimeoutSec
+        settings.claudeCodeStartTimeoutSec =
+            claudeCodeStartTimeoutField.text.trim().toIntOrNull()?.coerceAtLeast(1)
+                ?: settings.claudeCodeStartTimeoutSec
     }
 
     fun isModified(settings: MaxVibesSettings): Boolean {
+        val pathChanged = settings.claudeCodePath != claudeCodePathField.text.trim().ifBlank { "claude" }
+        val argsChanged = settings.claudeCodeExtraArgs != claudeCodeExtraArgsField.text
+        val readTimeoutChanged =
+            settings.claudeCodeReadTimeoutSec.toString() != claudeCodeReadTimeoutField.text.trim()
+        val startTimeoutChanged =
+            settings.claudeCodeStartTimeoutSec.toString() != claudeCodeStartTimeoutField.text.trim()
+
         return settings.provider != getSelectedProviderKey() ||
                 settings.modelId != getSelectedModelId() ||
                 settings.ollamaBaseUrl != ollamaUrlField.text ||
                 settings.temperature != temperatureSlider.value / 100.0 ||
                 settings.enableMockFallback != mockFallbackCheckBox.isSelected ||
                 settings.openAIApiKey != String(openAIKeyField.password) ||
-                settings.anthropicApiKey != String(anthropicKeyField.password)
+                settings.anthropicApiKey != String(anthropicKeyField.password) ||
+                pathChanged ||
+                argsChanged ||
+                readTimeoutChanged ||
+                startTimeoutChanged
     }
 }
