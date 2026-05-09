@@ -1,5 +1,6 @@
 package com.maxvibes.plugin.service
 
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
@@ -8,39 +9,58 @@ import com.maxvibes.adapter.llm.LLMServiceFactory
 import com.maxvibes.adapter.llm.config.LLMProviderConfig
 import com.maxvibes.adapter.llm.config.LLMProviderType
 import com.maxvibes.adapter.psi.PsiCodeRepository
+import com.maxvibes.adapter.psi.context.IntellijIdeErrorsAdapter
 import com.maxvibes.adapter.psi.context.PsiProjectContextProvider
 import com.maxvibes.application.port.input.AnalyzeCodeUseCase
 import com.maxvibes.application.port.input.ContextAwareModifyUseCase
 import com.maxvibes.application.port.input.ModifyCodeUseCase
 import com.maxvibes.application.port.output.*
 import com.maxvibes.application.service.AnalyzeCodeService
+import com.maxvibes.application.service.ChatTreeService
+import com.maxvibes.application.service.ClaudeCodeInteractionService
 import com.maxvibes.application.service.ClipboardInteractionService
+import com.maxvibes.application.service.ClipboardSessionManager
 import com.maxvibes.application.service.ContextAwareModifyService
 import com.maxvibes.application.service.ModifyCodeService
+import com.maxvibes.application.service.SpecificPromptService
+import com.maxvibes.plugin.claudecode.ClaudeCodeProcessAdapter
 import com.maxvibes.domain.model.code.CodeElement
 import com.maxvibes.domain.model.context.ContextRequest
 import com.maxvibes.domain.model.context.GatheredContext
 import com.maxvibes.domain.model.context.ProjectContext
 import com.maxvibes.domain.model.modification.Modification
+import com.maxvibes.plugin.chat.ChatHistoryService
 import com.maxvibes.plugin.clipboard.ClipboardAdapter
 import com.maxvibes.plugin.settings.MaxVibesSettings
 import com.maxvibes.shared.result.Result
-import com.maxvibes.application.port.output.IdeErrorsPort
-import com.maxvibes.adapter.psi.context.IntellijIdeErrorsAdapter
-import com.maxvibes.application.service.ChatTreeService
-import com.maxvibes.plugin.chat.ChatHistoryService
-import com.maxvibes.application.service.ClipboardSessionManager
-import com.maxvibes.application.port.output.SpecificPromptRepository
-import com.maxvibes.application.service.SpecificPromptService
+import kotlinx.coroutines.CoroutineName
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 
 /**
  * Main service for MaxVibes plugin.
  * Manages dependencies and provides access to use cases.
+ *
+ * Implements [Disposable] so IntelliJ shuts down resources (the Claude Code
+ * process and project-scoped coroutines) when the project closes.
  */
 @Service(Service.Level.PROJECT)
-class MaxVibesService(private val project: Project) {
+class MaxVibesService(private val project: Project) : Disposable {
 
     private val LOG: Logger = Logger.getInstance(MaxVibesService::class.java)
+
+    /**
+     * Project-scoped coroutine scope.
+     *
+     * Owned by this service — cancelled in [dispose] when the project closes.
+     * Used by [ClaudeCodeProcessAdapter] for stderr collection and any other
+     * background tasks that must not outlive the project.
+     */
+    private val serviceScope: CoroutineScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default + CoroutineName("MaxVibesService")
+    )
 
     init {
         println("[MaxVibesService] init block running for project: ${project.name}")
@@ -117,6 +137,47 @@ class MaxVibesService(private val project: Project) {
         ClipboardInteractionService(
             contextProvider = projectContextProvider,
             clipboardPort = ClipboardAdapter(),
+            codeRepository = codeRepository,
+            notificationPort = notificationPort,
+            promptPort = promptPort,
+            logger = MaxVibesLogger,
+            sessionManager = clipboardSessionManager,
+            chatSessionRepository = chatSessionRepository
+        )
+    }
+
+    // ========== Claude Code Service ==========
+
+    /**
+     * Explicit [Lazy] delegate so [dispose] can check [Lazy.isInitialized] and
+     * avoid spawning the adapter just to immediately tear it down when the user
+     * never used Claude Code mode in this project session.
+     */
+    private val claudeCodeAdapterLazy: Lazy<ClaudeCodeProcessAdapter> = lazy {
+        ClaudeCodeProcessAdapter(
+            settings = MaxVibesSettings.getInstance(),
+            scope = serviceScope
+        )
+    }
+
+    /**
+     * Single per-project [ClaudeCodePort] adapter.
+     * The actual `claude` CLI process is spawned on the first send via
+     * [ClaudeCodeProcessAdapter.ensureStarted] — not on construction.
+     */
+    private val claudeCodeAdapter: ClaudeCodeProcessAdapter by claudeCodeAdapterLazy
+
+    /**
+     * Application service that orchestrates the Claude Code dialog flow.
+     *
+     * Uses the same [ClipboardSessionManager] as [clipboardService] — the
+     * manager is protocol-agnostic and handles both AWAITING_PASTE (clipboard)
+     * and AWAITING_APPROVE (Claude Code) transitions after Step 6.
+     */
+    val claudeCodeService: ClaudeCodeInteractionService by lazy {
+        ClaudeCodeInteractionService(
+            contextProvider = projectContextProvider,
+            claudeCodePort = claudeCodeAdapter,
             codeRepository = codeRepository,
             notificationPort = notificationPort,
             promptPort = promptPort,
@@ -299,7 +360,7 @@ class MaxVibesService(private val project: Project) {
         ChatTreeService(chatSessionRepository)
     }
 
-    /** Manages clipboard session state transitions (IDLE → SESSION_ACTIVE → AWAITING_PASTE). */
+    /** Manages session state transitions for clipboard and Claude Code modes (IDLE → SESSION_ACTIVE → AWAITING_PASTE / AWAITING_APPROVE). */
     val clipboardSessionManager: ClipboardSessionManager by lazy {
         ClipboardSessionManager(
             repository = chatSessionRepository,
@@ -313,6 +374,33 @@ class MaxVibesService(private val project: Project) {
     }
     val specificPromptService: SpecificPromptService by lazy {
         SpecificPromptService(specificPromptRepository)
+    }
+
+    // ========== Lifecycle ==========
+
+    /**
+     * Called by IntelliJ when the project closes.
+     *
+     * Order of teardown matters:
+     *  1. Shut down the Claude Code process (only if it was actually started)
+     *     so the OS reclaims its PID before we drop our references.
+     *  2. Cancel the project-scoped coroutine scope so any in-flight background
+     *     tasks (stderr collectors, etc.) terminate cleanly.
+     *
+     * Each step is wrapped in [runCatching] so a failure in one step does not
+     * prevent the others from completing.
+     */
+    override fun dispose() {
+        // Step 1: shutdown the adapter only if it was actually constructed.
+        // Touching the lazy property would force construction — guard via the delegate.
+        if (claudeCodeAdapterLazy.isInitialized()) {
+            runCatching { claudeCodeAdapter.shutdown() }
+                .onFailure { LOG.warn("ClaudeCodeProcessAdapter.shutdown failed: ${it.message}", it) }
+        }
+        // Step 2: cancel the coroutine scope.
+        runCatching { serviceScope.cancel() }
+            .onFailure { LOG.warn("serviceScope.cancel failed: ${it.message}", it) }
+        MaxVibesLogger.info("MaxVibesService", "disposed", mapOf("project" to project.name))
     }
 
     companion object {

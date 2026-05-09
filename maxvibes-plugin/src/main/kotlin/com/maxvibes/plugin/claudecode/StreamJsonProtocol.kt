@@ -13,20 +13,23 @@ import kotlinx.serialization.json.putJsonObject
 /**
  * Helpers for the Claude Code stream-JSON format.
  *
- * VERIFIED against claude-code 2.1.129 (May 2026) by piping a stream-json user
- * event through `claude -p --input-format stream-json --output-format stream-json --verbose`
- * and recording the actual stdout shape.
- *
- * Each line on stdout is a single JSON object with a `type` field. Recognised types:
- *  - `type="system"` with `subtype="init"` — first event, contains `session_id`
- *  - `type="assistant"` — model response; payload at `message.content[].text`
- *    (each block has `type="text"` and `text="..."`)
- *  - `type="rate_limit_event"` — interleaved diagnostic, ignored for now
- *  - `type="result"` — terminal event for the turn (with `is_error`, `result`, `duration_ms`, etc.)
+ * Encoded against claude-code 2.1.x stream-json spec (May 2026):
+ *  - Each line on stdout is a single JSON object with a `type` field.
+ *  - Recognised types:
+ *      `type="system"` with `subtype="init"` — first event, contains `session_id`
+ *      `type="assistant"` — model response; payload at `message.content[].text`
+ *                            (each block has `type="text"` and `text="..."`)
+ *      `type="rate_limit_event"` — interleaved diagnostic, ignored for now
+ *      `type="result"` — terminal event for the turn
+ *                        (with `is_error`, `result`, `duration_ms`, etc.)
  *
  * On stdin we send a `type="user"` event with `message.content` as a plain string
  * (NOT an array of content blocks — claude-code stream-json input expects the
  * simpler shape, even though the Anthropic Messages API uses content blocks).
+ *
+ * SMOKE TEST (TODO before production use): pipe one user event through
+ *   claude -p --input-format stream-json --output-format stream-json --verbose
+ * and confirm the assistant/result envelope shapes still match these helpers.
  */
 internal object StreamJsonProtocol {
 

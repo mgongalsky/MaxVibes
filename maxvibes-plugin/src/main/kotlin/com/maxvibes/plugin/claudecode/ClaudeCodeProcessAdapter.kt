@@ -32,18 +32,19 @@ import java.util.concurrent.TimeUnit
  *
  * Concurrency: all stdin/stdout access is serialized via [sendMutex].
  *
- * VERIFIED COMMAND (May 2026, against `claude --help`):
- *   claude -p --input-format stream-json --output-format stream-json
+ * COMMAND (May 2026, against `claude --help`):
+ *   claude -p --input-format stream-json --output-format stream-json --verbose
  *          [--resume <session-uuid>]
- *          [--tools ""]                         # disable all built-in tools
- *          [--append-system-prompt "<prompt>"]  # injected at Service layer, not here
  *          [<extra args from settings>]
  *
  * Note: `-p` (--print) is REQUIRED for stream-json input/output to work.
+ * `--verbose` is required so that stream-json emits all event types (system/init,
+ * assistant, result), not just the terminal result.
  *
- * NOTE: stream-JSON line shapes (system/init, assistant, result) are not
- * documented in --help. They are encoded in [StreamJsonProtocol] based on
- * working assumptions and need verification — see // CLI_VERIFY markers.
+ * NOTE: stream-JSON line shapes (system/init, assistant, result) are documented
+ * in [StreamJsonProtocol] based on observed claude-code 2.1.x behaviour.
+ * If a future claude version changes the schema, update [StreamJsonProtocol]
+ * — this adapter only cares about the field accessors it exposes.
  */
 class ClaudeCodeProcessAdapter(
     private val settings: MaxVibesSettings,
@@ -87,12 +88,13 @@ class ClaudeCodeProcessAdapter(
 
             val cmd = GeneralCommandLine(settings.claudeCodePath).apply {
                 charset = StandardCharsets.UTF_8
-                // Verified base flags — --print is required for stream-json I/O.
+                // Verified base flags — --print is required for stream-json I/O,
+                // --verbose is required for stream-json output to emit all event types.
                 addParameters(
                     "-p",
                     "--input-format", "stream-json",
                     "--output-format", "stream-json",
-                    "--verbose" // stream-json requires verbose output to emit all event types
+                    "--verbose"
                 )
                 if (resumeSessionId != null) {
                     addParameters("--resume", resumeSessionId)
