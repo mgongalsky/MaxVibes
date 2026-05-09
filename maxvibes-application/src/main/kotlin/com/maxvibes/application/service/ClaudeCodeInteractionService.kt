@@ -128,8 +128,9 @@ class ClaudeCodeInteractionService(
 
     /**
      * Confirms an [ClipboardSessionStatus.AWAITING_APPROVE] response: gathers the files
-     * the LLM requested in its last assistant message and sends a minimal-context
-     * follow-up to the same Claude Code process.
+     * the LLM requested in its last assistant message, transitions the session back to
+     * [ClipboardSessionStatus.SESSION_ACTIVE] via [ClipboardEvent.Approved], and sends
+     * a minimal-context follow-up to the same Claude Code process.
      *
      * @return a new [ClaudeCodeStepResult] describing the post-approve state.
      */
@@ -199,6 +200,9 @@ class ClaudeCodeInteractionService(
         ) {
             addToHistory(ChatRole.ASSISTANT, lastAssistant.content)
         }
+
+        // Drive the state machine: AWAITING_APPROVE → SESSION_ACTIVE before sending the next request.
+        sessionManager.transition(sessionId, ClipboardEvent.Approved)
 
         return doSend(
             sessionId = sessionId,
@@ -411,6 +415,7 @@ class ClaudeCodeInteractionService(
     /**
      * Post-processes a successful response:
      *  - persists requestedViews into the last assistant message of the domain session,
+     *  - drives the session-status state machine via [ClipboardEvent.ResponseReceived],
      *  - applies modifications when not in plan-only mode,
      *  - decides between [ClaudeCodeStepResult.WaitingForApprove] and [ClaudeCodeStepResult.Completed].
      */
@@ -436,21 +441,11 @@ class ClaudeCodeInteractionService(
             persistRequestedViewsIntoDomain(sessionId, response.codeViewRequests)
         }
 
-        // requestedViews → AWAITING_APPROVE.
-        if (hasViews) {
-            sessionManager.transition(sessionId, ClipboardEvent.JsonCopied)
-            // JsonCopied transitions SESSION_ACTIVE → AWAITING_PASTE in the matrix.
-            // For Claude Code we want AWAITING_APPROVE instead — override directly.
-            // (The state machine matrix doesn't yet have a CLAUDE_CODE-specific event;
-            // a future refactor will introduce ClipboardEvent.AwaitingApprove. For now
-            // we go through the repository to set the precise status without polluting the manager.)
-            val sess = chatSessionRepository.getSessionById(sessionId)
-            if (sess != null && sess.clipboardStatus != ClipboardSessionStatus.AWAITING_APPROVE) {
-                chatSessionRepository.saveSession(
-                    sess.withClipboardStatus(ClipboardSessionStatus.AWAITING_APPROVE)
-                )
-            }
+        // Drive the state machine: ResponseReceived(hasRequestedViews) decides the target status.
+        // SESSION_ACTIVE/AWAITING_APPROVE → AWAITING_APPROVE if hasViews, else → SESSION_ACTIVE.
+        sessionManager.transition(sessionId, ClipboardEvent.ResponseReceived(hasRequestedViews = hasViews))
 
+        if (hasViews) {
             val requestedViewInfos = response.codeViewRequests.map {
                 RequestedViewInfo(
                     path = it.filePath,
@@ -475,14 +470,6 @@ class ClaudeCodeInteractionService(
             emptyList()
         } else {
             emptyList()
-        }
-
-        // No views → ensure session is back to SESSION_ACTIVE for the next turn.
-        val sess = chatSessionRepository.getSessionById(sessionId)
-        if (sess != null && sess.clipboardStatus != ClipboardSessionStatus.SESSION_ACTIVE) {
-            chatSessionRepository.saveSession(
-                sess.withClipboardStatus(ClipboardSessionStatus.SESSION_ACTIVE)
-            )
         }
 
         val successCount = modResults.count { it is ModificationResult.Success }

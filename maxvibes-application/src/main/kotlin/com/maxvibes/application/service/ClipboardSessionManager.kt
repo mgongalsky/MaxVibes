@@ -7,7 +7,7 @@ import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 private const val TAG = "ClipboardSessionManager"
 
 /**
- * Application-layer state machine for clipboard dialog sessions.
+ * Application-layer state machine for clipboard and Claude Code dialog sessions.
  *
  * Owns the complete transition logic between [ClipboardSessionStatus] states.
  * All transitions are driven by [ClipboardEvent]s and persisted via [ChatSessionRepository].
@@ -16,13 +16,30 @@ private const val TAG = "ClipboardSessionManager"
  *
  * Transition matrix:
  * ```
- * Event \ Status   | IDLE              | SESSION_ACTIVE     | AWAITING_PASTE
- * -----------------+-------------------+--------------------+-------------------
- * StartSession     | → SESSION_ACTIVE  | warn → false       | warn → false
- * JsonCopied       | warn → false      | → AWAITING_PASTE   | → AWAITING_PASTE
- * ResponsePasted   | warn → false      | warn → false       | → SESSION_ACTIVE
- * Reset            | no-op → true      | → IDLE             | → IDLE
+ * Event \ Status     | IDLE             | SESSION_ACTIVE        | AWAITING_PASTE     | AWAITING_APPROVE
+ * -------------------+------------------+-----------------------+--------------------+-----------------------
+ * StartSession       | → SESSION_ACTIVE | warn → false          | warn → false       | warn → false
+ * JsonCopied         | warn → false     | → AWAITING_PASTE      | → AWAITING_PASTE   | warn → false
+ * ResponsePasted     | warn → false     | warn → false          | → SESSION_ACTIVE   | warn → false
+ * ResponseReceived   | warn → false     | → AWAITING_APPROVE /  | warn → false       | → AWAITING_APPROVE /
+ *  (hasViews)        |                  |   SESSION_ACTIVE      |                    |   SESSION_ACTIVE
+ * Approved           | warn → false     | warn → false          | warn → false       | → SESSION_ACTIVE
+ * ForceActivate      | warn → false     | warn → false          | → SESSION_ACTIVE   | warn → false
+ * ForceAwaitPaste    | warn → false     | → AWAITING_PASTE      | warn → false       | warn → false
+ * Reset              | no-op → true     | → IDLE                | → IDLE             | → IDLE
  * ```
+ *
+ * Clipboard mode uses [ClipboardEvent.StartSession] / [ClipboardEvent.JsonCopied] /
+ * [ClipboardEvent.ResponsePasted] / [ClipboardEvent.ForceActivate] / [ClipboardEvent.ForceAwaitPaste].
+ *
+ * Claude Code mode uses [ClipboardEvent.StartSession] / [ClipboardEvent.ResponseReceived] /
+ * [ClipboardEvent.Approved].
+ *
+ * [ClipboardEvent.Reset] is universal and always drives the session to IDLE.
+ *
+ * Sending a clipboard-mode event while in [ClipboardSessionStatus.AWAITING_APPROVE]
+ * (or a Claude Code event while in [ClipboardSessionStatus.AWAITING_PASTE]) is treated
+ * as an invalid transition — the manager logs a warning and returns false.
  *
  * @param repository Port for reading and persisting chat sessions.
  * @param logger Optional logger; pass null in unit tests to suppress all output.
@@ -84,6 +101,21 @@ class ClipboardSessionManager(
             return true
         }
 
+        // --- No-op when target equals current and no persistence is needed ---
+        // (Currently happens for ResponseReceived(hasViews=true) in AWAITING_APPROVE
+        //  and ResponseReceived(hasViews=false) in SESSION_ACTIVE — same state both sides.)
+        if (newStatus == currentStatus) {
+            logger?.debug(
+                TAG, "No-op transition (target equals current)",
+                data = mapOf(
+                    "sessionId" to sessionId,
+                    "status" to currentStatus,
+                    "event" to event::class.simpleName
+                )
+            )
+            return true
+        }
+
         // --- Persist the new status and log the successful transition ---
         repository.saveSession(session.withClipboardStatus(newStatus))
         logger?.info(
@@ -110,15 +142,17 @@ class ClipboardSessionManager(
         current: ClipboardSessionStatus,
         event: ClipboardEvent
     ): ClipboardSessionStatus? = when (event) {
+        // ── StartSession: clipboard + claude code shared entry point ──
         is ClipboardEvent.StartSession -> when (current) {
             ClipboardSessionStatus.IDLE -> ClipboardSessionStatus.SESSION_ACTIVE
             else -> null
         }
 
+        // ── Clipboard-only events ──
         is ClipboardEvent.JsonCopied -> when (current) {
             ClipboardSessionStatus.SESSION_ACTIVE,
             ClipboardSessionStatus.AWAITING_PASTE -> ClipboardSessionStatus.AWAITING_PASTE
-
+            // AWAITING_APPROVE: a clipboard event in a Claude Code state — invalid.
             else -> null
         }
 
@@ -127,18 +161,33 @@ class ClipboardSessionManager(
             else -> null
         }
 
-        // ForceActivate: user skips the pending paste and resumes the dialog.
         is ClipboardEvent.ForceActivate -> when (current) {
             ClipboardSessionStatus.AWAITING_PASTE -> ClipboardSessionStatus.SESSION_ACTIVE
             else -> null
         }
 
-        // ForceAwaitPaste: user goes back to paste mode from an active session.
         is ClipboardEvent.ForceAwaitPaste -> when (current) {
             ClipboardSessionStatus.SESSION_ACTIVE -> ClipboardSessionStatus.AWAITING_PASTE
             else -> null
         }
 
+        // ── Claude Code-only events ──
+        is ClipboardEvent.ResponseReceived -> when (current) {
+            ClipboardSessionStatus.SESSION_ACTIVE,
+            ClipboardSessionStatus.AWAITING_APPROVE ->
+                if (event.hasRequestedViews) ClipboardSessionStatus.AWAITING_APPROVE
+                else ClipboardSessionStatus.SESSION_ACTIVE
+            // AWAITING_PASTE: clipboard state, Claude Code event — invalid.
+            // IDLE: response cannot precede StartSession — invalid.
+            else -> null
+        }
+
+        is ClipboardEvent.Approved -> when (current) {
+            ClipboardSessionStatus.AWAITING_APPROVE -> ClipboardSessionStatus.SESSION_ACTIVE
+            else -> null
+        }
+
+        // ── Universal ──
         // Reset is always valid — drives the session to IDLE regardless of current state.
         is ClipboardEvent.Reset -> ClipboardSessionStatus.IDLE
     }
