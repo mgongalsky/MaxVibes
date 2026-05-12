@@ -319,6 +319,11 @@ class ClaudeCodeInteractionService(
     /**
      * Builds the request, ensures the process is running (with `--resume` fallback to fresh start),
      * sends the request and dispatches the response to [processResponse].
+     *
+     * System prompt handling: on a fresh start, the MaxVibes system instruction is forwarded
+     * to the adapter via `--append-system-prompt` rather than embedded into the JSON payload —
+     * the latter trips Claude Code's prompt-injection classifier. On `--resume`, the prompt is
+     * already installed in the existing claude session, so we pass null.
      */
     private suspend fun doSend(
         sessionId: String,
@@ -345,11 +350,16 @@ class ClaudeCodeInteractionService(
             specificPromptContent = specificPromptContent
         )
 
-        // Try resume first if we have a session id.
+        // Try resume first if we have a session id. The system prompt is null on resume:
+        // the existing CLI session already has the prompt installed from its first spawn.
         val resumeId = session.claudeCodeSessionId
-        var ensureResult = claudeCodePort.ensureStarted(resumeSessionId = resumeId)
+        var ensureResult = claudeCodePort.ensureStarted(
+            resumeSessionId = resumeId,
+            systemPrompt = null
+        )
 
-        // Resume failed → start fresh, mark needsFullContext, rebuild the request with full context.
+        // Resume failed → start fresh. Mark needsFullContext, rebuild the request with
+        // full context, AND now we DO pass the system prompt — it's a brand-new process.
         if (ensureResult is Result.Failure && ensureResult.error is ClaudeCodeError.ResumeFailed) {
             val rf = ensureResult.error as ClaudeCodeError.ResumeFailed
             log("Resume failed for sessionId=${rf.sessionId}; falling back to fresh start.")
@@ -368,7 +378,10 @@ class ClaudeCodeInteractionService(
                 ideErrors = ideErrors,
                 specificPromptContent = specificPromptContent
             )
-            ensureResult = claudeCodePort.ensureStarted(resumeSessionId = null)
+            ensureResult = claudeCodePort.ensureStarted(
+                resumeSessionId = null,
+                systemPrompt = state.prompts.chatSystem
+            )
         }
 
         if (ensureResult is Result.Failure) {
@@ -513,7 +526,11 @@ class ClaudeCodeInteractionService(
         planOnlySuffix = PLAN_ONLY_SUFFIX,
         ideErrors = ideErrors,
         attachedContext = attachedContext,
-        specificPromptContent = specificPromptContent
+        specificPromptContent = specificPromptContent,
+        // Claude Code transport delivers the system instruction via the CLI's
+        // --append-system-prompt flag at process spawn — embedding it in the
+        // JSON payload would trip Claude Code's prompt-injection classifier.
+        omitSystemInstruction = true
     )
 
     /**

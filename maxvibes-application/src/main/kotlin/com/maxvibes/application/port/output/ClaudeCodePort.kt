@@ -33,12 +33,23 @@ interface ClaudeCodePort {
     /**
      * Lazily starts the underlying `claude` process if not yet running.
      *
-     * @param resumeSessionId if non-null, the adapter passes
-     *        `--resume <id>` to reuse an existing claude session. If null,
-     *        a fresh session is started and its session id will be reported
-     *        in the next [send] result.
+     * The MaxVibes system instruction is supplied here (via `--append-system-prompt`)
+     * rather than embedded into every user-event JSON. This avoids tripping the
+     * Claude Code CLI's built-in prompt-injection classifier, which flags large
+     * prompt-looking blobs inside user content.
+     *
+     * @param resumeSessionId if non-null, the adapter passes `--resume <id>` to
+     *        reuse an existing claude session. If null, a fresh session is started
+     *        and its session id will be reported in the next [send] result.
+     * @param systemPrompt if non-null and non-blank, passed as `--append-system-prompt`
+     *        when spawning a fresh process. When resuming an existing session it is
+     *        typically null — the prompt was already installed at first start. When the
+     *        process is already alive (idempotent re-call), the parameter is ignored.
      */
-    suspend fun ensureStarted(resumeSessionId: String?): Result<Unit, ClaudeCodeError>
+    suspend fun ensureStarted(
+        resumeSessionId: String?,
+        systemPrompt: String? = null
+    ): Result<Unit, ClaudeCodeError>
 
     /**
      * Sends a single [ClipboardRequest] to the running process and waits

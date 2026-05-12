@@ -13,10 +13,18 @@ import com.maxvibes.domain.model.interaction.ClipboardRequest
  *
  * Single source of truth for how a [ClipboardRequest] is assembled;
  * both the Generate and Copy JSON flows delegate here via
- * [ClipboardInteractionService.generateAndCopyJson].
+ * [ClipboardInteractionService.generateAndCopyJson], and the Claude Code
+ * flow via [ClaudeCodeInteractionService.doSend].
  */
 internal object InteractionRequestBuilder {
 
+    /**
+     * @param omitSystemInstruction when true, [ClipboardRequest.systemInstruction]
+     *        is forced to an empty string regardless of [state]. Used by the
+     *        Claude Code transport, which delivers the system instruction through
+     *        the CLI's `--append-system-prompt` flag rather than embedding it in
+     *        every user-event JSON payload.
+     */
     fun build(
         state: ClipboardSessionState,
         freshFiles: Map<String, String>,
@@ -25,7 +33,8 @@ internal object InteractionRequestBuilder {
         planOnlySuffix: String = "",
         ideErrors: String? = null,
         attachedContext: String? = null,
-        specificPromptContent: String? = null
+        specificPromptContent: String? = null,
+        omitSystemInstruction: Boolean = false
     ): ClipboardRequest {
         // Minimal-mode: LLM already has full context in its chat window — send only the delta.
         val isMinimal = !isFirstMessage && !addHistory
@@ -44,8 +53,15 @@ internal object InteractionRequestBuilder {
             state.currentMessage
         }
 
-        // System prompt: omitted in minimal mode — JsonClipboardProtocolCodec skips blank strings.
-        val systemInstruction = if (isMinimal) "" else buildSystemInstruction(state, planOnlySuffix)
+        // System prompt resolution:
+        //  - omitSystemInstruction wins unconditionally (Claude Code transport).
+        //  - else: omitted in minimal mode (LLM already has it in its chat window).
+        //  - else: full system instruction.
+        val systemInstruction = when {
+            omitSystemInstruction -> ""
+            isMinimal -> ""
+            else -> buildSystemInstruction(state, planOnlySuffix)
+        }
 
         return ClipboardRequest(
             // Phase is PLANNING only when neither session nor turn has gathered any files yet.
