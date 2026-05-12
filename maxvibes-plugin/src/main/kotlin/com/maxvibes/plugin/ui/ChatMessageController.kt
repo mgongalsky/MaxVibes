@@ -8,6 +8,7 @@ import com.intellij.openapi.project.Project
 import com.maxvibes.application.port.input.ContextAwareRequest
 import com.maxvibes.application.port.input.ContextAwareResult
 import com.maxvibes.application.port.output.ChatMessageDTO
+import com.maxvibes.application.service.ClaudeCodeStepResult
 import com.maxvibes.application.service.ClipboardStepResult
 import com.maxvibes.domain.model.chat.ChatMessage
 import com.maxvibes.domain.model.chat.ChatSession
@@ -68,7 +69,7 @@ interface ChatPanelCallbacks {
 }
 
 /**
- * Handles message sending (API, Clipboard, CheapAPI) and response processing.
+ * Handles message sending (API, Clipboard, CheapAPI, ClaudeCode) and response processing.
  *
  * Extracted from ChatPanel to separate message flow logic from UI setup.
  * Uses [ChatPanelCallbacks] to communicate UI updates back to the panel.
@@ -206,6 +207,67 @@ class ChatMessageController(
         callbacks.setInputEnabled(false)
         runClipboardBg("Re-generating JSON...", session) {
             service.clipboardService.redoLastRequest(session.id, globalContextFiles)
+        }
+    }
+
+    // ==================== Claude Code Mode ====================
+
+    /**
+     * Background-task helper for Claude Code interactions.
+     *
+     * Mirrors [runClipboardBg] but dispatches results through [handleClaudeCodeResult]
+     * and resets the Claude Code session (not the clipboard one) on cancel.
+     */
+    private fun runClaudeCodeBg(
+        title: String,
+        session: ChatSession,
+        action: suspend () -> ClaudeCodeStepResult
+    ) {
+        ProgressManager.getInstance().run(object : Task.Backgroundable(project, "MaxVibes: $title", true) {
+            override fun run(indicator: ProgressIndicator) {
+                service.notificationService.setProgressIndicator(indicator)
+                runBlocking {
+                    val result = action()
+                    ApplicationManager.getApplication().invokeLater { handleClaudeCodeResult(result, session) }
+                }
+            }
+
+            override fun onCancel() {
+                ApplicationManager.getApplication().invokeLater {
+                    service.claudeCodeService.reset(session.id)
+                    callbacks.appendToChat("\u26A0\uFE0F Cancelled")
+                    callbacks.setInputEnabled(true)
+                    callbacks.updateModeIndicator()
+                }
+            }
+        })
+    }
+
+    /**
+     * Approve the last Claude Code response — gather the files the LLM requested
+     * and send a minimal-context follow-up. Called from [ChatPanel] when the user
+     * clicks the Approve button.
+     */
+    fun approve() {
+        val session = chatTreeService.getActiveSession()
+        val trace = attachedTrace
+        val errs = attachedErrors
+        clearAttachmentsAfterSend()
+        MaxVibesLogger.info(
+            "Controller", "approve", mapOf(
+                "sessionId" to session.id,
+                "hasTrace" to (trace != null),
+                "hasErrors" to (errs != null)
+            )
+        )
+        callbacks.setInputEnabled(false)
+        callbacks.setStatus("Claude Code: approving...")
+        runClaudeCodeBg("Claude Code: approving...", session) {
+            service.claudeCodeService.approve(
+                sessionId = session.id,
+                attachedContext = trace,
+                ideErrors = errs
+            )
         }
     }
 
@@ -466,6 +528,125 @@ class ChatMessageController(
         }
     }
 
+    /**
+     * Renders a [ClaudeCodeStepResult] to the chat. Mirrors [handleClipboardResult]
+     * but uses the Claude Code result type; auto-applies modifications when present.
+     */
+    private fun handleClaudeCodeResult(result: ClaudeCodeStepResult, session: ChatSession) {
+        when (result) {
+            is ClaudeCodeStepResult.WaitingForApprove -> {
+                MaxVibesLogger.info(
+                    "Controller", "claudeCode awaiting approve", mapOf(
+                        "requestedViews" to result.requestedViews.size,
+                        "in" to result.inputTokens,
+                        "out" to result.outputTokens
+                    )
+                )
+                chatTreeService.addChatTokens(session.id, result.inputTokens, result.outputTokens)
+
+                val tokenInfo = if (result.inputTokens + result.outputTokens > 0) {
+                    "\u2191${fmt(result.inputTokens)}  \u00B7  \u2193${fmt(result.outputTokens)}"
+                } else null
+
+                // The service has already persisted the assistant message + requestedViews
+                // into the domain session. We only render here.
+                callbacks.updateTokenDisplay()
+
+                callbacks.addAssistantMessageBubble(
+                    text = callbacks.formatMarkdown(result.assistantMessage),
+                    tokenInfo = tokenInfo,
+                    modifications = emptyList(),
+                    metaFiles = emptyList(),
+                    reasoning = result.llmReasoning,
+                    requestedViews = result.requestedViews,
+                    appliedModifications = emptyList()
+                )
+
+                callbacks.setInputEnabled(true)
+                callbacks.updateModeIndicator()
+                callbacks.setStatus("\uD83E\uDD16 Awaiting approval \u2014 click Approve to gather files and continue")
+            }
+
+            is ClaudeCodeStepResult.Completed -> {
+                val failures = result.modifications.filterIsInstance<ModificationResult.Failure>()
+                MaxVibesLogger.info(
+                    "Controller", "claudeCode completed", mapOf(
+                        "success" to result.success,
+                        "mods" to result.modifications.size,
+                        "failures" to failures.size,
+                        "in" to result.inputTokens,
+                        "out" to result.outputTokens,
+                        "hasCommitMsg" to (result.commitMessage != null)
+                    )
+                )
+                callbacks.registerElementPaths(result.modifications)
+
+                chatTreeService.addChatTokens(session.id, result.inputTokens, result.outputTokens)
+                val text = result.message.trim().ifBlank { "Done." }
+                val tokenInfo = if (result.inputTokens + result.outputTokens > 0) {
+                    "\u2191${fmt(result.inputTokens)}  \u00B7  \u2193${fmt(result.outputTokens)}"
+                } else null
+
+                val appliedMods = result.modifications
+                    .filterIsInstance<ModificationResult.Success>()
+                    .map { AppliedModInfo(path = it.affectedPath.toString(), category = it.modification.toCategory()) }
+
+                callbacks.updateTokenDisplay()
+
+                callbacks.addAssistantMessageBubble(
+                    text = callbacks.formatMarkdown(text),
+                    tokenInfo = tokenInfo,
+                    modifications = result.modifications,
+                    metaFiles = emptyList(),
+                    reasoning = result.llmReasoning,
+                    requestedViews = emptyList(),
+                    appliedModifications = appliedMods
+                )
+
+                result.commitMessage?.let { msg ->
+                    callbacks.setCommitMessage(msg)
+                    callbacks.appendToChat("\uD83D\uDCAC Commit message set in IDE")
+                }
+
+                callbacks.setInputEnabled(true)
+                callbacks.updateModeIndicator()
+                if (failures.isNotEmpty()) {
+                    callbacks.setStatus("\u26A0\uFE0F ${failures.size} modification(s) failed")
+                } else {
+                    callbacks.setStatus(if (result.success) "Ready" else "Errors")
+                }
+                callbacks.updateBreadcrumb()
+            }
+
+            is ClaudeCodeStepResult.Error -> {
+                MaxVibesLogger.warn("Controller", "claudeCode error", data = mapOf("msg" to result.message))
+                chatTreeService.addMessage(session.id, MessageRole.SYSTEM, "Claude Code error: ${result.message}")
+                callbacks.appendToChat("\u274C ${result.message}")
+                callbacks.setInputEnabled(true)
+                callbacks.updateModeIndicator()
+                callbacks.setStatus("Claude Code error")
+            }
+
+            is ClaudeCodeStepResult.TransportError -> {
+                MaxVibesLogger.warn(
+                    "Controller",
+                    "claudeCode transport error",
+                    data = mapOf("detail" to result.detail)
+                )
+                chatTreeService.addMessage(
+                    session.id,
+                    MessageRole.SYSTEM,
+                    "Claude Code transport error: ${result.detail}"
+                )
+                callbacks.appendToChat("\u274C Transport: ${result.detail}")
+                callbacks.appendToChat("Check Claude Code settings (binary path, args) and retry.")
+                callbacks.setInputEnabled(true)
+                callbacks.updateModeIndicator()
+                callbacks.setStatus("\u26A0\uFE0F Claude Code transport error")
+            }
+        }
+    }
+
     // ==================== Auto-Retry Logic ====================
 
     private fun triggerAutoRetry(
@@ -716,9 +897,13 @@ Check:
             )
 
             InteractionMode.CHEAP_API -> dispatchCheapApiMessage(userInput, trace, errs, isPlanOnly, isDryRun)
-            // TODO Step 5/8: route to ClaudeCodeInteractionService
-            InteractionMode.CLAUDE_CODE -> { /* TODO Step 5/8 */
-            }
+            InteractionMode.CLAUDE_CODE -> dispatchClaudeCodeMessage(
+                userInput,
+                trace,
+                errs,
+                isPlanOnly,
+                selectedSpecificPromptName
+            )
         }
     }
 
@@ -780,7 +965,7 @@ Check:
             ClipboardSessionStatus.AWAITING_PASTE -> "Processing response..."
             ClipboardSessionStatus.SESSION_ACTIVE -> "Continuing..."
             ClipboardSessionStatus.IDLE -> "Generating JSON..."
-            // TODO Step 5/8: proper status text for Claude Code approve flow
+            // Clipboard mode should never see AWAITING_APPROVE (Claude Code-only); fall back gracefully.
             ClipboardSessionStatus.AWAITING_APPROVE -> "Awaiting approval..."
         }
         callbacks.setStatus(statusText)
@@ -815,6 +1000,7 @@ Check:
         callbacks.addUserMessageBubble(msg)
         callbacks.setInputEnabled(false)
         callbacks.setStatus("Thinking (cheap)...")
+        @Suppress("DEPRECATION")
         service.ensureCheapLLMService()
         sendCheapApiMessage(
             fullTask,
@@ -825,5 +1011,55 @@ Check:
             chatTreeService.getGlobalContextFiles(),
             errs
         )
+    }
+
+    /**
+     * Dispatches a user message in Claude Code mode.
+     *
+     * Adds the user message to the session, then sends it to [com.maxvibes.application.service.ClaudeCodeInteractionService.handleUserInput]
+     * via [runClaudeCodeBg]. The service decides whether to start a fresh process or
+     * continue an existing one. The result is rendered through [handleClaudeCodeResult].
+     */
+    private fun dispatchClaudeCodeMessage(
+        userInput: String,
+        trace: String?,
+        errs: String?,
+        isPlanOnly: Boolean,
+        selectedSpecificPromptName: String? = null
+    ) {
+        val cs = service.claudeCodeService
+        var session = chatTreeService.getActiveSession()
+        val globalContextFiles = chatTreeService.getGlobalContextFiles()
+
+        // Capture history BEFORE mutating session.
+        val history = session.messages.map { it.toChatMessageDTO() }
+
+        val specificPromptContent = service.specificPromptService.resolvePromptContent(selectedSpecificPromptName)
+
+        val fullMsg = buildString {
+            append(userInput)
+            if (!trace.isNullOrBlank()) append("\n[trace: ${trace.lines().size} lines]")
+            if (!errs.isNullOrBlank()) append("\n[attached ide errors]")
+            if (isPlanOnly) append("\n[plan-only]")
+        }
+        session = chatTreeService.addMessage(session.id, MessageRole.USER, fullMsg)
+        callbacks.addUserMessageBubble(userInput)
+
+        callbacks.setInputEnabled(false)
+        callbacks.setStatus("Claude Code: sending...")
+
+        val capturedSession = session
+        runClaudeCodeBg("Claude Code: sending...", capturedSession) {
+            cs.handleUserInput(
+                sessionId = capturedSession.id,
+                userInput = userInput,
+                history = history,
+                attachedContext = trace,
+                planOnly = isPlanOnly,
+                ideErrors = errs,
+                globalContextFiles = globalContextFiles,
+                specificPromptContent = specificPromptContent
+            )
+        }
     }
 }

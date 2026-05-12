@@ -305,7 +305,8 @@ class MaxVibesSettings : PersistentStateComponent<MaxVibesSettings.State> {
         val INTERACTION_MODES = listOf(
             "API" to "\uD83D\uDD0C API (Direct, pay-per-token)",
             "CLIPBOARD" to "\uD83D\uDCCB Clipboard (Copy-paste, subscription)",
-            "CHEAP_API" to "\uD83D\uDCB0 Cheap API (Budget model)"
+            "CHEAP_API" to "\uD83D\uDCB0 Cheap API (Budget model)",
+            "CLAUDE_CODE" to "\uD83E\uDD16 Claude Code (Local CLI)"
         )
     }
 }

@@ -41,7 +41,20 @@ data class ChatPanelState(
     /**
      * Name of the currently selected specific prompt, or null for "Just Code".
      */
-    val selectedSpecificPromptName: String? = null
+    val selectedSpecificPromptName: String? = null,
+
+    /**
+     * True when the current mode is [InteractionMode.CLAUDE_CODE] AND status is
+     * [ClipboardSessionStatus.AWAITING_APPROVE]. Drives visibility of the Approve button.
+     */
+    val claudeCodeApproveVisible: Boolean = false,
+
+    /**
+     * True when a Claude Code send is in flight. Reserved for future use to disable
+     * Send and Approve while a request is being processed; current implementation
+     * relies on [ChatPanel.setInputEnabled] for the same effect.
+     */
+    val claudeCodeSending: Boolean = false
 ) {
     /** true если есть прикреплённые данные любого типа. */
     val hasAttachments: Boolean get() = attachedTrace != null || attachedErrors != null

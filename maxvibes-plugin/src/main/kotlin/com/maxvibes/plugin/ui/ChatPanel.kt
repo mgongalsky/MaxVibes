@@ -47,6 +47,16 @@ class ChatPanel(
 
     private val sendButton = JButton("Send").apply { toolTipText = "Send message (Ctrl+Enter)" }
 
+    /**
+     * Approve button: visible only in [InteractionMode.CLAUDE_CODE] when the active
+     * session is in [ClipboardSessionStatus.AWAITING_APPROVE]. Clicking it gathers
+     * the files the LLM requested and sends a follow-up to the same Claude Code process.
+     */
+    private val approveButton = JButton("\u2705 Approve").apply {
+        toolTipText = "Approve & gather requested files (Claude Code)"
+        isVisible = false
+    }
+
     private val modeComboBox = ComboBox<ModeItem>().apply {
         MaxVibesSettings.INTERACTION_MODES.forEach { (id, label) -> addItem(ModeItem(id, label)) }
         toolTipText = "Interaction mode"
@@ -165,14 +175,14 @@ class ChatPanel(
     private val promptService: PromptService by lazy { PromptService.getInstance(project) }
     private val settings: MaxVibesSettings by lazy { MaxVibesSettings.getInstance() }
 
-    // Manages interaction mode state (API / Clipboard / CheapAPI).
+    // Manages interaction mode state (API / Clipboard / CheapAPI / ClaudeCode).
     // Extracted from ChatPanel to separate state logic from UI.
     private val modeManager: InteractionModeManager by lazy {
         InteractionModeManager(
             settings = settings,
             onModeChanged = { mode ->
                 settings.interactionMode = mode.name
-                if (mode == InteractionMode.CHEAP_API) service.ensureCheapLLMService()
+                if (mode == InteractionMode.CHEAP_API) @Suppress("DEPRECATION") service.ensureCheapLLMService()
                 render(buildState())
             }
         )
@@ -250,6 +260,7 @@ class ChatPanel(
     override fun setInputEnabled(enabled: Boolean) {
         inputArea.isEnabled = enabled
         sendButton.isEnabled = enabled
+        approveButton.isEnabled = enabled
         dryRunCheckbox.isEnabled = enabled
         planOnlyCheckbox.isEnabled = enabled
         addHistoryCheckbox.isEnabled = enabled
@@ -278,7 +289,7 @@ class ChatPanel(
     }
 
     override fun updateModeIndicator() {
-        updateModeUI(buildState())
+        render(buildState())
     }
 
     override fun updateBreadcrumb() {
@@ -505,9 +516,12 @@ class ChatPanel(
                     background = JBColor.background()
                     add(attachErrorsButton.apply { preferredSize = Dimension(85, 26) })
                     add(attachTraceButton.apply { preferredSize = Dimension(80, 26) })
-                    add(addHistoryCheckbox); add(planOnlyCheckbox); add(dryRunCheckbox); add(copyJsonButton); add(
-                    sendButton
-                )
+                    add(addHistoryCheckbox)
+                    add(planOnlyCheckbox)
+                    add(dryRunCheckbox)
+                    add(copyJsonButton)
+                    add(approveButton)
+                    add(sendButton)
                 }, BorderLayout.CENTER)
             }, BorderLayout.SOUTH)
         }
@@ -546,6 +560,7 @@ class ChatPanel(
         }
 
         sendButton.addActionListener { sendMessage() }
+        approveButton.addActionListener { messageController.approve() }
         copyJsonButton.addActionListener { messageController.redoClipboardJson() }
         sessionsButton.addActionListener { onShowSessions() }
         promptSelectButton.addActionListener { showPromptSelectionPopup() }
@@ -685,8 +700,17 @@ class ChatPanel(
      * Reads [ChatPanelState.clipboardStatus] instead of querying the clipboard service directly.
      * In Clipboard mode, [modeIndicator] is clickable in both AWAITING_PASTE and SESSION_ACTIVE,
      * allowing the user to toggle between the two states manually.
+     *
+     * The [forceActivateListener] is removed at the top of every call so it never accumulates
+     * across renders or leaks across mode switches (e.g. CLIPBOARD → CLAUDE_CODE).
      */
     private fun updateModeUI(state: ChatPanelState) {
+        // Always tear down any previously attached force-activate listener BEFORE the when —
+        // the listener is only meaningful in CLIPBOARD's AWAITING_PASTE / SESSION_ACTIVE branches
+        // and must not survive a mode switch or a state transition out of those branches.
+        forceActivateListener?.let { modeIndicator.removeMouseListener(it) }
+        forceActivateListener = null
+
         when (state.mode) {
             InteractionMode.API -> {
                 modeIndicator.isVisible = false
@@ -699,11 +723,6 @@ class ChatPanel(
             InteractionMode.CLIPBOARD -> {
                 addHistoryCheckbox.isVisible = true
 
-                // Always remove any previously attached listener before re-evaluating the status
-                // to prevent listener accumulation across render() calls.
-                forceActivateListener?.let { modeIndicator.removeMouseListener(it) }
-                forceActivateListener = null
-
                 when (state.clipboardStatus) {
                     ClipboardSessionStatus.AWAITING_PASTE -> {
                         modeIndicator.text = "\u23F3 Paste response"
@@ -711,7 +730,6 @@ class ChatPanel(
                         sendButton.text = "Paste"
                         copyJsonButton.isVisible = true
 
-                        // Clickable: skip paste and force-resume the dialog.
                         modeIndicator.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
                         modeIndicator.toolTipText = "Click to skip paste and continue dialog"
                         val listener = object : MouseAdapter() {
@@ -731,8 +749,6 @@ class ChatPanel(
                         sendButton.text = "Send / Paste"
                         copyJsonButton.isVisible = false
 
-                        // Clickable: go back to awaiting-paste in case the user wants to paste
-                        // a previously generated LLM response.
                         modeIndicator.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
                         modeIndicator.toolTipText = "Click to go back to paste mode"
                         val listener = object : MouseAdapter() {
@@ -751,13 +767,12 @@ class ChatPanel(
                         modeIndicator.isVisible = true
                         sendButton.text = "Generate"
                         copyJsonButton.isVisible = false
-                        // Not clickable in IDLE — no active session to toggle.
                         modeIndicator.cursor = Cursor.getDefaultCursor()
                         modeIndicator.toolTipText = null
                     }
 
-                    // TODO Step 5/8: AWAITING_APPROVE is Claude Code-specific; clipboard mode
-                    //  should never see it. Treat as IDLE-equivalent visual fallback for now.
+                    // Clipboard mode should never see AWAITING_APPROVE (Claude Code-only);
+                    // fall back to IDLE-equivalent visuals defensively.
                     ClipboardSessionStatus.AWAITING_APPROVE -> {
                         modeIndicator.text = "\uD83D\uDCCB"
                         modeIndicator.isVisible = true
@@ -779,14 +794,23 @@ class ChatPanel(
                 addHistoryCheckbox.isVisible = false
             }
 
-            // TODO Step 5/8: CLAUDE_CODE UI wiring is implemented in the Claude Code feature.
-            //  For now, fall back to API-mode visuals so the panel keeps rendering.
             InteractionMode.CLAUDE_CODE -> {
-                modeIndicator.isVisible = false
-                sendButton.text = "Send"
-                dryRunCheckbox.isVisible = true
-                copyJsonButton.isVisible = false
+                // Clipboard-specific controls have no meaning in Claude Code mode.
                 addHistoryCheckbox.isVisible = false
+                copyJsonButton.isVisible = false
+                dryRunCheckbox.isVisible = false
+
+                sendButton.text = "Send"
+                modeIndicator.cursor = Cursor.getDefaultCursor()
+                modeIndicator.toolTipText = null
+                modeIndicator.isVisible = true
+
+                modeIndicator.text = when (state.clipboardStatus) {
+                    ClipboardSessionStatus.AWAITING_APPROVE -> "\uD83E\uDD16 Awaiting Approve"
+                    ClipboardSessionStatus.SESSION_ACTIVE -> "\uD83E\uDD16 Active"
+                    ClipboardSessionStatus.IDLE,
+                    ClipboardSessionStatus.AWAITING_PASTE -> "\uD83E\uDD16 Claude Code"
+                }
             }
         }
     }
@@ -889,8 +913,7 @@ class ChatPanel(
             InteractionMode.API -> "API \u2014 direct LLM calls"
             InteractionMode.CLIPBOARD -> "Clipboard \u2014 paste JSON into Claude/ChatGPT"
             InteractionMode.CHEAP_API -> "Cheap API \u2014 budget model"
-            // TODO Step 5/8: replace with proper Claude Code label once mode is wired up.
-            InteractionMode.CLAUDE_CODE -> "Claude Code \u2014 local CLI process (in development)"
+            InteractionMode.CLAUDE_CODE -> "Claude Code \u2014 local CLI process"
         }
         val session = chatTreeService.getActiveSession()
         val ctxCount = chatTreeService.getGlobalContextFiles().size
@@ -926,6 +949,10 @@ class ChatPanel(
         val hasPrompt = state.selectedSpecificPromptName != null
         editPromptButton.isEnabled = hasPrompt
         deletePromptButton.isEnabled = hasPrompt
+
+        // Approve button is purely state-driven: visible iff the panel state says so.
+        // Its enabled-ness is governed by setInputEnabled(...) like every other control.
+        approveButton.isVisible = state.claudeCodeApproveVisible
     }
 
     private fun buildPromptPanel(): JPanel {
@@ -1039,10 +1066,13 @@ class ChatPanel(
 
     private fun buildState(): ChatPanelState {
         val session = chatTreeService.getActiveSession()
+        val mode = modeManager.currentMode
+        val approveVisible = mode == InteractionMode.CLAUDE_CODE &&
+                session.clipboardStatus == ClipboardSessionStatus.AWAITING_APPROVE
         return ChatPanelState(
             currentSession = session,
             sessionPath = chatTreeService.getSessionPath(session.id),
-            mode = modeManager.currentMode,
+            mode = mode,
             attachedTrace = messageController.attachedTrace,
             attachedErrors = messageController.attachedErrors,
             contextFilesCount = chatTreeService.getGlobalContextFiles().size,
@@ -1050,7 +1080,9 @@ class ChatPanel(
             clipboardStatus = session.clipboardStatus,
             availablePrompts = service.specificPromptService.getAvailablePromptNames(),
             selectedSpecificPromptName = service.specificPromptService
-                .validatePromptName(chatTreeService.getActiveSession()?.selectedSpecificPromptName)
+                .validatePromptName(chatTreeService.getActiveSession()?.selectedSpecificPromptName),
+            claudeCodeApproveVisible = approveVisible,
+            claudeCodeSending = false
         )
     }
 

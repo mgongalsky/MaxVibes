@@ -4,7 +4,7 @@ import com.maxvibes.domain.model.interaction.InteractionMode
 import com.maxvibes.plugin.settings.MaxVibesSettings
 
 /**
- * Управляет состоянием режима взаимодействия (API / Clipboard / CheapAPI).
+ * Управляет состоянием режима взаимодействия (API / Clipboard / CheapAPI / ClaudeCode).
  * Инкапсулирует логику переключения и синхронизации с настройками.
  *
  * @param settings настройки плагина для чтения сохранённого режима
@@ -51,6 +51,11 @@ class InteractionModeManager(
      * Возвращает true если текущий режим — CheapAPI.
      */
     fun isCheapApiMode(): Boolean = currentMode == InteractionMode.CHEAP_API
+
+    /**
+     * Returns true if the current mode is Claude Code (local CLI process).
+     */
+    fun isClaudeCodeMode(): Boolean = currentMode == InteractionMode.CLAUDE_CODE
 
     private fun readModeFromSettings(): InteractionMode {
         return try {
