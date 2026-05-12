@@ -23,6 +23,8 @@ import com.maxvibes.domain.model.interaction.InteractionMode
 import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 import com.maxvibes.domain.model.modification.AppliedModInfo
 import com.maxvibes.domain.model.modification.toCategory
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancel
 
 interface ChatPanelCallbacks {
     fun appendToChat(text: String)
@@ -217,6 +219,14 @@ class ChatMessageController(
      *
      * Mirrors [runClipboardBg] but dispatches results through [handleClaudeCodeResult]
      * and resets the Claude Code session (not the clipboard one) on cancel.
+     *
+     * Spawns a side ticker that updates both the progress indicator text and the
+     * status label once per second so long sends (claude can take 2-3 minutes for
+     * non-trivial refactors) no longer look like the plugin froze. The ticker
+     * lives strictly for the duration of [action] and is cancelled in `finally` —
+     * cancellation propagates through `delay()` as `CancellationException`, which
+     * we swallow silently, so an unconditional loop is equivalent to `while (isActive)`
+     * and avoids depending on the CoroutineScope.isActive extension property.
      */
     private fun runClaudeCodeBg(
         title: String,
@@ -227,8 +237,32 @@ class ChatMessageController(
             override fun run(indicator: ProgressIndicator) {
                 service.notificationService.setProgressIndicator(indicator)
                 runBlocking {
-                    val result = action()
-                    ApplicationManager.getApplication().invokeLater { handleClaudeCodeResult(result, session) }
+                    val startedAt = System.currentTimeMillis()
+                    val tickerScope = kotlinx.coroutines.CoroutineScope(
+                        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO
+                    )
+                    val ticker = tickerScope.launch {
+                        try {
+                            while (true) {
+                                kotlinx.coroutines.delay(1000)
+                                val secs = ((System.currentTimeMillis() - startedAt) / 1000).toInt()
+                                // ProgressIndicator text is safe to set from any thread.
+                                indicator.text = "MaxVibes: $title (${secs}s)"
+                                ApplicationManager.getApplication().invokeLater {
+                                    callbacks.setStatus("Claude Code: $title (${secs}s)")
+                                }
+                            }
+                        } catch (_: kotlinx.coroutines.CancellationException) {
+                            // Expected on completion — no-op.
+                        }
+                    }
+                    try {
+                        val result = action()
+                        ApplicationManager.getApplication().invokeLater { handleClaudeCodeResult(result, session) }
+                    } finally {
+                        ticker.cancel()
+                        tickerScope.cancel()
+                    }
                 }
             }
 
@@ -545,14 +579,17 @@ class ChatMessageController(
                     "Controller", "claudeCode awaiting approve", mapOf(
                         "requestedViews" to result.requestedViews.size,
                         "in" to result.inputTokens,
-                        "out" to result.outputTokens
+                        "out" to result.outputTokens,
+                        "durationMs" to result.durationMs
                     )
                 )
                 chatTreeService.addChatTokens(session.id, result.inputTokens, result.outputTokens)
 
-                val tokenInfo = if (result.inputTokens + result.outputTokens > 0) {
-                    "\u2191${fmt(result.inputTokens)}  \u00B7  \u2193${fmt(result.outputTokens)}"
-                } else null
+                val tokenInfo = buildTokenInfoForClaudeCode(
+                    inTok = result.inputTokens,
+                    outTok = result.outputTokens,
+                    durationMs = result.durationMs
+                )
 
                 // Persist the assistant message to the domain so:
                 //   1) the UI can re-render it after restart,
@@ -591,6 +628,7 @@ class ChatMessageController(
                         "failures" to failures.size,
                         "in" to result.inputTokens,
                         "out" to result.outputTokens,
+                        "durationMs" to result.durationMs,
                         "hasCommitMsg" to (result.commitMessage != null)
                     )
                 )
@@ -598,9 +636,11 @@ class ChatMessageController(
 
                 chatTreeService.addChatTokens(session.id, result.inputTokens, result.outputTokens)
                 val text = result.message.trim().ifBlank { "Done." }
-                val tokenInfo = if (result.inputTokens + result.outputTokens > 0) {
-                    "\u2191${fmt(result.inputTokens)}  \u00B7  \u2193${fmt(result.outputTokens)}"
-                } else null
+                val tokenInfo = buildTokenInfoForClaudeCode(
+                    inTok = result.inputTokens,
+                    outTok = result.outputTokens,
+                    durationMs = result.durationMs
+                )
 
                 val appliedPaths = result.modifications
                     .filterIsInstance<ModificationResult.Success>()
@@ -674,6 +714,19 @@ class ChatMessageController(
                 callbacks.setStatus("\u26A0\uFE0F Claude Code transport error")
             }
         }
+    }
+
+    /**
+     * Formats the bubble-footer info line for Claude Code turns.
+     * Layout: `↑1234 · ↓567 · 42s` — components are omitted when their value is zero.
+     * Returns null when nothing meaningful is available so the bubble suppresses the footer.
+     */
+    private fun buildTokenInfoForClaudeCode(inTok: Int, outTok: Int, durationMs: Long): String? {
+        val parts = mutableListOf<String>()
+        if (inTok > 0) parts += "\u2191${fmt(inTok)}"
+        if (outTok > 0) parts += "\u2193${fmt(outTok)}"
+        if (durationMs >= 1000) parts += "${durationMs / 1000}s"
+        return if (parts.isEmpty()) null else parts.joinToString("  \u00B7  ")
     }
 
     // ==================== Auto-Retry Logic ====================

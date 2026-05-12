@@ -24,13 +24,16 @@ sealed class ClaudeCodeStepResult {
      * @param inputTokens       estimated tokens sent in this turn.
      * @param outputTokens      estimated tokens received from claude in this turn.
      * @param llmReasoning      optional reasoning text from the LLM (shown collapsed in UI).
+     * @param durationMs        wall-clock time the send took, in milliseconds.
+     *                          Zero when unavailable (e.g. legacy code paths).
      */
     data class WaitingForApprove(
         val assistantMessage: String,
         val requestedViews: List<RequestedViewInfo>,
         val inputTokens: Int = 0,
         val outputTokens: Int = 0,
-        val llmReasoning: String? = null
+        val llmReasoning: String? = null,
+        val durationMs: Long = 0L
     ) : ClaudeCodeStepResult()
 
     /**
@@ -44,6 +47,8 @@ sealed class ClaudeCodeStepResult {
      * @param outputTokens   estimated tokens received from claude in this turn.
      * @param llmReasoning   optional reasoning text from the LLM.
      * @param commitMessage  optional commit message proposed by the LLM — UI may inject it into the IDE commit dialog.
+     * @param durationMs     wall-clock time the send took, in milliseconds.
+     *                       Zero when unavailable (e.g. legacy code paths).
      */
     data class Completed(
         val message: String,
@@ -52,7 +57,8 @@ sealed class ClaudeCodeStepResult {
         val inputTokens: Int = 0,
         val outputTokens: Int = 0,
         val llmReasoning: String? = null,
-        val commitMessage: String? = null
+        val commitMessage: String? = null,
+        val durationMs: Long = 0L
     ) : ClaudeCodeStepResult()
 
     /**

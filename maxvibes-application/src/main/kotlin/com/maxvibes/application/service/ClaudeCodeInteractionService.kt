@@ -398,7 +398,14 @@ class ClaudeCodeInteractionService(
         )
         notificationPort.showProgress("Sending to Claude Code...", 0.5)
 
-        return when (val sendResult = claudeCodePort.send(request)) {
+        // Wall-clock timer for UI "this took Ns" feedback. Distinct from the adapter's
+        // internal elapsed timer — that one only covers the send() call's I/O, this one
+        // covers the same span but is propagated up to the UI layer via the step result.
+        val sendStartedAt = System.currentTimeMillis()
+        val sendResult = claudeCodePort.send(request)
+        val durationMs = System.currentTimeMillis() - sendStartedAt
+
+        return when (sendResult) {
             is Result.Success -> {
                 val payload: ClaudeCodeSendResult = sendResult.value
                 // Persist observed session id and clear the fallback flag.
@@ -414,12 +421,13 @@ class ClaudeCodeInteractionService(
                     sessionId = sessionId,
                     response = payload.response,
                     inputTokens = totalTokens,
-                    outputTokens = estimateOutputTokens(payload.response)
+                    outputTokens = estimateOutputTokens(payload.response),
+                    durationMs = durationMs
                 )
             }
 
             is Result.Failure -> {
-                log("Send failed: ${sendResult.error}")
+                log("Send failed: ${sendResult.error} (after ${durationMs}ms)")
                 ClaudeCodeStepResult.TransportError(transportErrorMessage(sendResult.error))
             }
         }
@@ -431,12 +439,15 @@ class ClaudeCodeInteractionService(
      *  - drives the session-status state machine via [ClipboardEvent.ResponseReceived],
      *  - applies modifications when not in plan-only mode,
      *  - decides between [ClaudeCodeStepResult.WaitingForApprove] and [ClaudeCodeStepResult.Completed].
+     *
+     * @param durationMs wall-clock duration of the send call, propagated to the UI via the result.
      */
     private suspend fun processResponse(
         sessionId: String,
         response: InteractionResponse,
         inputTokens: Int,
-        outputTokens: Int
+        outputTokens: Int,
+        durationMs: Long = 0L
     ): ClaudeCodeStepResult {
         val state = sessionState ?: return error("No active workspace")
 
@@ -471,7 +482,8 @@ class ClaudeCodeInteractionService(
                 requestedViews = requestedViewInfos,
                 inputTokens = inputTokens,
                 outputTokens = outputTokens,
-                llmReasoning = response.reasoning?.takeIf { it.isNotBlank() }
+                llmReasoning = response.reasoning?.takeIf { it.isNotBlank() },
+                durationMs = durationMs
             )
         }
 
@@ -504,7 +516,8 @@ class ClaudeCodeInteractionService(
             inputTokens = inputTokens,
             outputTokens = outputTokens,
             llmReasoning = response.reasoning?.takeIf { it.isNotBlank() },
-            commitMessage = response.commitMessage?.takeIf { it.isNotBlank() }
+            commitMessage = response.commitMessage?.takeIf { it.isNotBlank() },
+            durationMs = durationMs
         )
     }
 

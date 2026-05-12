@@ -19,6 +19,13 @@ object MaxVibesLogger : LoggerPort {
     private val queue = LinkedBlockingQueue<String>()
     private val maxSizeBytes = 5L * 1024 * 1024
 
+    /**
+     * Levels that get echoed to stdout in addition to the file log.
+     * DEBUG stays file-only to avoid flooding the IDE run console with low-level
+     * adapter chatter (e.g. one entry per stdout line read).
+     */
+    private val CONSOLE_ECHO_LEVELS = setOf("INFO", "WARN", "ERROR", "SESSION")
+
     // По умолчанию — глобальная папка, будет переопределена через configure()
     @Volatile
     private var logDir: File = File(System.getProperty("user.home"), ".maxvibes/logs")
@@ -126,6 +133,24 @@ object MaxVibesLogger : LoggerPort {
         }
         sb.append('}')
         queue.offer(sb.toString())
+
+        // Mirror INFO+ entries to stdout in a human-friendly format. The IDE run
+        // console then reflects the file log without the user opening the file —
+        // useful for tail-following long Claude Code sends in real time.
+        if (level in CONSOLE_ECHO_LEVELS) {
+            val dataStr = if (!data.isNullOrEmpty()) {
+                " | " + data.entries.joinToString(", ") { (k, v) -> "$k=${shortValue(v)}" }
+            } else ""
+            println("[$level $tag] $msg$dataStr")
+        }
+    }
+
+    private fun shortValue(v: Any?): String {
+        val s = when (v) {
+            null -> "null"
+            else -> v.toString()
+        }
+        return if (s.length > 200) s.take(197) + "..." else s
     }
 
     private fun rotateIfNeeded() {
