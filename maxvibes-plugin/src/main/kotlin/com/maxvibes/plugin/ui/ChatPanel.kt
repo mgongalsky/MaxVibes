@@ -953,6 +953,17 @@ class ChatPanel(
         // Approve button is purely state-driven: visible iff the panel state says so.
         // Its enabled-ness is governed by setInputEnabled(...) like every other control.
         approveButton.isVisible = state.claudeCodeApproveVisible
+
+        // While the Claude Code session is awaiting approve, the only meaningful action
+        // is to press Approve (or create a new chat). Disabling Send here gives the user
+        // a clear visual signal rather than the silent "session is awaiting approve"
+        // rejection they would otherwise hit.
+        if (state.claudeCodeApproveVisible) {
+            sendButton.isEnabled = false
+            sendButton.toolTipText = "Press Approve to continue, or start a new chat (+ New)"
+        } else {
+            sendButton.toolTipText = "Send message (Ctrl+Enter)"
+        }
     }
 
     private fun buildPromptPanel(): JPanel {

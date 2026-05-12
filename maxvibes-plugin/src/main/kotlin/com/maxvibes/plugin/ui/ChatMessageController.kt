@@ -531,6 +531,12 @@ class ChatMessageController(
     /**
      * Renders a [ClaudeCodeStepResult] to the chat. Mirrors [handleClipboardResult]
      * but uses the Claude Code result type; auto-applies modifications when present.
+     *
+     * Persistence: writes the assistant message to [chatTreeService] in both
+     * `WaitingForApprove` and `Completed` branches so that the domain session has
+     * an ASSISTANT entry the service can later attach requestedViews to and that
+     * approve() can look up. Without this write, the session is empty from the
+     * domain's perspective and approve() fails with "No assistant message to approve".
      */
     private fun handleClaudeCodeResult(result: ClaudeCodeStepResult, session: ChatSession) {
         when (result) {
@@ -548,8 +554,17 @@ class ChatMessageController(
                     "\u2191${fmt(result.inputTokens)}  \u00B7  \u2193${fmt(result.outputTokens)}"
                 } else null
 
-                // The service has already persisted the assistant message + requestedViews
-                // into the domain session. We only render here.
+                // Persist the assistant message to the domain so:
+                //   1) the UI can re-render it after restart,
+                //   2) ClaudeCodeInteractionService.approve() can find an ASSISTANT
+                //      message in session.messages and read its requestedViews.
+                chatTreeService.addMessage(
+                    session.id, MessageRole.ASSISTANT, result.assistantMessage,
+                    tokenInfo = tokenInfo,
+                    reasoning = result.llmReasoning,
+                    requestedViews = result.requestedViews
+                )
+
                 callbacks.updateTokenDisplay()
 
                 callbacks.addAssistantMessageBubble(
@@ -587,9 +602,23 @@ class ChatMessageController(
                     "\u2191${fmt(result.inputTokens)}  \u00B7  \u2193${fmt(result.outputTokens)}"
                 } else null
 
+                val appliedPaths = result.modifications
+                    .filterIsInstance<ModificationResult.Success>()
+                    .map { it.affectedPath.toString() }
+
                 val appliedMods = result.modifications
                     .filterIsInstance<ModificationResult.Success>()
                     .map { AppliedModInfo(path = it.affectedPath.toString(), category = it.modification.toCategory()) }
+
+                // Mirror the clipboard/API flows: persist the assistant message + applied
+                // modifications to the domain so the conversation survives IDE restart.
+                chatTreeService.addMessage(
+                    session.id, MessageRole.ASSISTANT, text,
+                    appliedModificationPaths = appliedPaths,
+                    tokenInfo = tokenInfo,
+                    reasoning = result.llmReasoning,
+                    appliedModifications = appliedMods
+                )
 
                 callbacks.updateTokenDisplay()
 
