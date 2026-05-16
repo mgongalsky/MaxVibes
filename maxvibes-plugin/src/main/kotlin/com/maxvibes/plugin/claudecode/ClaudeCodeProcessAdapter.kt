@@ -302,6 +302,16 @@ class ClaudeCodeProcessAdapter(
 
             val sendStartedAt = System.currentTimeMillis()
 
+            // Safe wrapper for the activity callback — UI/listener exceptions must not
+            // break the transport. Logged and swallowed.
+            fun emit(activity: ClaudeCodeActivity) {
+                try {
+                    onActivity(activity)
+                } catch (e: Exception) {
+                    MaxVibesLogger.warn(TAG, "onActivity callback threw — ignoring", ex = e)
+                }
+            }
+
             // 1. Encode request through the shared codec, then wrap in stream-json.
             val requestJson = codec.encode(request)
             val streamJsonLine = StreamJsonProtocol.encodeUserEvent(requestJson)
@@ -362,6 +372,7 @@ class ClaudeCodeProcessAdapter(
                         StreamJsonProtocol.extractSessionId(line)?.let {
                             observedSessionId = it
                             MaxVibesLogger.info(TAG, "session id observed", mapOf("sessionId" to it))
+                            emit(ClaudeCodeActivity.Started(sendStartedAt, it))
                         }
                         StreamJsonProtocol.extractAssistantText(line)?.let { txt ->
                             accumulated.append(txt)
@@ -369,6 +380,11 @@ class ClaudeCodeProcessAdapter(
                                 TAG, "assistant chunk",
                                 mapOf("chunkLen" to txt.length, "totalLen" to accumulated.length)
                             )
+                            emit(ClaudeCodeActivity.Thinking(sendStartedAt, txt))
+                        }
+                        StreamJsonProtocol.extractRateLimitInfo(line)?.let { info ->
+                            MaxVibesLogger.info(TAG, "rate limit", mapOf("info" to info))
+                            emit(ClaudeCodeActivity.RateLimit(sendStartedAt, info))
                         }
                         if (StreamJsonProtocol.isTurnEnd(line)) {
                             sawTurnEnd = true
