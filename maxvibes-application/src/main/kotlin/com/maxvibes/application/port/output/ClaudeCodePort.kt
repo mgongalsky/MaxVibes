@@ -2,6 +2,7 @@ package com.maxvibes.application.port.output
 
 import com.maxvibes.domain.model.interaction.ClipboardRequest
 import com.maxvibes.shared.result.Result
+import com.maxvibes.domain.model.interaction.ClaudeCodeActivity
 
 /**
  * Port for the Claude Code interaction mode — communicates with a locally
@@ -56,8 +57,19 @@ interface ClaudeCodePort {
      * for the corresponding response turn to complete.
      *
      * Caller is responsible for calling [ensureStarted] first.
+     *
+     * @param onActivity optional callback invoked from the transport thread when
+     *        intermediate stream-JSON events arrive ([ClaudeCodeActivity.Started],
+     *        [ClaudeCodeActivity.Thinking], [ClaudeCodeActivity.RateLimit]).
+     *        Implementations MUST treat the callback as fast/non-blocking — UI work
+     *        belongs in the caller's listener, not in the callback itself.
+     *        Defaults to no-op for backward compatibility with existing call-sites
+     *        and tests that do not care about live progress.
      */
-    suspend fun send(request: ClipboardRequest): Result<ClaudeCodeSendResult, ClaudeCodeError>
+    suspend fun send(
+        request: ClipboardRequest,
+        onActivity: (ClaudeCodeActivity) -> Unit = {}
+    ): Result<ClaudeCodeSendResult, ClaudeCodeError>
 
     /**
      * Terminates the underlying process and releases all I/O resources.

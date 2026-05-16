@@ -24,6 +24,7 @@ import java.io.BufferedReader
 import java.io.BufferedWriter
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
+import com.maxvibes.domain.model.interaction.ClaudeCodeActivity
 
 /**
  * Plugin-layer implementation of [ClaudeCodePort].
@@ -276,7 +277,10 @@ class ClaudeCodeProcessAdapter(
             return Result.Success(Unit)
         }
 
-    override suspend fun send(request: ClipboardRequest): Result<ClaudeCodeSendResult, ClaudeCodeError> =
+    override suspend fun send(
+        request: ClipboardRequest,
+        onActivity: (ClaudeCodeActivity) -> Unit
+    ): Result<ClaudeCodeSendResult, ClaudeCodeError> =
         sendMutex.withLock {
             val proc = process
             if (proc == null) {
