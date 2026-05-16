@@ -38,6 +38,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import com.maxvibes.application.service.ClaudeCodeActivityTracker
 
 /**
  * Main service for MaxVibes plugin.
@@ -183,8 +184,20 @@ class MaxVibesService(private val project: Project) : Disposable {
             promptPort = promptPort,
             logger = MaxVibesLogger,
             sessionManager = clipboardSessionManager,
-            chatSessionRepository = chatSessionRepository
+            chatSessionRepository = chatSessionRepository,
+            activityTracker = claudeCodeActivityTracker
         )
+    }
+
+    /**
+     * In-memory store + observer hub for transient Claude Code live-activity events.
+     *
+     * One instance per project — both the service (writes via doSend) and the UI
+     * (subscribes via addListener / polls via currentFor) share this singleton.
+     * Lifetime is tied to the project; no persistence across IDE restarts by design.
+     */
+    val claudeCodeActivityTracker: ClaudeCodeActivityTracker by lazy {
+        ClaudeCodeActivityTracker()
     }
 
     // ========== Cheap LLM ==========
