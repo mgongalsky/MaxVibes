@@ -17,9 +17,15 @@ import kotlinx.serialization.json.putJsonObject
  *  - Each line on stdout is a single JSON object with a `type` field.
  *  - Recognised types:
  *      `type="system"` with `subtype="init"` — first event, contains `session_id`
- *      `type="assistant"` — model response; payload at `message.content[].text`
- *                            (each block has `type="text"` and `text="..."`)
- *      `type="rate_limit_event"` — interleaved diagnostic, ignored for now
+ *      `type="assistant"` — model response; payload at `message.content[]`,
+ *                            where each block has a `type` discriminator:
+ *                              `type="text"` — user-visible text (the only kind
+ *                                              accumulated into the final answer)
+ *                              `type="thinking"` — chain-of-thought block,
+ *                                                  surfaced as live activity only
+ *                              `type="tool_use"` — model invokes a built-in tool;
+ *                                                  surfaced as live activity only
+ *      `type="rate_limit_event"` — informational rate-limit notice
  *      `type="result"` — terminal event for the turn
  *                        (with `is_error`, `result`, `duration_ms`, etc.)
  *
@@ -72,9 +78,9 @@ internal object StreamJsonProtocol {
      * Returns assistant text content if the line is an assistant event, null otherwise.
      *
      * Handles multiple content blocks by concatenating all `text` fields where
-     * `type=="text"`. Non-text blocks (tool_use, etc.) are skipped — we expect
-     * none of them since the system prompt forbids built-in tools, but the code
-     * is robust to their presence.
+     * `type=="text"`. Non-text blocks (tool_use, thinking, etc.) are skipped —
+     * those are surfaced separately via [extractThinkingPreview] / [extractToolUseName]
+     * for live activity, never accumulated into the final assistant text.
      */
     fun extractAssistantText(line: String): String? {
         val obj = parseLine(line) ?: return null
@@ -123,6 +129,62 @@ internal object StreamJsonProtocol {
         if (!resetSeconds.isNullOrBlank()) return "rate limit, resets in ${resetSeconds}s"
 
         return "rate limit notice"
+    }
+
+    /**
+     * Returns a short preview of an extended-thinking block if the line is an
+     * `assistant` event whose first content block has `type="thinking"`, null otherwise.
+     *
+     * Used for live-activity UI only — these previews are NOT accumulated into the
+     * final assistant text (see [extractAssistantText], which filters strictly on
+     * `type=="text"`). The intent is to give the user a visible signal that the
+     * model is working through a chain of thought even when no user-facing text
+     * has been streamed yet — empirically these blocks can take 30-180 seconds
+     * during which the bubble would otherwise sit on "Started".
+     *
+     * Truncation: returned preview is single-line, whitespace-normalised, capped at
+     * ~90 characters. The UI may further sanitise.
+     */
+    fun extractThinkingPreview(line: String): String? {
+        val obj = parseLine(line) ?: return null
+        if (obj["type"]?.jsonPrimitive?.contentOrNull != "assistant") return null
+
+        val message = obj["message"]?.jsonObject ?: return null
+        val content = message["content"]?.jsonArray ?: return null
+        val firstBlock = content.firstOrNull()?.let { runCatching { it.jsonObject }.getOrNull() } ?: return null
+        if (firstBlock["type"]?.jsonPrimitive?.contentOrNull != "thinking") return null
+
+        val raw = firstBlock["thinking"]?.jsonPrimitive?.contentOrNull?.trim() ?: return null
+        if (raw.isEmpty()) return null
+
+        val singleLine = raw.replace('\n', ' ').replace(Regex("\\s+"), " ")
+        return if (singleLine.length > 90) singleLine.take(87) + "..." else singleLine
+    }
+
+    /**
+     * Returns the tool name if the line is an `assistant` event containing a
+     * `tool_use` content block, null otherwise. Surfaces brief progress updates
+     * like "using Read" / "using Glob" in the live-activity bubble.
+     *
+     * Note: in MaxVibes/ClaudeCode mode the model is instructed NOT to call any
+     * built-in tools — but it sometimes tries anyway, and each rejected attempt
+     * costs 5-30 seconds of silent latency. Surfacing these calls gives the user
+     * a fighting chance to see what's happening.
+     */
+    fun extractToolUseName(line: String): String? {
+        val obj = parseLine(line) ?: return null
+        if (obj["type"]?.jsonPrimitive?.contentOrNull != "assistant") return null
+
+        val message = obj["message"]?.jsonObject ?: return null
+        val content = message["content"]?.jsonArray ?: return null
+
+        for (element in content) {
+            val block = runCatching { element.jsonObject }.getOrNull() ?: continue
+            if (block["type"]?.jsonPrimitive?.contentOrNull != "tool_use") continue
+            val name = block["name"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+            if (name != null) return name
+        }
+        return null
     }
 
     private fun parseLine(line: String): JsonObject? =

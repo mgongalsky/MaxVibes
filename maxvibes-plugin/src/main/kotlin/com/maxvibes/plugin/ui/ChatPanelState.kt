@@ -2,8 +2,9 @@ package com.maxvibes.plugin.ui
 
 import com.maxvibes.domain.model.chat.ChatSession
 import com.maxvibes.domain.model.chat.TokenUsage
-import com.maxvibes.domain.model.interaction.InteractionMode
+import com.maxvibes.domain.model.interaction.ClaudeCodeActivity
 import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
+import com.maxvibes.domain.model.interaction.InteractionMode
 
 data class ChatPanelState(
     val currentSession: ChatSession?,
@@ -54,7 +55,15 @@ data class ChatPanelState(
      * Send and Approve while a request is being processed; current implementation
      * relies on [ChatPanel.setInputEnabled] for the same effect.
      */
-    val claudeCodeSending: Boolean = false
+    val claudeCodeSending: Boolean = false,
+
+    /**
+     * Transient live-activity event from the Claude Code transport for the active
+     * session, or null when no send is in flight. Drives the [LiveActivityBubble]
+     * shown beneath the conversation panel. Never persisted — survives only as long
+     * as the underlying `ClaudeCodeActivityTracker` holds it (cleared on send completion).
+     */
+    val liveActivity: ClaudeCodeActivity? = null
 ) {
     /** true если есть прикреплённые данные любого типа. */
     val hasAttachments: Boolean get() = attachedTrace != null || attachedErrors != null

@@ -1,14 +1,29 @@
 package com.maxvibes.plugin.ui
 
+import com.intellij.icons.AllIcons
+import com.intellij.ide.DataManager
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ComboBox
+import com.intellij.openapi.util.Disposer
+import com.intellij.openapi.vcs.VcsConfiguration
+import com.intellij.openapi.vcs.VcsDataKeys
+import com.intellij.openapi.wm.ToolWindow
+import com.intellij.openapi.wm.ToolWindowManager
+import com.intellij.openapi.wm.ToolWindowType
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.*
 import com.intellij.util.ui.JBUI
+import com.maxvibes.application.service.ClaudeCodeActivityTracker
+import com.maxvibes.domain.model.chat.ChatMessage
+import com.maxvibes.domain.model.chat.ChatSession
+import com.maxvibes.domain.model.chat.MessageRole
 import com.maxvibes.domain.model.code.ElementPath
+import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 import com.maxvibes.domain.model.interaction.InteractionMode
 import com.maxvibes.domain.model.modification.Modification
 import com.maxvibes.domain.model.modification.ModificationResult
+import com.maxvibes.plugin.service.MaxVibesLogger
 import com.maxvibes.plugin.service.MaxVibesService
 import com.maxvibes.plugin.service.PromptService
 import com.maxvibes.plugin.settings.MaxVibesSettings
@@ -18,24 +33,12 @@ import java.awt.event.KeyEvent
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.*
-import com.intellij.openapi.wm.ToolWindow
-import com.intellij.icons.AllIcons
-import com.intellij.openapi.wm.ToolWindowManager
-import com.intellij.openapi.wm.ToolWindowType
-import com.maxvibes.plugin.service.MaxVibesLogger
-import com.intellij.openapi.vcs.VcsConfiguration
-import com.intellij.ide.DataManager
-import com.intellij.openapi.vcs.VcsDataKeys
-import com.maxvibes.domain.model.chat.MessageRole
-import com.maxvibes.domain.model.chat.ChatMessage
-import com.maxvibes.domain.model.chat.ChatSession
-import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 
 class ChatPanel(
     private val project: Project,
     private val toolWindow: ToolWindow,
     private val onShowSessions: () -> Unit
-) : JPanel(BorderLayout()), ChatPanelCallbacks {
+) : JPanel(BorderLayout()), ChatPanelCallbacks, Disposable {
 
     private val conversationPanel = ConversationPanel(project) { path ->
         statusLabel.text = ChatNavigationHelper.navigateToElement(project, path)
@@ -145,7 +148,7 @@ class ChatPanel(
     }
 
     /** Button to edit the currently selected specific prompt file. */
-    private val editPromptButton = JButton("✏").apply {
+    private val editPromptButton = JButton("\u270F").apply {
         font = font.deriveFont(12f)
         toolTipText = "Open current prompt file for editing"
         preferredSize = Dimension(26, 22)
@@ -154,7 +157,7 @@ class ChatPanel(
     }
 
     /** Button to delete the currently selected specific prompt file. */
-    private val deletePromptButton = JButton("−").apply {
+    private val deletePromptButton = JButton("\u2212").apply {
         font = font.deriveFont(Font.BOLD, 13f)
         toolTipText = "Delete current prompt file"
         preferredSize = Dimension(26, 22)
@@ -163,17 +166,50 @@ class ChatPanel(
     }
 
     /** Single dropdown button showing the active specific prompt. */
-    private val promptSelectButton = JButton("Just Code ▾").apply {
+    private val promptSelectButton = JButton("Just Code \u25BE").apply {
         font = font.deriveFont(11f)
         toolTipText = "Select task prompt"
         preferredSize = Dimension(200, 22)
         isFocusPainted = false
     }
 
+    /**
+     * Transient live-activity bubble shown beneath the conversation panel while a
+     * Claude Code send is in flight. Hidden by default; driven by [render] from
+     * [ChatPanelState.liveActivity].
+     */
+    private val liveActivityBubble = LiveActivityBubble()
+
     private val service: MaxVibesService by lazy { MaxVibesService.getInstance(project) }
     private val chatTreeService get() = service.chatTreeService
     private val promptService: PromptService by lazy { PromptService.getInstance(project) }
     private val settings: MaxVibesSettings by lazy { MaxVibesSettings.getInstance() }
+
+    /**
+     * Lazy reference to the per-project activity tracker. Resolved on first touch
+     * (via [buildState] or the listener) — not eagerly in init{}, because
+     * [MaxVibesService] initialisation order is sensitive.
+     */
+    private val activityTracker: ClaudeCodeActivityTracker by lazy { service.claudeCodeActivityTracker }
+
+    /**
+     * Listener attached to [activityTracker] in init{}. Filters events to the
+     * currently active session and schedules a re-render on the EDT.
+     */
+    private val activityListener = ClaudeCodeActivityTracker.Listener { sessionId, _ ->
+        val currentId = chatTreeService.getActiveSession().id
+        if (sessionId != currentId) return@Listener
+        SwingUtilities.invokeLater { render(buildState()) }
+    }
+
+    /**
+     * 200ms poll timer — re-renders during active activity so the elapsed-time counter
+     * in [liveActivityBubble] ticks even when no fresh events arrive. Started by [render]
+     * when liveActivity transitions to non-null, stopped when it returns to null.
+     */
+    private val activityPollTimer = Timer(200) {
+        render(buildState())
+    }.apply { isRepeats = true }
 
     // Manages interaction mode state (API / Clipboard / CheapAPI / ClaudeCode).
     // Extracted from ChatPanel to separate state logic from UI.
@@ -209,6 +245,10 @@ class ChatPanel(
         loadCurrentSession()
         modeManager.syncFromSettings()
         syncComboBoxToMode()
+        activityTracker.addListener(activityListener)
+        // Tie our teardown to the tool window's lifetime — when the tool window
+        // closes, IntelliJ disposes its children, which triggers our dispose().
+        Disposer.register(toolWindow.disposable, this)
     }
 
     override fun appendToChat(text: String) {
@@ -538,8 +578,17 @@ class ChatPanel(
             })
         }
 
+        // Conversation + live bubble live together in a single wrapper so the bubble
+        // sits directly beneath the messages, above the input area. The bubble is
+        // invisible by default; setActivity(...) toggles its visibility.
+        val conversationWrapper = JPanel(BorderLayout()).apply {
+            background = JBColor.background()
+            add(conversationPanel, BorderLayout.CENTER)
+            add(liveActivityBubble, BorderLayout.SOUTH)
+        }
+
         add(headerPanel, BorderLayout.NORTH)
-        add(conversationPanel, BorderLayout.CENTER)
+        add(conversationWrapper, BorderLayout.CENTER)
         add(JPanel(BorderLayout()).apply {
             add(inputPanel, BorderLayout.CENTER); add(statusBar, BorderLayout.SOUTH)
         }, BorderLayout.SOUTH)
@@ -941,11 +990,11 @@ class ChatPanel(
         updateContextIndicator()
         updateToolWindowIcons()
         val displayName = state.selectedSpecificPromptName ?: "Just Code"
-        promptSelectButton.text = "$displayName ▾"
+        promptSelectButton.text = "$displayName \u25BE"
         promptSelectButton.toolTipText = if (state.selectedSpecificPromptName != null)
-            "Active prompt: $displayName — click to change"
+            "Active prompt: $displayName \u2014 click to change"
         else
-            "No specific prompt active — click to select"
+            "No specific prompt active \u2014 click to select"
         val hasPrompt = state.selectedSpecificPromptName != null
         editPromptButton.isEnabled = hasPrompt
         deletePromptButton.isEnabled = hasPrompt
@@ -963,6 +1012,16 @@ class ChatPanel(
             sendButton.toolTipText = "Press Approve to continue, or start a new chat (+ New)"
         } else {
             sendButton.toolTipText = "Send message (Ctrl+Enter)"
+        }
+
+        // Live activity bubble: drive visibility/content from state, and run the 200ms
+        // poll timer only while activity is in flight so the elapsed-time counter keeps
+        // ticking without burning CPU when idle.
+        liveActivityBubble.setActivity(state.liveActivity)
+        if (state.liveActivity != null) {
+            if (!activityPollTimer.isRunning) activityPollTimer.start()
+        } else {
+            if (activityPollTimer.isRunning) activityPollTimer.stop()
         }
     }
 
@@ -1024,7 +1083,7 @@ class ChatPanel(
             com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project).openFile(vFile, true)
         }
 
-        statusLabel.text = "Created: ${candidate.name} — add your prompt text and save"
+        statusLabel.text = "Created: ${candidate.name} \u2014 add your prompt text and save"
         // Refresh the dropdown so the new file appears immediately
         render(buildState())
     }
@@ -1080,6 +1139,9 @@ class ChatPanel(
         val mode = modeManager.currentMode
         val approveVisible = mode == InteractionMode.CLAUDE_CODE &&
                 session.clipboardStatus == ClipboardSessionStatus.AWAITING_APPROVE
+        // currentFor returns null in non-Claude-Code modes and when no send is in flight —
+        // the bubble stays hidden automatically in those cases.
+        val liveActivity = activityTracker.currentFor(session.id)
         return ChatPanelState(
             currentSession = session,
             sessionPath = chatTreeService.getSessionPath(session.id),
@@ -1093,7 +1155,8 @@ class ChatPanel(
             selectedSpecificPromptName = service.specificPromptService
                 .validatePromptName(chatTreeService.getActiveSession()?.selectedSpecificPromptName),
             claudeCodeApproveVisible = approveVisible,
-            claudeCodeSending = false
+            claudeCodeSending = false,
+            liveActivity = liveActivity
         )
     }
 
@@ -1115,5 +1178,16 @@ class ChatPanel(
 
     override fun onShowWelcome() {
         showWelcome()
+    }
+
+    /**
+     * Called by IntelliJ via the Disposer chain when [toolWindow] is being closed.
+     * Releases the activity-tracker subscription, stops the poll timer, and tears
+     * down the bubble's internal pulse timer. Safe to call multiple times.
+     */
+    override fun dispose() {
+        runCatching { activityTracker.removeListener(activityListener) }
+        runCatching { activityPollTimer.stop() }
+        runCatching { liveActivityBubble.dispose() }
     }
 }

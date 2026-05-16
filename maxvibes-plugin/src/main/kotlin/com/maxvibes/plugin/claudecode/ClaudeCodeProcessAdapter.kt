@@ -313,7 +313,11 @@ class ClaudeCodeProcessAdapter(
             }
 
             // 1. Encode request through the shared codec, then wrap in stream-json.
-            val requestJson = codec.encode(request)
+            //    omitMetaFields = true strips `_protocol`, `_responseFormat` and `systemInstruction`
+            //    from the payload so it doesn't look like a prompt injection to Claude Code's
+            //    classifier. The same information is delivered out-of-band via
+            //    --append-system-prompt at process spawn (see ensureStarted).
+            val requestJson = codec.encode(request, omitMetaFields = true)
             val streamJsonLine = StreamJsonProtocol.encodeUserEvent(requestJson)
 
             MaxVibesLogger.info(
@@ -373,6 +377,21 @@ class ClaudeCodeProcessAdapter(
                             observedSessionId = it
                             MaxVibesLogger.info(TAG, "session id observed", mapOf("sessionId" to it))
                             emit(ClaudeCodeActivity.Started(sendStartedAt, it))
+                        }
+                        // Live-only signals (thinking + tool_use) — surface as Thinking events
+                        // so the bubble updates while the model is working through chain-of-thought
+                        // or attempting tool calls. NOT accumulated into the final assistant text;
+                        // that comes strictly from extractAssistantText below (text content blocks).
+                        StreamJsonProtocol.extractThinkingPreview(line)?.let { thought ->
+                            MaxVibesLogger.debug(
+                                TAG, "thinking preview",
+                                mapOf("len" to thought.length, "preview" to thought.take(LOG_LINE_PREVIEW_MAX))
+                            )
+                            emit(ClaudeCodeActivity.Thinking(sendStartedAt, "\uD83D\uDCAD $thought"))
+                        }
+                        StreamJsonProtocol.extractToolUseName(line)?.let { toolName ->
+                            MaxVibesLogger.debug(TAG, "tool_use observed", mapOf("name" to toolName))
+                            emit(ClaudeCodeActivity.Thinking(sendStartedAt, "\uD83D\uDD27 using $toolName"))
                         }
                         StreamJsonProtocol.extractAssistantText(line)?.let { txt ->
                             accumulated.append(txt)

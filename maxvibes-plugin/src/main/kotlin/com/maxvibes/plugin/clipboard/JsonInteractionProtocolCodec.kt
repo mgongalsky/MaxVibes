@@ -35,14 +35,19 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
 
     // ── Encode ────────────────────────────────────────────────────────
 
-    override fun encode(request: ClipboardRequest): String {
+    override fun encode(request: ClipboardRequest, omitMetaFields: Boolean): String {
         val obj = buildJsonObject {
-            // Meta-fields: instruct the LLM how to behave and format its response
-            put(InteractionRequestSchema.META_PROTOCOL, InteractionRequestSchema.PROTOCOL_MARKER)
-            put(InteractionRequestSchema.META_RESPONSE_FORMAT, InteractionRequestSchema.RESPONSE_FORMAT_HINT)
+            // Meta-fields: instruct the LLM how to behave and format its response.
+            // Suppressed in Claude Code mode to avoid tripping its prompt-injection
+            // classifier — there the same info is supplied via --append-system-prompt.
+            if (!omitMetaFields) {
+                put(InteractionRequestSchema.META_PROTOCOL, InteractionRequestSchema.PROTOCOL_MARKER)
+                put(InteractionRequestSchema.META_RESPONSE_FORMAT, InteractionRequestSchema.RESPONSE_FORMAT_HINT)
+            }
 
-            // System prompt — omitted when blank to save tokens
-            if (request.systemInstruction.isNotBlank()) {
+            // System prompt — omitted when blank to save tokens, and unconditionally
+            // suppressed when omitMetaFields is true (same reason as meta-fields above).
+            if (!omitMetaFields && request.systemInstruction.isNotBlank()) {
                 put(InteractionRequestSchema.FIELD_SYSTEM_INSTRUCTION, request.systemInstruction)
             }
 
