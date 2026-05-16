@@ -25,6 +25,7 @@ import java.io.BufferedWriter
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
 import com.maxvibes.domain.model.interaction.ClaudeCodeActivity
+import com.maxvibes.domain.model.interaction.InteractionResponse
 
 /**
  * Plugin-layer implementation of [ClaudeCodePort].
@@ -159,7 +160,25 @@ class ClaudeCodeProcessAdapter(
                 "-p",
                 "--input-format", "stream-json",
                 "--output-format", "stream-json",
-                "--verbose"
+                "--verbose",
+                // Disable the built-in tools that the model would otherwise reach for during
+                // a normal Claude Code session — Read/Write/Edit for files, Bash/PowerShell
+                // for the shell, Glob/Grep for filesystem search, WebFetch/WebSearch for HTTP.
+                // In MaxVibes mode the plugin is the sole I/O channel: files arrive via
+                // `freshFiles` in the user payload, modifications go out via the
+                // `modifications` array in the JSON response.
+                //
+                // Empirically without this restriction the model wastes 30-180s per turn on
+                // bounced tool calls (Glob → "no files", PowerShell → "blocked",
+                // Read → "file does not exist"), each costing a full API round-trip.
+                //
+                // Earlier we tried `--allowed-tools ""` (empty allowlist) but on Windows
+                // GeneralCommandLine renders the empty arg in a way that claude-code rejects
+                // at argv parsing, killing the process with exit 1 before stdout opens.
+                // Listing the disallowed tools explicitly avoids that quoting problem and
+                // is well-supported by the CLI.
+                "--disallowed-tools",
+                "Read,Write,Edit,MultiEdit,NotebookEdit,Bash,Glob,Grep,WebFetch,WebSearch,PowerShell,Task"
             )
             // System prompt is passed via CLI flag (Strategy B): keeps the JSON
             // user-event payload free of large prompt-like text that would otherwise
@@ -467,20 +486,33 @@ class ClaudeCodeProcessAdapter(
                 )
             )
             val response = codec.decode(responseText)
-            if (response == null) {
-                MaxVibesLogger.warn(
-                    TAG, "send: codec.decode returned null",
-                    data = mapOf(
-                        "assistantLen" to responseText.length,
-                        "preview" to responseText.take(LOG_LINE_PREVIEW_MAX)
-                    )
-                )
-                return Result.Failure(
-                    ClaudeCodeError.ParseFailed(
-                        "codec.decode returned null. Raw assistant text length=${responseText.length}"
-                    )
-                )
-            }
+                ?: run {
+                    // Decode failed (model returned plain prose with stray `{`, or empty,
+                    // or some other off-protocol shape). If we at least have some text,
+                    // show it to the user as a message rather than blow up with a
+                    // transport error — they can read it and respond. If there's truly
+                    // nothing, surface the ParseFailed so the UI states it explicitly.
+                    if (responseText.isNotBlank()) {
+                        MaxVibesLogger.warn(
+                            TAG, "send: codec.decode returned null — falling back to plain message",
+                            data = mapOf(
+                                "assistantLen" to responseText.length,
+                                "preview" to responseText.take(LOG_LINE_PREVIEW_MAX)
+                            )
+                        )
+                        InteractionResponse(message = responseText)
+                    } else {
+                        MaxVibesLogger.warn(
+                            TAG, "send: codec.decode returned null and accumulated text is blank",
+                            data = mapOf("assistantLen" to responseText.length)
+                        )
+                        return Result.Failure(
+                            ClaudeCodeError.ParseFailed(
+                                "Claude Code returned no usable content (assistantLen=${responseText.length})"
+                            )
+                        )
+                    }
+                }
 
             MaxVibesLogger.info(
                 TAG, "send: done",

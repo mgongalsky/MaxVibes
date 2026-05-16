@@ -327,10 +327,12 @@ class ClaudeCodeInteractionService(
      * Builds the request, ensures the process is running (with `--resume` fallback to fresh start),
      * sends the request and dispatches the response to [processResponse].
      *
-     * System prompt handling: on a fresh start, the MaxVibes system instruction is forwarded
-     * to the adapter via `--append-system-prompt` rather than embedded into the JSON payload —
-     * the latter trips Claude Code's prompt-injection classifier. On `--resume`, the prompt is
-     * already installed in the existing claude session, so we pass null.
+     * System prompt handling: the MaxVibes system instruction is forwarded to the adapter via
+     * `--append-system-prompt` rather than embedded in the JSON user payload — the latter trips
+     * Claude Code's prompt-injection classifier. The adapter's [ClaudeCodePort.ensureStarted]
+     * is idempotent: it applies the prompt only at process spawn and ignores subsequent calls
+     * while the process is alive. So passing the prompt on every doSend is safe — it costs
+     * nothing when the process is already running and is essential on the first call.
      */
     private suspend fun doSend(
         sessionId: String,
@@ -357,16 +359,23 @@ class ClaudeCodeInteractionService(
             specificPromptContent = specificPromptContent
         )
 
-        // Try resume first if we have a session id. The system prompt is null on resume:
-        // the existing CLI session already has the prompt installed from its first spawn.
+        // Pass the system prompt unconditionally on the first ensureStarted call:
+        //   - fresh start (resumeId == null) — process is spawned now; it MUST receive the
+        //     prompt or the model has no idea it is talking to MaxVibes and will respond as
+        //     a vanilla Claude Code session (asking the user how to access PSI, etc.).
+        //   - resume (resumeId != null) — process may have died between IDE sessions and
+        //     will be respawned here, in which case the same need applies. If the process
+        //     is already alive, the adapter's ensureStarted short-circuits before the prompt
+        //     ever reaches the CLI (see ClaudeCodeProcessAdapter.ensureStarted), so passing
+        //     it costs nothing.
         val resumeId = session.claudeCodeSessionId
         var ensureResult = claudeCodePort.ensureStarted(
             resumeSessionId = resumeId,
-            systemPrompt = null
+            systemPrompt = state.prompts.chatSystem
         )
 
         // Resume failed → start fresh. Mark needsFullContext, rebuild the request with
-        // full context, AND now we DO pass the system prompt — it's a brand-new process.
+        // full context, and pass the system prompt for the brand-new process.
         if (ensureResult is Result.Failure && ensureResult.error is ClaudeCodeError.ResumeFailed) {
             val rf = ensureResult.error as ClaudeCodeError.ResumeFailed
             log("Resume failed for sessionId=${rf.sessionId}; falling back to fresh start.")
