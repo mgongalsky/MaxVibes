@@ -153,11 +153,17 @@ class MaxVibesService(private val project: Project) : Disposable {
      * Explicit [Lazy] delegate so [dispose] can check [Lazy.isInitialized] and
      * avoid spawning the adapter just to immediately tear it down when the user
      * never used Claude Code mode in this project session.
+     *
+     * The working directory is set to the project's base path so that:
+     *  - claude-code can autoload `CLAUDE.md` from the project root;
+     *  - error messages reference paths relative to the project, not the IDE cache;
+     *  - any sandbox-relative tool behaviour stays scoped to the project tree.
      */
     private val claudeCodeAdapterLazy: Lazy<ClaudeCodeProcessAdapter> = lazy {
         ClaudeCodeProcessAdapter(
             settings = MaxVibesSettings.getInstance(),
-            scope = serviceScope
+            scope = serviceScope,
+            workingDirectory = project.basePath
         )
     }
 

@@ -5,7 +5,9 @@ import com.maxvibes.application.port.output.ClaudeCodeError
 import com.maxvibes.application.port.output.ClaudeCodePort
 import com.maxvibes.application.port.output.ClaudeCodeSendResult
 import com.maxvibes.application.port.output.InteractionProtocolCodec
+import com.maxvibes.domain.model.interaction.ClaudeCodeActivity
 import com.maxvibes.domain.model.interaction.ClipboardRequest
+import com.maxvibes.domain.model.interaction.InteractionResponse
 import com.maxvibes.plugin.clipboard.JsonInteractionProtocolCodec
 import com.maxvibes.plugin.service.MaxVibesLogger
 import com.maxvibes.plugin.settings.MaxVibesSettings
@@ -22,10 +24,9 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.BufferedReader
 import java.io.BufferedWriter
+import java.io.File
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
-import com.maxvibes.domain.model.interaction.ClaudeCodeActivity
-import com.maxvibes.domain.model.interaction.InteractionResponse
 
 /**
  * Plugin-layer implementation of [ClaudeCodePort].
@@ -39,6 +40,8 @@ import com.maxvibes.domain.model.interaction.InteractionResponse
  *
  * COMMAND (May 2026, against `claude --help`):
  *   claude -p --input-format stream-json --output-format stream-json --verbose
+ *          --disallowed-tools <list>
+ *          [--append-system-prompt <text>]
  *          [--resume <session-uuid>]
  *          [<extra args from settings>]
  *
@@ -51,16 +54,26 @@ import com.maxvibes.domain.model.interaction.InteractionResponse
  * tag. When something hangs or fails, the log makes it explicit whether the
  * problem is spawn / stdin write / stdout read / parse — without it, the UI
  * only shows a generic "transport error" message.
- *
- * NOTE: stream-JSON line shapes (system/init, assistant, result) are documented
- * in [StreamJsonProtocol] based on observed claude-code 2.1.x behaviour.
- * If a future claude version changes the schema, update [StreamJsonProtocol]
- * — this adapter only cares about the field accessors it exposes.
  */
 class ClaudeCodeProcessAdapter(
     private val settings: MaxVibesSettings,
     private val codec: InteractionProtocolCodec = JsonInteractionProtocolCodec(),
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
+    /**
+     * Working directory for the spawned `claude` process. When non-null and the
+     * directory exists, the process is started with this as its CWD. This matters
+     * because:
+     *  - claude-code's `CLAUDE.md` auto-loader looks in the current directory;
+     *  - any tool calls the model attempts (when not disabled) are sandboxed to
+     *    the CWD subtree, so launching outside the project means tools can't
+     *    reach project files even by absolute path;
+     *  - error messages and reset behaviour reference paths relative to CWD,
+     *    which is most useful when it's the project root.
+     *
+     * Defaults to null — process inherits the parent (IDE) CWD, which is usually
+     * something useless like the IDE installation's bin directory.
+     */
+    private val workingDirectory: String? = null
 ) : ClaudeCodePort {
 
     private companion object {
@@ -97,7 +110,6 @@ class ClaudeCodeProcessAdapter(
         private set
 
     override fun isAvailable(): Boolean {
-        // Run `claude --version` with a short timeout — fast enough to call before every start.
         return try {
             val cmd = GeneralCommandLine(settings.claudeCodePath, "--version").apply {
                 charset = StandardCharsets.UTF_8
@@ -162,21 +174,18 @@ class ClaudeCodeProcessAdapter(
                 "--output-format", "stream-json",
                 "--verbose",
                 // Disable the built-in tools that the model would otherwise reach for during
-                // a normal Claude Code session — Read/Write/Edit for files, Bash/PowerShell
-                // for the shell, Glob/Grep for filesystem search, WebFetch/WebSearch for HTTP.
-                // In MaxVibes mode the plugin is the sole I/O channel: files arrive via
-                // `freshFiles` in the user payload, modifications go out via the
-                // `modifications` array in the JSON response.
+                // a normal Claude Code session. In MaxVibes mode the plugin is the sole I/O
+                // channel: files arrive via `freshFiles` in the user payload, modifications
+                // go out via the `modifications` array in the JSON response.
                 //
                 // Empirically without this restriction the model wastes 30-180s per turn on
                 // bounced tool calls (Glob → "no files", PowerShell → "blocked",
                 // Read → "file does not exist"), each costing a full API round-trip.
                 //
-                // Earlier we tried `--allowed-tools ""` (empty allowlist) but on Windows
+                // Note: we tried `--allowed-tools ""` (empty allowlist) earlier; on Windows
                 // GeneralCommandLine renders the empty arg in a way that claude-code rejects
                 // at argv parsing, killing the process with exit 1 before stdout opens.
-                // Listing the disallowed tools explicitly avoids that quoting problem and
-                // is well-supported by the CLI.
+                // Listing the disallowed tools explicitly avoids that quoting problem.
                 "--disallowed-tools",
                 "Read,Write,Edit,MultiEdit,NotebookEdit,Bash,Glob,Grep,WebFetch,WebSearch,PowerShell,Task"
             )
@@ -197,9 +206,21 @@ class ClaudeCodeProcessAdapter(
                 .filter { it.isNotBlank() }
             val allArgs = baseArgs + extraArgs
 
+            // Resolve working directory. Only set it on the command line if the
+            // configured path is non-blank and points to an existing directory —
+            // otherwise let the OS pick the default (parent process CWD), since
+            // GeneralCommandLine.withWorkDirectory throws on a missing dir.
+            val resolvedWorkDir: File? = workingDirectory
+                ?.takeIf { it.isNotBlank() }
+                ?.let { File(it) }
+                ?.takeIf { it.isDirectory }
+
             val cmd = GeneralCommandLine(settings.claudeCodePath).apply {
                 charset = StandardCharsets.UTF_8
                 addParameters(*allArgs.toTypedArray())
+                if (resolvedWorkDir != null) {
+                    withWorkDirectory(resolvedWorkDir)
+                }
             }
 
             // Log a redacted view of args — full system prompt is large and would
@@ -218,7 +239,9 @@ class ClaudeCodeProcessAdapter(
                     "args" to argsForLog.joinToString(" "),
                     "resume" to (resumeSessionId ?: "null"),
                     "hasSystemPrompt" to hasSystemPrompt,
-                    "systemPromptLen" to (systemPrompt?.length ?: 0)
+                    "systemPromptLen" to (systemPrompt?.length ?: 0),
+                    "workDir" to (resolvedWorkDir?.absolutePath ?: "<inherited>"),
+                    "requestedWorkDir" to (workingDirectory ?: "null")
                 )
             )
 
@@ -240,9 +263,6 @@ class ClaudeCodeProcessAdapter(
             synchronized(stderrBuffer) { stderrBuffer.setLength(0) }
             lastStderrSnapshot = ""
 
-            // stderr is collected on a project-scoped IO coroutine. Each line is logged
-            // immediately so we can correlate stderr noise with main-flow events, AND
-            // appended to a buffer so we can include it in error results.
             stderrCollector = scope.launch(Dispatchers.IO) {
                 try {
                     proc.errorStream.bufferedReader(StandardCharsets.UTF_8).useLines { lines ->
@@ -259,11 +279,6 @@ class ClaudeCodeProcessAdapter(
                 }
             }
 
-            // Brief grace period — long enough to catch immediate crashes (bad binary path,
-            // missing deps), short enough not to feel like a hang. We intentionally do NOT
-            // wait for system/init on stdout here — claude in stream-json mode may block on
-            // stdin until the first user event, which would deadlock us. The init line is
-            // picked up by the first send()'s read loop instead.
             delay(SPAWN_GRACE_MS)
 
             if (!proc.isAlive) {
@@ -321,8 +336,6 @@ class ClaudeCodeProcessAdapter(
 
             val sendStartedAt = System.currentTimeMillis()
 
-            // Safe wrapper for the activity callback — UI/listener exceptions must not
-            // break the transport. Logged and swallowed.
             fun emit(activity: ClaudeCodeActivity) {
                 try {
                     onActivity(activity)
@@ -332,10 +345,6 @@ class ClaudeCodeProcessAdapter(
             }
 
             // 1. Encode request through the shared codec, then wrap in stream-json.
-            //    omitMetaFields = true strips `_protocol`, `_responseFormat` and `systemInstruction`
-            //    from the payload so it doesn't look like a prompt injection to Claude Code's
-            //    classifier. The same information is delivered out-of-band via
-            //    --append-system-prompt at process spawn (see ensureStarted).
             val requestJson = codec.encode(request, omitMetaFields = true)
             val streamJsonLine = StreamJsonProtocol.encodeUserEvent(requestJson)
 
@@ -364,10 +373,7 @@ class ClaudeCodeProcessAdapter(
                 )
             }
 
-            // 3. Read stdout until isTurnEnd. Collect assistant text. Capture session id.
-            //    runInterruptible lets withTimeoutOrNull actually interrupt the blocking
-            //    readLine() — without it, only the coroutine is cancelled while the
-            //    underlying thread stays stuck on I/O.
+            // 3. Read stdout until isTurnEnd.
             val timeoutMs = settings.claudeCodeReadTimeoutSec.toLong() * 1000
             val accumulated = StringBuilder()
             var observedSessionId: String? = null
@@ -397,10 +403,6 @@ class ClaudeCodeProcessAdapter(
                             MaxVibesLogger.info(TAG, "session id observed", mapOf("sessionId" to it))
                             emit(ClaudeCodeActivity.Started(sendStartedAt, it))
                         }
-                        // Live-only signals (thinking + tool_use) — surface as Thinking events
-                        // so the bubble updates while the model is working through chain-of-thought
-                        // or attempting tool calls. NOT accumulated into the final assistant text;
-                        // that comes strictly from extractAssistantText below (text content blocks).
                         StreamJsonProtocol.extractThinkingPreview(line)?.let { thought ->
                             MaxVibesLogger.debug(
                                 TAG, "thinking preview",
@@ -455,8 +457,6 @@ class ClaudeCodeProcessAdapter(
             }
 
             if (!sawTurnEnd) {
-                // readLine returned null without us seeing a result event — process closed
-                // its stdout. Treat as crash; surface stderr if any.
                 val err = synchronized(stderrBuffer) { stderrBuffer.toString() }
                 lastStderrSnapshot = err
                 MaxVibesLogger.warn(
@@ -487,11 +487,6 @@ class ClaudeCodeProcessAdapter(
             )
             val response = codec.decode(responseText)
                 ?: run {
-                    // Decode failed (model returned plain prose with stray `{`, or empty,
-                    // or some other off-protocol shape). If we at least have some text,
-                    // show it to the user as a message rather than blow up with a
-                    // transport error — they can read it and respond. If there's truly
-                    // nothing, surface the ParseFailed so the UI states it explicitly.
                     if (responseText.isNotBlank()) {
                         MaxVibesLogger.warn(
                             TAG, "send: codec.decode returned null — falling back to plain message",
@@ -545,15 +540,12 @@ class ClaudeCodeProcessAdapter(
             runCatching { stdout?.close() }
             runCatching { stderrCollector?.cancel() }
             runCatching { proc.destroyForcibly() }
-            // Wait briefly so the OS reclaims the PID before we drop our refs.
             runCatching { proc.waitFor(2, TimeUnit.SECONDS) }
         }
         process = null
         stdin = null
         stdout = null
         stderrCollector = null
-        // Note: stderrBuffer is NOT cleared here — we keep the snapshot available
-        // via [lastStderrSnapshot] for any UI that wants to display it post-mortem.
     }
 
     /**
