@@ -173,12 +173,14 @@ class ConversationPanel(
         val bg = JBColor(Color(0xEAF7EA), Color(0x1B2B1E))
         val ok = mods.filterIsInstance<ModificationResult.Success>()
         val fail = mods.filterIsInstance<ModificationResult.Failure>()
-        val hasDetails = !tokenInfo.isNullOrBlank()
+        // Reasoning lives in its own collapsible sub-panel (ThinkingBubble feature) —
+        // it no longer participates in the footer or its hasDetails check.
+        val hasFooter = !tokenInfo.isNullOrBlank()
                 || ok.isNotEmpty() || fail.isNotEmpty()
                 || metaFiles.isNotEmpty()
-                || !reasoning.isNullOrBlank()
                 || requestedViews.isNotEmpty()
                 || appliedModifications.isNotEmpty()
+        val hasReasoning = !reasoning.isNullOrBlank()
 
         val segments = parseSegments(text)
         val contentPanel = buildSegmentsPanel(segments, bg)
@@ -186,10 +188,24 @@ class ConversationPanel(
         return bubble(bg, JBColor(Color(0x239B56), Color(0x58D68D))).also { p ->
             p.add(roleLabel("\uD83E\uDD16 MaxVibes", JBColor(Color(0x1D6A39), Color(0x82E0AA))), BorderLayout.NORTH)
             p.add(contentPanel, BorderLayout.CENTER)
-            if (hasDetails) p.add(
-                collapsibleFooter(tokenInfo, ok, fail, bg, metaFiles, reasoning, requestedViews, appliedModifications),
-                BorderLayout.SOUTH
-            )
+            if (hasReasoning || hasFooter) {
+                val south = JPanel().apply {
+                    layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                    background = bg
+                }
+                if (!reasoning.isNullOrBlank()) {
+                    south.add(
+                        collapsibleReasoningPanel(reasoning, bg).also { it.alignmentX = Component.LEFT_ALIGNMENT }
+                    )
+                }
+                if (hasFooter) {
+                    south.add(
+                        collapsibleFooter(tokenInfo, ok, fail, bg, metaFiles, requestedViews, appliedModifications)
+                            .also { it.alignmentX = Component.LEFT_ALIGNMENT }
+                    )
+                }
+                p.add(south, BorderLayout.SOUTH)
+            }
         }
     }
 
@@ -351,21 +367,19 @@ class ConversationPanel(
         fail: List<ModificationResult.Failure>,
         bg: Color,
         metaFiles: List<String> = emptyList(),
-        reasoning: String? = null,
         requestedViews: List<RequestedViewInfo> = emptyList(),
         appliedModifications: List<AppliedModInfo> = emptyList()
     ): JPanel {
         val summaryHtml =
-            buildSummaryHtml("&#9658;", tokenInfo, ok, fail, metaFiles, reasoning, requestedViews, appliedModifications)
+            buildSummaryHtml("&#9658;", tokenInfo, ok, fail, metaFiles, requestedViews, appliedModifications)
         val expandedHtml =
-            buildSummaryHtml("&#9660;", tokenInfo, ok, fail, metaFiles, reasoning, requestedViews, appliedModifications)
+            buildSummaryHtml("&#9660;", tokenInfo, ok, fail, metaFiles, requestedViews, appliedModifications)
         val details = detailsPanel(
             tokenInfo,
             ok,
             fail,
             bg,
             metaFiles,
-            reasoning,
             requestedViews,
             appliedModifications
         ).also { it.isVisible = false }
@@ -389,18 +403,65 @@ class ConversationPanel(
         }
     }
 
+    /**
+     * Collapsible reasoning sub-panel ("\uD83D\uDCAD Reasoning") shown between the message body
+     * and the file/modification footer of an assistant bubble.
+     *
+     * Kept separate from [collapsibleFooter] because full Claude Code thinking can run to
+     * thousands of characters — mixed into the footer it drowned the file/modification
+     * breakdown. Collapsed by default: a long chain of thought costs one header line of
+     * vertical space until the user expands it.
+     *
+     * Header is deliberately PLAIN TEXT, not HTML: Swing's HTML renderer may wrap button
+     * text at regular spaces and miscomputes preferred width for non-BMP emoji glyphs
+     * (font fallback), which produced a broken two-line header. Plain text never wraps.
+     */
+    private fun collapsibleReasoningPanel(reasoning: String, bg: Color): JPanel {
+        val lineCount = reasoning.lines().size
+        val headerCollapsed = "\u25BA  \uD83D\uDCAD Reasoning ($lineCount lines)"
+        val headerExpanded = "\u25BC  \uD83D\uDCAD Reasoning ($lineCount lines)"
+
+        val body = contentArea(reasoning, bg).apply {
+            font = font.deriveFont(11f)
+            foreground = JBColor(Color(0x444444), Color(0xAAAAAA))
+            alignmentX = Component.LEFT_ALIGNMENT
+            border = JBUI.Borders.empty(0, 10, 6, 0)
+            isVisible = false
+        }
+
+        val btn = JButton(headerCollapsed).apply {
+            font = font.deriveFont(Font.PLAIN, 12f)
+            foreground = JBColor(Color(0x7D3C98), Color(0xBB8FCE))
+            isFocusPainted = false; isContentAreaFilled = false; isBorderPainted = false
+            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            horizontalAlignment = SwingConstants.LEFT
+            border = JBUI.Borders.empty(4, 0, 2, 0)
+            maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)
+        }
+        btn.addActionListener {
+            body.isVisible = !body.isVisible
+            btn.text = if (body.isVisible) headerExpanded else headerCollapsed
+            messagesPanel.revalidate(); messagesPanel.repaint()
+        }
+
+        return JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS); background = bg
+            border = JBUI.Borders.empty(2, 0, 0, 0)
+            add(btn.also { it.alignmentX = Component.LEFT_ALIGNMENT })
+            add(body.also { it.alignmentX = Component.LEFT_ALIGNMENT })
+        }
+    }
+
     private fun buildSummaryHtml(
         arrow: String,
         tokenInfo: String?,
         ok: List<ModificationResult.Success>,
         fail: List<ModificationResult.Failure>,
         metaFiles: List<String>,
-        reasoning: String?,
         requestedViews: List<RequestedViewInfo> = emptyList(),
         appliedModifications: List<AppliedModInfo> = emptyList()
     ): String {
         val parts = mutableListOf<String>()
-        if (!reasoning.isNullOrBlank()) parts += "<font color='#7D3C98'>&#129504;</font>"
         if (!tokenInfo.isNullOrBlank()) parts += "<font color='#D4821A'>&#128290; $tokenInfo</font>"
 
         // requestedViews breakdown (new) or legacy metaFiles
@@ -446,22 +507,12 @@ class ConversationPanel(
         fail: List<ModificationResult.Failure>,
         bg: Color,
         metaFiles: List<String> = emptyList(),
-        reasoning: String? = null,
         requestedViews: List<RequestedViewInfo> = emptyList(),
         appliedModifications: List<AppliedModInfo> = emptyList()
     ) = JPanel().apply {
         layout = BoxLayout(this, BoxLayout.Y_AXIS); background = bg
         border = JBUI.Borders.empty(2, 8, 2, 0)
         maximumSize = Dimension(Int.MAX_VALUE, Int.MAX_VALUE)
-
-        if (!reasoning.isNullOrBlank()) {
-            add(sectionLabel("\uD83E\uDDE0 Reasoning:"))
-            add(contentArea(reasoning, bg).apply {
-                font = font.deriveFont(11f); foreground = JBColor(Color(0x444444), Color(0xAAAAAA))
-                alignmentX = Component.LEFT_ALIGNMENT
-                border = JBUI.Borders.empty(0, 10, 8, 0)
-            })
-        }
 
         if (!tokenInfo.isNullOrBlank()) {
             add(JBLabel(tokenInfo).apply {
