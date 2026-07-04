@@ -11,10 +11,19 @@
             <option value="$PROJECT_DIR$" />
             <option value="$PROJECT_DIR$/maxvibes-adapter-llm" />
             <option value="$PROJECT_DIR$/maxvibes-adapter-psi" />
+            <option value="$PROJECT_DIR$/maxvibes-adapter-psi-python" />
             <option value="$PROJECT_DIR$/maxvibes-application" />
             <option value="$PROJECT_DIR$/maxvibes-domain" />
             <option value="$PROJECT_DIR$/maxvibes-plugin" />
             <option value="$PROJECT_DIR$/maxvibes-shared" />
+          </set>
+        </option>
+      </GradleProjectSettings>
+      <GradleProjectSettings>
+        <option name="externalProjectPath" value="$PROJECT_DIR$/maxvibes-adapter-psi-python" />
+        <option name="modules">
+          <set>
+            <option value="$PROJECT_DIR$/maxvibes-adapter-psi-python" />
           </set>
         </option>
       </GradleProjectSettings>

@@ -7,6 +7,7 @@ dependencies {
     implementation(project(":maxvibes-domain"))
     implementation(project(":maxvibes-application"))
     implementation(project(":maxvibes-adapter-psi"))
+    implementation(project(":maxvibes-adapter-psi-python"))
     implementation(project(":maxvibes-shared"))
 
     // Use shadow JAR from adapter-llm
@@ -39,11 +40,21 @@ tasks {
         untilBuild.set("253.*")
     }
 
-    // Run plugin inside Android Studio instead of IDEA
-    // Adjust the path via ANDROID_STUDIO_PATH env var, or edit the defaults below:
-    //   macOS:   /Applications/Android Studio.app/Contents
-    //   Windows: C:/Program Files/Android Studio
-    //   Linux:   /opt/android-studio
+    register<org.jetbrains.intellij.tasks.RunIdeTask>("runIdePyCharm") {
+        val pyCharmPath: String =
+            System.getenv("PYCHARM_PATH")
+                ?: when {
+                    org.gradle.internal.os.OperatingSystem.current().isMacOsX ->
+                        "/Applications/PyCharm CE.app/Contents"
+
+                    org.gradle.internal.os.OperatingSystem.current().isWindows ->
+                        "C:/Program Files/JetBrains/PyCharm Community Edition 2023.1.5"
+
+                    else -> "/opt/pycharm-community"
+                }
+        ideDir.set(file(pyCharmPath))
+    }
+
     register<org.jetbrains.intellij.tasks.RunIdeTask>("runIdeAndroidStudio") {
         val androidStudioPath: String =
             System.getenv("ANDROID_STUDIO_PATH")

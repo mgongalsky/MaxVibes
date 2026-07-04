@@ -4,6 +4,7 @@ import com.intellij.execution.configurations.GeneralCommandLine
 import com.maxvibes.application.port.output.ClaudeCodeError
 import com.maxvibes.application.port.output.ClaudeCodePort
 import com.maxvibes.application.port.output.ClaudeCodeSendResult
+import com.maxvibes.application.port.output.ClaudeCodeSessionLogPort
 import com.maxvibes.application.port.output.InteractionProtocolCodec
 import com.maxvibes.domain.model.interaction.ClaudeCodeActivity
 import com.maxvibes.domain.model.interaction.ClipboardRequest
@@ -54,6 +55,14 @@ import java.util.concurrent.TimeUnit
  * tag. When something hangs or fails, the log makes it explicit whether the
  * problem is spawn / stdin write / stdout read / parse — without it, the UI
  * only shows a generic "transport error" message.
+ *
+ * Additionally, when a [ClaudeCodeSessionLogPort] is supplied, the adapter
+ * mirrors the FULL untruncated exchange into the per-dialog transcript
+ * (`.maxvibes/logs/claude-code/<chatSessionId>.log`): the complete spawn
+ * command line (system prompt included), every raw stream-json line in both
+ * directions, all stderr, and lifecycle events. MaxVibesLogger stays the
+ * truncated overview; the transcript is the source of truth when debugging
+ * a misbehaving dialog.
  */
 class ClaudeCodeProcessAdapter(
     private val settings: MaxVibesSettings,
@@ -73,7 +82,16 @@ class ClaudeCodeProcessAdapter(
      * Defaults to null — process inherits the parent (IDE) CWD, which is usually
      * something useless like the IDE installation's bin directory.
      */
-    private val workingDirectory: String? = null
+    private val workingDirectory: String? = null,
+    /**
+     * Optional per-dialog verbose transcript. When non-null, the adapter writes
+     * the FULL untruncated exchange to it (see class KDoc). The active dialog is
+     * selected upstream by the interaction service via
+     * [ClaudeCodeSessionLogPort.begin] — the adapter itself never learns the
+     * chat session id. Null (default) disables the transcript entirely, which
+     * keeps existing DI call-sites and unit tests compiling unchanged.
+     */
+    private val sessionLog: ClaudeCodeSessionLogPort? = null
 ) : ClaudeCodePort {
 
     private companion object {
@@ -157,6 +175,13 @@ class ClaudeCodeProcessAdapter(
                         "systemPromptIgnored" to (systemPrompt != null)
                     )
                 )
+                sessionLog?.event(
+                    "ensureStarted: already alive",
+                    mapOf(
+                        "resume" to (resumeSessionId ?: "null"),
+                        "systemPromptIgnored" to (systemPrompt != null)
+                    )
+                )
                 return Result.Success(Unit)
             }
 
@@ -165,6 +190,7 @@ class ClaudeCodeProcessAdapter(
                     TAG, "ensureStarted: binary not found",
                     data = mapOf("path" to settings.claudeCodePath)
                 )
+                sessionLog?.event("binary not found", mapOf("path" to settings.claudeCodePath))
                 return Result.Failure(ClaudeCodeError.BinaryNotFound)
             }
 
@@ -244,6 +270,18 @@ class ClaudeCodeProcessAdapter(
                     "requestedWorkDir" to (workingDirectory ?: "null")
                 )
             )
+            // The transcript gets the FULL command line on purpose — including the
+            // complete system prompt. That is the whole point of the per-dialog log:
+            // everything needed to reproduce the invocation lives in one file.
+            sessionLog?.event(
+                "spawning",
+                mapOf(
+                    "cmd" to settings.claudeCodePath,
+                    "args" to allArgs.joinToString(" "),
+                    "resume" to (resumeSessionId ?: "null"),
+                    "workDir" to (resolvedWorkDir?.absolutePath ?: "<inherited>")
+                )
+            )
 
             val proc = try {
                 cmd.createProcess()
@@ -251,6 +289,10 @@ class ClaudeCodeProcessAdapter(
                 MaxVibesLogger.error(
                     TAG, "ensureStarted: createProcess threw", ex = e,
                     data = mapOf("path" to settings.claudeCodePath, "args" to argsForLog.joinToString(" "))
+                )
+                sessionLog?.event(
+                    "createProcess threw",
+                    mapOf("ex" to e.javaClass.simpleName, "exMsg" to (e.message ?: ""))
                 )
                 return Result.Failure(
                     ClaudeCodeError.Crashed("Could not spawn process: ${e.message}")
@@ -272,6 +314,7 @@ class ClaudeCodeProcessAdapter(
                                 TAG, "stderr",
                                 data = mapOf("line" to line.take(LOG_LINE_PREVIEW_MAX))
                             )
+                            sessionLog?.stderr(line)
                         }
                     }
                 } catch (e: Exception) {
@@ -293,6 +336,14 @@ class ClaudeCodeProcessAdapter(
                         "resume" to (resumeSessionId ?: "null")
                     )
                 )
+                sessionLog?.event(
+                    "process died during spawn grace",
+                    mapOf(
+                        "exit" to exitCode,
+                        "resume" to (resumeSessionId ?: "null"),
+                        "stderr" to err
+                    )
+                )
                 shutdown(reason = "died during spawn grace")
                 return if (resumeSessionId != null) {
                     Result.Failure(ClaudeCodeError.ResumeFailed(resumeSessionId, err))
@@ -303,6 +354,13 @@ class ClaudeCodeProcessAdapter(
 
             MaxVibesLogger.info(
                 TAG, "ensureStarted: alive after grace",
+                mapOf(
+                    "pid" to runCatching { proc.pid() }.getOrDefault(-1L),
+                    "resume" to (resumeSessionId ?: "null")
+                )
+            )
+            sessionLog?.event(
+                "alive after grace",
                 mapOf(
                     "pid" to runCatching { proc.pid() }.getOrDefault(-1L),
                     "resume" to (resumeSessionId ?: "null")
@@ -319,6 +377,7 @@ class ClaudeCodeProcessAdapter(
             val proc = process
             if (proc == null) {
                 MaxVibesLogger.warn(TAG, "send: process not started")
+                sessionLog?.event("send rejected: process not started")
                 return Result.Failure(ClaudeCodeError.Crashed("Process not started"))
             }
             if (!proc.isAlive) {
@@ -329,6 +388,13 @@ class ClaudeCodeProcessAdapter(
                     data = mapOf(
                         "exit" to runCatching { proc.exitValue() }.getOrDefault(-1),
                         "stderr" to err.take(LOG_LINE_PREVIEW_MAX)
+                    )
+                )
+                sessionLog?.event(
+                    "send rejected: process died before write",
+                    mapOf(
+                        "exit" to runCatching { proc.exitValue() }.getOrDefault(-1),
+                        "stderr" to err
                     )
                 )
                 return Result.Failure(ClaudeCodeError.Crashed("Process died"))
@@ -356,6 +422,9 @@ class ClaudeCodeProcessAdapter(
                     "requestPreview" to requestJson.take(LOG_REQUEST_PREVIEW_MAX)
                 )
             )
+            // Full outbound line goes into the transcript BEFORE the write attempt,
+            // so a failed write still leaves the exact payload visible.
+            sessionLog?.outbound(streamJsonLine)
 
             // 2. Write to stdin.
             try {
@@ -366,8 +435,13 @@ class ClaudeCodeProcessAdapter(
                     w.flush()
                 }
                 MaxVibesLogger.info(TAG, "send: stdin flushed")
+                sessionLog?.event("stdin flushed")
             } catch (e: Exception) {
                 MaxVibesLogger.error(TAG, "send: stdin write failed", ex = e)
+                sessionLog?.event(
+                    "stdin write failed",
+                    mapOf("ex" to e.javaClass.simpleName, "exMsg" to (e.message ?: ""))
+                )
                 return Result.Failure(
                     ClaudeCodeError.Crashed("stdin write failed: ${e.message}")
                 )
@@ -387,6 +461,9 @@ class ClaudeCodeProcessAdapter(
                         val line = r.readLine() ?: break
                         linesRead++
 
+                        // Full raw line — before any parsing — into the transcript.
+                        sessionLog?.inbound(line)
+
                         val type = peekType(line)
                         MaxVibesLogger.debug(
                             TAG, "stdout line",
@@ -401,6 +478,7 @@ class ClaudeCodeProcessAdapter(
                         StreamJsonProtocol.extractSessionId(line)?.let {
                             observedSessionId = it
                             MaxVibesLogger.info(TAG, "session id observed", mapOf("sessionId" to it))
+                            sessionLog?.event("claude session_id observed", mapOf("claudeSessionId" to it))
                             emit(ClaudeCodeActivity.Started(sendStartedAt, it))
                         }
                         StreamJsonProtocol.extractThinkingPreview(line)?.let { thought ->
@@ -453,6 +531,17 @@ class ClaudeCodeProcessAdapter(
                         "stderr" to err.take(LOG_LINE_PREVIEW_MAX)
                     )
                 )
+                sessionLog?.event(
+                    "read timeout",
+                    mapOf(
+                        "timeoutMs" to timeoutMs,
+                        "linesRead" to linesRead,
+                        "sawTurnEnd" to sawTurnEnd,
+                        "assistantLen" to accumulated.length,
+                        "alive" to proc.isAlive,
+                        "stderr" to err
+                    )
+                )
                 return Result.Failure(ClaudeCodeError.Timeout)
             }
 
@@ -468,6 +557,17 @@ class ClaudeCodeProcessAdapter(
                         "exit" to runCatching { proc.exitValue() }.getOrDefault(-1),
                         "stderr" to err.take(LOG_LINE_PREVIEW_MAX),
                         "elapsedMs" to elapsedMs
+                    )
+                )
+                sessionLog?.event(
+                    "stdout closed without turn end",
+                    mapOf(
+                        "linesRead" to linesRead,
+                        "assistantLen" to accumulated.length,
+                        "alive" to proc.isAlive,
+                        "exit" to runCatching { proc.exitValue() }.getOrDefault(-1),
+                        "elapsedMs" to elapsedMs,
+                        "stderr" to err
                     )
                 )
                 return Result.Failure(
@@ -495,12 +595,17 @@ class ClaudeCodeProcessAdapter(
                                 "preview" to responseText.take(LOG_LINE_PREVIEW_MAX)
                             )
                         )
+                        sessionLog?.event(
+                            "decode failed — falling back to plain message",
+                            mapOf("assistantLen" to responseText.length)
+                        )
                         InteractionResponse(message = responseText)
                     } else {
                         MaxVibesLogger.warn(
                             TAG, "send: codec.decode returned null and accumulated text is blank",
                             data = mapOf("assistantLen" to responseText.length)
                         )
+                        sessionLog?.event("decode failed — no usable content")
                         return Result.Failure(
                             ClaudeCodeError.ParseFailed(
                                 "Claude Code returned no usable content (assistantLen=${responseText.length})"
@@ -518,6 +623,15 @@ class ClaudeCodeProcessAdapter(
                     "sessionId" to (observedSessionId ?: "null")
                 )
             )
+            sessionLog?.event(
+                "turn done",
+                mapOf(
+                    "elapsedMs" to elapsedMs,
+                    "linesRead" to linesRead,
+                    "assistantLen" to responseText.length,
+                    "claudeSessionId" to (observedSessionId ?: "null")
+                )
+            )
             return Result.Success(ClaudeCodeSendResult(response, observedSessionId))
         }
 
@@ -530,6 +644,14 @@ class ClaudeCodeProcessAdapter(
         if (proc != null) {
             MaxVibesLogger.info(
                 TAG, "shutdown",
+                mapOf(
+                    "reason" to reason,
+                    "alive" to proc.isAlive,
+                    "exit" to runCatching { if (!proc.isAlive) proc.exitValue() else null }.getOrNull()
+                )
+            )
+            sessionLog?.event(
+                "shutdown",
                 mapOf(
                     "reason" to reason,
                     "alive" to proc.isAlive,

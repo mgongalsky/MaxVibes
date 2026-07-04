@@ -24,6 +24,7 @@ import com.maxvibes.application.service.ContextAwareModifyService
 import com.maxvibes.application.service.ModifyCodeService
 import com.maxvibes.application.service.SpecificPromptService
 import com.maxvibes.plugin.claudecode.ClaudeCodeProcessAdapter
+import com.maxvibes.plugin.claudecode.ClaudeCodeSessionLogWriter
 import com.maxvibes.domain.model.code.CodeElement
 import com.maxvibes.domain.model.context.ContextRequest
 import com.maxvibes.domain.model.context.GatheredContext
@@ -150,6 +151,23 @@ class MaxVibesService(private val project: Project) : Disposable {
     // ========== Claude Code Service ==========
 
     /**
+     * Per-dialog verbose transcript writer for the Claude Code mode
+     * (`.maxvibes/logs/claude-code/<chatSessionId>.log`).
+     *
+     * Explicit [Lazy] so [dispose] can close it only if it was ever created —
+     * mirrors the [claudeCodeAdapterLazy] pattern. Exposed to the rest of the
+     * plugin as [claudeCodeSessionLog] (port type); the UI uses
+     * [ClaudeCodeSessionLogPort.logFilePath] to open the transcript in the editor.
+     */
+    private val claudeCodeSessionLogLazy: Lazy<ClaudeCodeSessionLogWriter> = lazy {
+        ClaudeCodeSessionLogWriter(project.basePath ?: System.getProperty("user.home"))
+    }
+
+    /** Per-dialog Claude Code transcript (see [ClaudeCodeSessionLogPort]). */
+    val claudeCodeSessionLog: ClaudeCodeSessionLogPort
+        get() = claudeCodeSessionLogLazy.value
+
+    /**
      * Explicit [Lazy] delegate so [dispose] can check [Lazy.isInitialized] and
      * avoid spawning the adapter just to immediately tear it down when the user
      * never used Claude Code mode in this project session.
@@ -163,7 +181,8 @@ class MaxVibesService(private val project: Project) : Disposable {
         ClaudeCodeProcessAdapter(
             settings = MaxVibesSettings.getInstance(),
             scope = serviceScope,
-            workingDirectory = project.basePath
+            workingDirectory = project.basePath,
+            sessionLog = claudeCodeSessionLog
         )
     }
 
@@ -191,7 +210,8 @@ class MaxVibesService(private val project: Project) : Disposable {
             logger = MaxVibesLogger,
             sessionManager = clipboardSessionManager,
             chatSessionRepository = chatSessionRepository,
-            activityTracker = claudeCodeActivityTracker
+            activityTracker = claudeCodeActivityTracker,
+            sessionLog = claudeCodeSessionLog
         )
     }
 
@@ -403,7 +423,9 @@ class MaxVibesService(private val project: Project) : Disposable {
      * Order of teardown matters:
      *  1. Shut down the Claude Code process (only if it was actually started)
      *     so the OS reclaims its PID before we drop our references.
-     *  2. Cancel the project-scoped coroutine scope so any in-flight background
+     *  2. Close the per-dialog transcript writer AFTER the adapter shutdown so
+     *     the final "shutdown" event still lands in the file.
+     *  3. Cancel the project-scoped coroutine scope so any in-flight background
      *     tasks (stderr collectors, etc.) terminate cleanly.
      *
      * Each step is wrapped in [runCatching] so a failure in one step does not
@@ -416,7 +438,12 @@ class MaxVibesService(private val project: Project) : Disposable {
             runCatching { claudeCodeAdapter.shutdown() }
                 .onFailure { LOG.warn("ClaudeCodeProcessAdapter.shutdown failed: ${it.message}", it) }
         }
-        // Step 2: cancel the coroutine scope.
+        // Step 2: close the transcript writer only if it was ever created (same guard idea).
+        if (claudeCodeSessionLogLazy.isInitialized()) {
+            runCatching { claudeCodeSessionLogLazy.value.close() }
+                .onFailure { LOG.warn("ClaudeCodeSessionLogWriter.close failed: ${it.message}", it) }
+        }
+        // Step 3: cancel the coroutine scope.
         runCatching { serviceScope.cancel() }
             .onFailure { LOG.warn("serviceScope.cancel failed: ${it.message}", it) }
         MaxVibesLogger.info("MaxVibesService", "disposed", mapOf("project" to project.name))

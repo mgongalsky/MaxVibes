@@ -117,6 +117,21 @@ class ChatPanel(
         foreground = JBColor(Color(0x2196F3), Color(0x64B5F6)); font = font.deriveFont(Font.BOLD, 11f); isVisible =
         false
     }
+
+    /**
+     * Clickable link to the per-dialog Claude Code transcript
+     * (`.maxvibes/logs/claude-code/<chatSessionId>.log`). Visible only in
+     * [InteractionMode.CLAUDE_CODE]; click opens the file in the editor
+     * via [openClaudeCodeLog].
+     */
+    private val ccLogLink = JBLabel("\uD83D\uDCC4 CC log").apply {
+        foreground = JBColor(Color(0x2196F3), Color(0x64B5F6))
+        font = font.deriveFont(11f)
+        cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+        toolTipText = "Open Claude Code dialog transcript (re-click to refresh)"
+        isVisible = false
+    }
+
     private val breadcrumbPanel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply { background = JBColor.background() }
 
     private val sessionsButton =
@@ -502,6 +517,7 @@ class ChatPanel(
                     background = JBColor.background()
                     add(modeComboBox.apply { preferredSize = Dimension(180, 24); font = font.deriveFont(11f) })
                     add(modeIndicator)
+                    add(ccLogLink)
                 }
                 val right = JPanel(FlowLayout(FlowLayout.RIGHT, 3, 0)).apply {
                     background = JBColor.background()
@@ -610,6 +626,11 @@ class ChatPanel(
 
         sendButton.addActionListener { sendMessage() }
         approveButton.addActionListener { messageController.approve() }
+        ccLogLink.addMouseListener(object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) {
+                openClaudeCodeLog()
+            }
+        })
         copyJsonButton.addActionListener { messageController.redoClipboardJson() }
         sessionsButton.addActionListener { onShowSessions() }
         promptSelectButton.addActionListener { showPromptSelectionPopup() }
@@ -759,6 +780,10 @@ class ChatPanel(
         // and must not survive a mode switch or a state transition out of those branches.
         forceActivateListener?.let { modeIndicator.removeMouseListener(it) }
         forceActivateListener = null
+
+        // The Claude Code transcript link is meaningful only in CLAUDE_CODE mode —
+        // one switch here covers every branch of the when below.
+        ccLogLink.isVisible = state.mode == InteractionMode.CLAUDE_CODE
 
         when (state.mode) {
             InteractionMode.API -> {
@@ -980,6 +1005,32 @@ class ChatPanel(
         val isFloating = toolWindow.type == ToolWindowType.FLOATING || toolWindow.type == ToolWindowType.WINDOWED
         windowedButton.icon = AllIcons.Actions.MoveToWindow
         windowedButton.toolTipText = if (isFloating) "Dock Tool Window" else "Floating Mode"
+    }
+
+    /**
+     * Opens the per-dialog Claude Code transcript for the active session in the editor.
+     *
+     * The transcript is appended by an external writer ([com.maxvibes.plugin.claudecode.ClaudeCodeSessionLogWriter]),
+     * so the VFS copy may be stale — `refresh(false, false)` before opening picks up
+     * everything written so far. While a send is in flight, re-clicking the link
+     * refreshes the editor content again.
+     */
+    private fun openClaudeCodeLog() {
+        val sessionId = chatTreeService.getActiveSession().id
+        val path = service.claudeCodeSessionLog.logFilePath(sessionId)
+        if (path == null) {
+            statusLabel.text = "No Claude Code log for this dialog yet \u2014 send a message first"
+            return
+        }
+        val vFile = com.intellij.openapi.vfs.LocalFileSystem.getInstance()
+            .refreshAndFindFileByIoFile(java.io.File(path))
+        if (vFile == null) {
+            statusLabel.text = "Log file not found: $path"
+            return
+        }
+        vFile.refresh(false, false)
+        com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project).openFile(vFile, true)
+        statusLabel.text = "Opened Claude Code log"
     }
 
     fun render(state: ChatPanelState) {

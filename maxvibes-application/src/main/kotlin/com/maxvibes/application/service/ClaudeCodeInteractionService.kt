@@ -6,6 +6,7 @@ import com.maxvibes.application.port.output.ChatSessionRepository
 import com.maxvibes.application.port.output.ClaudeCodeError
 import com.maxvibes.application.port.output.ClaudeCodePort
 import com.maxvibes.application.port.output.ClaudeCodeSendResult
+import com.maxvibes.application.port.output.ClaudeCodeSessionLogPort
 import com.maxvibes.application.port.output.CodeRepository
 import com.maxvibes.application.port.output.LoggerPort
 import com.maxvibes.application.port.output.NotificationPort
@@ -65,6 +66,9 @@ import com.maxvibes.shared.result.Result
  * @param sessionManager         clipboard-status state-machine manager (shared with clipboard mode).
  * @param chatSessionRepository  read/write access to persisted chat sessions.
  * @param activityTracker        in-memory store for transient live-activity events surfaced to UI.
+ * @param sessionLog             optional per-dialog verbose transcript ([ClaudeCodeSessionLogPort]).
+ *                               The service calls begin(sessionId) at every entry point so the
+ *                               transport's raw I/O lands in the right dialog file. Null disables.
  */
 class ClaudeCodeInteractionService(
     private val contextProvider: ProjectContextPort,
@@ -75,7 +79,8 @@ class ClaudeCodeInteractionService(
     private val logger: LoggerPort? = null,
     private val sessionManager: ClipboardSessionManager,
     private val chatSessionRepository: ChatSessionRepository,
-    private val activityTracker: ClaudeCodeActivityTracker
+    private val activityTracker: ClaudeCodeActivityTracker,
+    private val sessionLog: ClaudeCodeSessionLogPort? = null
 ) {
 
     /** In-memory workspace: messages, gathered files, prompts, project context. */
@@ -103,6 +108,17 @@ class ClaudeCodeInteractionService(
         globalContextFiles: List<String> = emptyList(),
         specificPromptContent: String? = null
     ): ClaudeCodeStepResult {
+        // Switch the per-dialog transcript to this session BEFORE any transport call —
+        // the adapter logs raw I/O without knowing the chat session id (see port contract).
+        sessionLog?.begin(sessionId)
+        sessionLog?.event(
+            "handleUserInput",
+            mapOf(
+                "status" to sessionManager.statusFor(sessionId).name,
+                "planOnly" to planOnly,
+                "inputLen" to userInput.length
+            )
+        )
         return when (sessionManager.statusFor(sessionId)) {
             ClipboardSessionStatus.IDLE,
             ClipboardSessionStatus.SESSION_ACTIVE ->
@@ -143,6 +159,8 @@ class ClaudeCodeInteractionService(
         ideErrors: String? = null,
         specificPromptContent: String? = null
     ): ClaudeCodeStepResult {
+        sessionLog?.begin(sessionId)
+        sessionLog?.event("approve", mapOf("status" to sessionManager.statusFor(sessionId).name))
         if (sessionManager.statusFor(sessionId) != ClipboardSessionStatus.AWAITING_APPROVE) {
             return error("Approve is only valid in AWAITING_APPROVE state")
         }
@@ -227,6 +245,7 @@ class ClaudeCodeInteractionService(
      */
     fun reset(sessionId: String) {
         log("Session reset (sessionId=$sessionId)")
+        sessionLog?.event("reset requested", mapOf("sessionId" to sessionId))
         sessionState = null
         sessionStateOwner = null
         // Defensive: clear any in-flight live activity for this session. Normally the
@@ -379,6 +398,10 @@ class ClaudeCodeInteractionService(
         if (ensureResult is Result.Failure && ensureResult.error is ClaudeCodeError.ResumeFailed) {
             val rf = ensureResult.error as ClaudeCodeError.ResumeFailed
             log("Resume failed for sessionId=${rf.sessionId}; falling back to fresh start.")
+            sessionLog?.event(
+                "resume failed — falling back to fresh start",
+                mapOf("claudeSessionId" to rf.sessionId)
+            )
             session = session.copy(
                 claudeCodeSessionId = null,
                 claudeCodeNeedsFullContext = true
@@ -411,6 +434,15 @@ class ClaudeCodeInteractionService(
         log(
             "Sending: tokens≈$totalTokens, freshFiles=${freshFiles.size}, " +
                     "history=${request.chatHistory.size}, fullCtx=$needsFull"
+        )
+        sessionLog?.event(
+            "sending request",
+            mapOf(
+                "tokensApprox" to totalTokens,
+                "freshFiles" to freshFiles.size,
+                "history" to request.chatHistory.size,
+                "fullContext" to needsFull
+            )
         )
         notificationPort.showProgress("Sending to Claude Code...", 0.5)
 
@@ -453,6 +485,10 @@ class ClaudeCodeInteractionService(
 
             is Result.Failure -> {
                 log("Send failed: ${sendResult.error} (after ${durationMs}ms)")
+                sessionLog?.event(
+                    "send failed",
+                    mapOf("error" to sendResult.error.toString(), "elapsedMs" to durationMs)
+                )
                 ClaudeCodeStepResult.TransportError(transportErrorMessage(sendResult.error))
             }
         }
@@ -479,6 +515,10 @@ class ClaudeCodeInteractionService(
         val hasViews = response.codeViewRequests.isNotEmpty()
         val hasMods = response.modifications.isNotEmpty()
         log("Processing response: hasViews=$hasViews, hasMods=$hasMods, msg=${response.message.take(60)}")
+        sessionLog?.event(
+            "response",
+            mapOf("hasViews" to hasViews, "hasMods" to hasMods, "msgLen" to response.message.length)
+        )
 
         // Append the assistant message to the dialog history (mirrors clipboard flow).
         if (response.message.isNotBlank()) {
