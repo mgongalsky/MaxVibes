@@ -450,6 +450,9 @@ class ClaudeCodeProcessAdapter(
             // 3. Read stdout until isTurnEnd.
             val timeoutMs = settings.claudeCodeReadTimeoutSec.toLong() * 1000
             val accumulated = StringBuilder()
+            // Full extended-thinking text accumulated over the turn (ThinkingBubble).
+            // Separate from the truncated live-activity previews emitted below.
+            val thinkingAccumulated = StringBuilder()
             var observedSessionId: String? = null
             var linesRead = 0
             var sawTurnEnd = false
@@ -487,6 +490,10 @@ class ClaudeCodeProcessAdapter(
                                 mapOf("len" to thought.length, "preview" to thought.take(LOG_LINE_PREVIEW_MAX))
                             )
                             emit(ClaudeCodeActivity.Thinking(sendStartedAt, "\uD83D\uDCAD $thought"))
+                        }
+                        StreamJsonProtocol.extractThinkingFull(line)?.let { full ->
+                            if (thinkingAccumulated.isNotEmpty()) thinkingAccumulated.append("\n\n")
+                            thinkingAccumulated.append(full)
                         }
                         StreamJsonProtocol.extractToolUseName(line)?.let { toolName ->
                             MaxVibesLogger.debug(TAG, "tool_use observed", mapOf("name" to toolName))
@@ -614,12 +621,16 @@ class ClaudeCodeProcessAdapter(
                     }
                 }
 
+            // Full chain-of-thought for the turn; null when no thinking blocks arrived.
+            val thinkingText = thinkingAccumulated.toString().takeIf { it.isNotBlank() }
+
             MaxVibesLogger.info(
                 TAG, "send: done",
                 mapOf(
                     "elapsedMs" to elapsedMs,
                     "linesRead" to linesRead,
                     "assistantLen" to responseText.length,
+                    "thinkingLen" to (thinkingText?.length ?: 0),
                     "sessionId" to (observedSessionId ?: "null")
                 )
             )
@@ -629,10 +640,11 @@ class ClaudeCodeProcessAdapter(
                     "elapsedMs" to elapsedMs,
                     "linesRead" to linesRead,
                     "assistantLen" to responseText.length,
+                    "thinkingLen" to (thinkingText?.length ?: 0),
                     "claudeSessionId" to (observedSessionId ?: "null")
                 )
             )
-            return Result.Success(ClaudeCodeSendResult(response, observedSessionId))
+            return Result.Success(ClaudeCodeSendResult(response, observedSessionId, thinkingText))
         }
 
     override fun shutdown() {

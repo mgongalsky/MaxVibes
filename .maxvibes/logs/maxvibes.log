@@ -8376,3 +8376,116 @@
 {"t":"2026-07-04T19:08:26.338","s":"s-6f69c454","lvl":"INFO","tag":"MaxVibesService","msg":"Plugin service initialized","data":{"project":"MaxVibes"}}
 {"t":"2026-07-04T19:08:26.631","s":"s-6f69c454","lvl":"INFO","tag":"ChatHistory","msg":"loadState","data":{"sessions":100,"activeId":"e5c15218-f53d-47b9-8377-f49d0209539e","contextFiles":1}}
 {"t":"2026-07-04T19:08:28.727","s":"s-6f69c454","lvl":"INFO","tag":"ToolWindow","msg":"init","data":{"project":"MaxVibes"}}
+{"t":"2026-07-04T19:15:11.900","s":"s-6f69c454","lvl":"INFO","tag":"ChatPanel","msg":"switchMode","data":{"from":"CLAUDE_CODE","to":"CLIPBOARD"}}
+{"t":"2026-07-04T19:15:15.389","s":"s-6f69c454","lvl":"INFO","tag":"Controller","msg":"sendMessage","data":{"mode":"CLIPBOARD","msgLen":345,"isPlanOnly":false,"hasTrace":false,"hasErrors":false,"addHistory":false,"specificPrompt":"null"}}
+{"t":"2026-07-04T19:15:15.439","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Starting clipboard session: planOnly=false, addHistory=false"}
+{"t":"2026-07-04T19:15:15.629","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Project: MaxVibes, files in tree: 268"}
+{"t":"2026-07-04T19:15:15.630","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Gathering 1 new files..."}
+{"t":"2026-07-04T19:15:15.633","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Gathered 1 files, total cached: 1"}
+{"t":"2026-07-04T19:15:15.712","s":"s-6f69c454","lvl":"DEBUG","tag":"Clipboard","msg":"copied request","data":{"currentMessage":"Давай подраскачаем наш режим с клод кодом. Нам бы надо знать","freshFiles":1,"planOnly":false}}
+{"t":"2026-07-04T19:15:15.714","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"JSON ready: copied to clipboard, ~6672 tokens"}
+{"t":"2026-07-04T19:15:15.719","s":"s-6f69c454","lvl":"INFO","tag":"Controller","msg":"clipboard waiting","data":{"phase":"CHAT","estimatedTokens":6672,"freshFiles":1}}
+{"t":"2026-07-04T19:17:16.658","s":"s-6f69c454","lvl":"INFO","tag":"Controller","msg":"sendMessage","data":{"mode":"CLIPBOARD","msgLen":2349,"isPlanOnly":false,"hasTrace":false,"hasErrors":false,"addHistory":false,"specificPrompt":"null"}}
+{"t":"2026-07-04T19:17:16.670","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Parsing pasted response (2349 chars)..."}
+{"t":"2026-07-04T19:17:16.683","s":"s-6f69c454","lvl":"DEBUG","tag":"Clipboard","msg":"parsed response","data":{"msg":"Принято — делаем максимальный verbose-лог для режима Claude ","files":0,"mods":0}}
+{"t":"2026-07-04T19:17:16.687","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Parsed: message=Принято — делаем максимальный verbose-лог для режи, requestedFiles=0, modifications=0, reasoning=none"}
+{"t":"2026-07-04T19:17:16.688","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Processing: hasFiles=true, hasMods=false, hasMessage=true"}
+{"t":"2026-07-04T19:17:16.688","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Gathering 5 new files..."}
+{"t":"2026-07-04T19:17:16.693","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Gathered 5 files, total cached: 6"}
+{"t":"2026-07-04T19:17:16.790","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Rendered SIGNATURES view for maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/claudecode/StreamJsonProtocol.kt (9081 chars)"}
+{"t":"2026-07-04T19:17:16.795","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Rendered SIGNATURES view for maxvibes-application/src/main/kotlin/com/maxvibes/application/service/ClaudeCodeActivityTracker.kt (2065 chars)"}
+{"t":"2026-07-04T19:17:16.796","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Rendered SIGNATURES view for maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/service/MaxVibesLogger.kt (7515 chars)"}
+{"t":"2026-07-04T19:17:16.839","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Rendered OUTLINE view for maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/ui/ChatPanel.kt (5521 chars)"}
+{"t":"2026-07-04T19:17:16.866","s":"s-6f69c454","lvl":"DEBUG","tag":"Clipboard","msg":"copied request","data":{"currentMessage":"Принято — делаем максимальный verbose-лог для режима Claude ","freshFiles":9,"planOnly":false}}
+{"t":"2026-07-04T19:17:16.866","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"JSON ready: copied to clipboard, ~24303 tokens"}
+{"t":"2026-07-04T19:17:16.867","s":"s-6f69c454","lvl":"INFO","tag":"Controller","msg":"clipboard waiting","data":{"phase":"CHAT","estimatedTokens":24303,"freshFiles":9}}
+{"t":"2026-07-04T19:27:56.043","s":"s-6f69c454","lvl":"INFO","tag":"Controller","msg":"sendMessage","data":{"mode":"CLIPBOARD","msgLen":82827,"isPlanOnly":false,"hasTrace":false,"hasErrors":false,"addHistory":false,"specificPrompt":"null"}}
+{"t":"2026-07-04T19:27:56.057","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Parsing pasted response (82827 chars)..."}
+{"t":"2026-07-04T19:27:56.073","s":"s-6f69c454","lvl":"DEBUG","tag":"Clipboard","msg":"parsed response","data":{"msg":"Ядро verbose-лога готово — порт, writer и полная проводка в ","files":0,"mods":4}}
+{"t":"2026-07-04T19:27:56.074","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Parsed: message=Ядро verbose-лога готово — порт, writer и полная п, requestedFiles=0, modifications=4, reasoning=none"}
+{"t":"2026-07-04T19:27:56.075","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Persisted 2 requestedViews into domain message for session 33e9c804-e975-4216-8bf2-72a89717a7e0"}
+{"t":"2026-07-04T19:27:56.075","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Processing: hasFiles=true, hasMods=true, hasMessage=true"}
+{"t":"2026-07-04T19:27:56.078","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Applying 4 modifications..."}
+{"t":"2026-07-04T19:27:57.396","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Modifications: 4 success, 0 failed"}
+{"t":"2026-07-04T19:27:57.400","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Gathering 2 new files..."}
+{"t":"2026-07-04T19:27:57.402","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Gathered 2 files, total cached: 8"}
+{"t":"2026-07-04T19:27:57.415","s":"s-6f69c454","lvl":"DEBUG","tag":"Clipboard","msg":"copied request","data":{"currentMessage":"Ядро verbose-лога готово — порт, writer и полная проводка в ","freshFiles":2,"planOnly":false}}
+{"t":"2026-07-04T19:27:57.415","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"JSON ready: copied to clipboard, ~18302 tokens"}
+{"t":"2026-07-04T19:27:57.782","s":"s-6f69c454","lvl":"INFO","tag":"Controller","msg":"clipboard waiting","data":{"phase":"CHAT","estimatedTokens":18302,"freshFiles":2}}
+{"t":"2026-07-04T19:59:23.610","s":"s-6f69c454","lvl":"INFO","tag":"Controller","msg":"sendMessage","data":{"mode":"CLIPBOARD","msgLen":79229,"isPlanOnly":false,"hasTrace":false,"hasErrors":false,"addHistory":false,"specificPrompt":"null"}}
+{"t":"2026-07-04T19:59:23.621","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Parsing pasted response (79229 chars)..."}
+{"t":"2026-07-04T19:59:23.632","s":"s-6f69c454","lvl":"DEBUG","tag":"Clipboard","msg":"parsed response","data":{"msg":"DI + UI готовы, фича закрыта end-to-end.\n\n1. MaxVibesService","files":0,"mods":2}}
+{"t":"2026-07-04T19:59:23.633","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Parsed: message=DI + UI готовы, фича закрыта end-to-end.\n\n1. MaxVi, requestedFiles=0, modifications=2, reasoning=none"}
+{"t":"2026-07-04T19:59:23.634","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Processing: hasFiles=false, hasMods=true, hasMessage=true"}
+{"t":"2026-07-04T19:59:23.634","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Applying 2 modifications..."}
+{"t":"2026-07-04T19:59:24.358","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Modifications: 2 success, 0 failed"}
+{"t":"2026-07-04T19:59:24.361","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Completed: mods=2 ok/0 fail."}
+{"t":"2026-07-04T19:59:24.519","s":"s-6f69c454","lvl":"INFO","tag":"Controller","msg":"clipboard completed","data":{"success":true,"mods":2,"failures":0,"outputTokens":19807,"hasCommitMsg":true}}
+{"t":"2026-07-04T19:59:24.558","s":"s-6f69c454","lvl":"INFO","tag":"ChatPanel","msg":"setCommitMessage: saved to VCS history (commit UI not open)","data":{"len":79}}
+{"t":"2026-07-04T20:05:55.475","s":"s-6f69c454","lvl":"INFO","tag":"Controller","msg":"sendMessage","data":{"mode":"CLIPBOARD","msgLen":96,"isPlanOnly":false,"hasTrace":false,"hasErrors":false,"addHistory":false,"specificPrompt":"null"}}
+{"t":"2026-07-04T20:05:55.492","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Continuing dialog: addHistory=false"}
+{"t":"2026-07-04T20:05:55.493","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"All requested files already gathered, re-sending existing"}
+{"t":"2026-07-04T20:05:55.496","s":"s-6f69c454","lvl":"DEBUG","tag":"Clipboard","msg":"copied request","data":{"currentMessage":"запустилось, но куда-то вообще пропал плагин, посмотри скрин","freshFiles":0,"planOnly":false}}
+{"t":"2026-07-04T20:05:55.496","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"JSON ready: copied to clipboard, ~0 tokens"}
+{"t":"2026-07-04T20:05:55.511","s":"s-6f69c454","lvl":"INFO","tag":"Controller","msg":"clipboard waiting","data":{"phase":"CHAT","estimatedTokens":0,"freshFiles":0}}
+{"t":"2026-07-04T20:09:40.102","s":"s-6f69c454","lvl":"INFO","tag":"Controller","msg":"sendMessage","data":{"mode":"CLIPBOARD","msgLen":2051,"isPlanOnly":false,"hasTrace":false,"hasErrors":false,"addHistory":false,"specificPrompt":"null"}}
+{"t":"2026-07-04T20:09:40.110","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Parsing pasted response (2051 chars)..."}
+{"t":"2026-07-04T20:09:40.113","s":"s-6f69c454","lvl":"DEBUG","tag":"Clipboard","msg":"parsed response","data":{"msg":"Смотрю скриншот: стрипы MaxVibes нет ни на одной стороне (сп","files":0,"mods":0}}
+{"t":"2026-07-04T20:09:40.114","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Parsed: message=Смотрю скриншот: стрипы MaxVibes нет ни на одной с, requestedFiles=0, modifications=0, reasoning=none"}
+{"t":"2026-07-04T20:09:40.115","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Persisted 4 requestedViews into domain message for session 33e9c804-e975-4216-8bf2-72a89717a7e0"}
+{"t":"2026-07-04T20:09:40.115","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Processing: hasFiles=true, hasMods=false, hasMessage=true"}
+{"t":"2026-07-04T20:09:40.116","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Gathering 4 new files..."}
+{"t":"2026-07-04T20:09:40.122","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Gathered 4 files, total cached: 12"}
+{"t":"2026-07-04T20:09:40.128","s":"s-6f69c454","lvl":"DEBUG","tag":"Clipboard","msg":"copied request","data":{"currentMessage":"Смотрю скриншот: стрипы MaxVibes нет ни на одной стороне (сп","freshFiles":4,"planOnly":false}}
+{"t":"2026-07-04T20:09:40.130","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"JSON ready: copied to clipboard, ~2582 tokens"}
+{"t":"2026-07-04T20:09:40.191","s":"s-6f69c454","lvl":"INFO","tag":"Controller","msg":"clipboard waiting","data":{"phase":"CHAT","estimatedTokens":2582,"freshFiles":4}}
+{"t":"2026-07-04T20:18:59.728","s":"s-6f69c454","lvl":"INFO","tag":"Controller","msg":"sendMessage","data":{"mode":"CLIPBOARD","msgLen":187,"isPlanOnly":false,"hasTrace":false,"hasErrors":false,"addHistory":false,"specificPrompt":"null"}}
+{"t":"2026-07-04T20:18:59.762","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Starting clipboard session: planOnly=false, addHistory=false"}
+{"t":"2026-07-04T20:18:59.963","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Project: MaxVibes, files in tree: 270"}
+{"t":"2026-07-04T20:18:59.963","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Gathering 1 new files..."}
+{"t":"2026-07-04T20:18:59.963","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Gathered 1 files, total cached: 1"}
+{"t":"2026-07-04T20:18:59.969","s":"s-6f69c454","lvl":"DEBUG","tag":"Clipboard","msg":"copied request","data":{"currentMessage":"Привет. у нас проблема с запуском плагина. его не видно (сам","freshFiles":1,"planOnly":false}}
+{"t":"2026-07-04T20:18:59.970","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"JSON ready: copied to clipboard, ~6658 tokens"}
+{"t":"2026-07-04T20:18:59.992","s":"s-6f69c454","lvl":"INFO","tag":"Controller","msg":"clipboard waiting","data":{"phase":"CHAT","estimatedTokens":6658,"freshFiles":1}}
+{"t":"2026-07-04T20:20:54.770","s":"s-6f69c454","lvl":"INFO","tag":"Controller","msg":"sendMessage","data":{"mode":"CLIPBOARD","msgLen":1435,"isPlanOnly":false,"hasTrace":false,"hasErrors":false,"addHistory":false,"specificPrompt":"null"}}
+{"t":"2026-07-04T20:20:54.807","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Parsing pasted response (1435 chars)..."}
+{"t":"2026-07-04T20:20:54.808","s":"s-6f69c454","lvl":"DEBUG","tag":"Clipboard","msg":"parsed response","data":{"msg":"Похоже, сломали именно при интеграции PyCharm: судя по дерев","files":0,"mods":0}}
+{"t":"2026-07-04T20:20:54.808","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Parsed: message=Похоже, сломали именно при интеграции PyCharm: суд, requestedFiles=0, modifications=0, reasoning=none"}
+{"t":"2026-07-04T20:20:54.809","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Processing: hasFiles=true, hasMods=false, hasMessage=true"}
+{"t":"2026-07-04T20:20:54.809","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Gathering 7 new files..."}
+{"t":"2026-07-04T20:20:54.812","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Gathered 7 files, total cached: 8"}
+{"t":"2026-07-04T20:20:54.818","s":"s-6f69c454","lvl":"DEBUG","tag":"Clipboard","msg":"copied request","data":{"currentMessage":"Похоже, сломали именно при интеграции PyCharm: судя по дерев","freshFiles":7,"planOnly":false}}
+{"t":"2026-07-04T20:20:54.819","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"JSON ready: copied to clipboard, ~2409 tokens"}
+{"t":"2026-07-04T20:20:54.827","s":"s-6f69c454","lvl":"INFO","tag":"Controller","msg":"clipboard waiting","data":{"phase":"CHAT","estimatedTokens":2409,"freshFiles":7}}
+{"t":"2026-07-04T20:23:09.912","s":"s-6f69c454","lvl":"INFO","tag":"Controller","msg":"sendMessage","data":{"mode":"CLIPBOARD","msgLen":1792,"isPlanOnly":false,"hasTrace":false,"hasErrors":false,"addHistory":false,"specificPrompt":"null"}}
+{"t":"2026-07-04T20:23:09.935","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Parsing pasted response (1792 chars)..."}
+{"t":"2026-07-04T20:23:09.936","s":"s-6f69c454","lvl":"DEBUG","tag":"Clipboard","msg":"parsed response","data":{"msg":"Дескрипторы в maxvibes-plugin в порядке: toolWindow объявлен","files":0,"mods":0}}
+{"t":"2026-07-04T20:23:09.937","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Parsed: message=Дескрипторы в maxvibes-plugin в порядке: toolWindo, requestedFiles=0, modifications=0, reasoning=none"}
+{"t":"2026-07-04T20:23:09.937","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Persisted 5 requestedViews into domain message for session b7605e62-7611-4c63-957c-205de11e3e11"}
+{"t":"2026-07-04T20:23:09.937","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Processing: hasFiles=true, hasMods=false, hasMessage=true"}
+{"t":"2026-07-04T20:23:09.937","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Gathering 5 new files..."}
+{"t":"2026-07-04T20:23:09.939","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Gathered 5 files, total cached: 13"}
+{"t":"2026-07-04T20:23:09.943","s":"s-6f69c454","lvl":"DEBUG","tag":"Clipboard","msg":"copied request","data":{"currentMessage":"Дескрипторы в maxvibes-plugin в порядке: toolWindow объявлен","freshFiles":5,"planOnly":false}}
+{"t":"2026-07-04T20:23:09.943","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"JSON ready: copied to clipboard, ~814 tokens"}
+{"t":"2026-07-04T20:23:09.960","s":"s-6f69c454","lvl":"INFO","tag":"Controller","msg":"clipboard waiting","data":{"phase":"CHAT","estimatedTokens":814,"freshFiles":5}}
+{"t":"2026-07-04T20:26:07.597","s":"s-6f69c454","lvl":"INFO","tag":"Controller","msg":"sendMessage","data":{"mode":"CLIPBOARD","msgLen":1720,"isPlanOnly":false,"hasTrace":false,"hasErrors":false,"addHistory":false,"specificPrompt":"null"}}
+{"t":"2026-07-04T20:26:07.625","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Parsing pasted response (1720 chars)..."}
+{"t":"2026-07-04T20:26:07.625","s":"s-6f69c454","lvl":"DEBUG","tag":"Clipboard","msg":"parsed response","data":{"msg":"Диагноз подтверждён: в maxvibes-adapter-psi-python/src/main/","files":0,"mods":0}}
+{"t":"2026-07-04T20:26:07.626","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Parsed: message=Диагноз подтверждён: в maxvibes-adapter-psi-python, requestedFiles=0, modifications=0, reasoning=none"}
+{"t":"2026-07-04T20:26:07.626","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Processing: hasFiles=false, hasMods=false, hasMessage=true"}
+{"t":"2026-07-04T20:26:07.627","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Completed: mods=0 ok/0 fail."}
+{"t":"2026-07-04T20:26:07.632","s":"s-6f69c454","lvl":"INFO","tag":"Controller","msg":"clipboard completed","data":{"success":true,"mods":0,"failures":0,"outputTokens":430,"hasCommitMsg":false}}
+{"t":"2026-07-04T20:37:40.298","s":"s-6f69c454","lvl":"INFO","tag":"Controller","msg":"sendMessage","data":{"mode":"CLIPBOARD","msgLen":369,"isPlanOnly":false,"hasTrace":false,"hasErrors":false,"addHistory":false,"specificPrompt":"null"}}
+{"t":"2026-07-04T20:37:40.333","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Continuing dialog: addHistory=false"}
+{"t":"2026-07-04T20:37:40.334","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"All requested files already gathered, re-sending existing"}
+{"t":"2026-07-04T20:37:40.336","s":"s-6f69c454","lvl":"DEBUG","tag":"Clipboard","msg":"copied request","data":{"currentMessage":"ок, спасибо заработало и я погонял плагин, даю тебе лог. хоч","freshFiles":0,"planOnly":false}}
+{"t":"2026-07-04T20:37:40.337","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"JSON ready: copied to clipboard, ~0 tokens"}
+{"t":"2026-07-04T20:37:40.361","s":"s-6f69c454","lvl":"INFO","tag":"Controller","msg":"clipboard waiting","data":{"phase":"CHAT","estimatedTokens":0,"freshFiles":0}}
+{"t":"2026-07-04T20:41:29.015","s":"s-6f69c454","lvl":"INFO","tag":"Controller","msg":"sendMessage","data":{"mode":"CLIPBOARD","msgLen":1920,"isPlanOnly":false,"hasTrace":false,"hasErrors":false,"addHistory":false,"specificPrompt":"null"}}
+{"t":"2026-07-04T20:41:29.050","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Parsing pasted response (1920 chars)..."}
+{"t":"2026-07-04T20:41:29.051","s":"s-6f69c454","lvl":"DEBUG","tag":"Clipboard","msg":"parsed response","data":{"msg":"Разобрал лог построчно.\n\n1. Логгер — полный. Все 5 stdout-со","files":0,"mods":0}}
+{"t":"2026-07-04T20:41:29.051","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Parsed: message=Разобрал лог построчно.\n\n1. Логгер — полный. Все 5, requestedFiles=0, modifications=0, reasoning=none"}
+{"t":"2026-07-04T20:41:29.052","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Processing: hasFiles=false, hasMods=false, hasMessage=true"}
+{"t":"2026-07-04T20:41:29.052","s":"s-6f69c454","lvl":"INFO","tag":"Clipboard","msg":"Completed: mods=0 ok/0 fail."}
+{"t":"2026-07-04T20:41:29.066","s":"s-6f69c454","lvl":"INFO","tag":"Controller","msg":"clipboard completed","data":{"success":true,"mods":0,"failures":0,"outputTokens":480,"hasCommitMsg":true}}
+{"t":"2026-07-04T20:41:29.106","s":"s-6f69c454","lvl":"INFO","tag":"ChatPanel","msg":"setCommitMessage: saved to VCS history (commit UI not open)","data":{"len":66}}

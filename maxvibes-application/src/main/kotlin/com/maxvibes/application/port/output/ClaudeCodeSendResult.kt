@@ -12,8 +12,14 @@ import com.maxvibes.domain.model.interaction.InteractionResponse
  *           and pass it to `--resume` after IDE restarts. May be null if
  *           the system/init event was not observed (e.g. on a resumed run
  *           where claude does not re-emit it — depends on CLI behaviour).
+ * @property thinkingText full extended-thinking text accumulated over this turn,
+ *           or null when the model emitted no thinking blocks. Multiple blocks
+ *           (one per assistant event between tool rounds) are joined with a blank
+ *           line. Presentation-only: it is never sent back to the model — the CLI
+ *           strips past thinking from context on subsequent turns anyway.
  */
 data class ClaudeCodeSendResult(
     val response: InteractionResponse,
-    val observedSessionId: String?
+    val observedSessionId: String?,
+    val thinkingText: String? = null
 )

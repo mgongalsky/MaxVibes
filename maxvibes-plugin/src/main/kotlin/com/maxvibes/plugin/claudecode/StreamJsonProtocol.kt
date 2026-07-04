@@ -162,6 +162,31 @@ internal object StreamJsonProtocol {
     }
 
     /**
+     * Returns the FULL text of all extended-thinking blocks in an `assistant` event,
+     * or null when the line is not an assistant event or carries no thinking.
+     *
+     * Differences from [extractThinkingPreview]: iterates ALL content blocks (a single
+     * event may carry several), preserves whitespace/newlines, applies no truncation.
+     * Used to persist the complete chain of thought into the chat message
+     * (ThinkingBubble feature); the preview stays as-is for the Live Activity contract.
+     * Never fed back to the model — the CLI strips past thinking from context anyway.
+     */
+    fun extractThinkingFull(line: String): String? {
+        val obj = parseLine(line) ?: return null
+        if (obj["type"]?.jsonPrimitive?.contentOrNull != "assistant") return null
+
+        val message = obj["message"]?.jsonObject ?: return null
+        val content = message["content"]?.jsonArray ?: return null
+
+        val parts = content.mapNotNull { element ->
+            val block = runCatching { element.jsonObject }.getOrNull() ?: return@mapNotNull null
+            if (block["type"]?.jsonPrimitive?.contentOrNull != "thinking") return@mapNotNull null
+            block["thinking"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+        }
+        return if (parts.isEmpty()) null else parts.joinToString("\n\n")
+    }
+
+    /**
      * Returns the tool name if the line is an `assistant` event containing a
      * `tool_use` content block, null otherwise. Surfaces brief progress updates
      * like "using Read" / "using Glob" in the live-activity bubble.
