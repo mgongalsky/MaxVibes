@@ -10,6 +10,10 @@ dependencies {
     implementation(project(":maxvibes-adapter-psi-python"))
     implementation(project(":maxvibes-shared"))
 
+
+    implementation("org.commonmark:commonmark:0.29.0")
+    implementation("org.commonmark:commonmark-ext-gfm-tables:0.29.0") // LLM любят таблицы
+
     // Use shadow JAR from adapter-llm
     implementation(project(path = ":maxvibes-adapter-llm"))
 

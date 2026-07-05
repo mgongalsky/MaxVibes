@@ -10,6 +10,7 @@ import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextArea
+import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
 import com.maxvibes.domain.model.code.CodeGranularity
 import com.maxvibes.domain.model.code.RequestedViewInfo
@@ -43,7 +44,12 @@ class ConversationPanel(
         horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
     }
 
-    private var lastContentArea: JBTextArea? = null
+    /**
+     * Appends a status icon to the visually last piece of message content.
+     * For the user bubble this edits the plain JBTextArea text; for assistant
+     * bubbles it re-renders the last markdown segment with the icon appended.
+     */
+    private var appendToLast: ((String) -> Unit)? = null
 
     init {
         background = JBColor.background()
@@ -51,7 +57,7 @@ class ConversationPanel(
     }
 
     fun clearMessages() {
-        messagesPanel.removeAll(); lastContentArea = null
+        messagesPanel.removeAll(); appendToLast = null
         messagesPanel.revalidate(); messagesPanel.repaint()
     }
 
@@ -82,14 +88,9 @@ class ConversationPanel(
     }
 
     fun appendIconToLastBubble(icon: String) {
-        val area = lastContentArea
         SwingUtilities.invokeLater {
-            if (area != null) {
-                val current = area.text.trimEnd()
-                area.text = "$current  $icon"
-            } else {
-                addSystemBubble(icon)
-            }
+            val append = appendToLast
+            if (append != null) append(icon) else addSystemBubble(icon)
             messagesPanel.revalidate(); messagesPanel.repaint()
         }
     }
@@ -154,7 +155,7 @@ class ConversationPanel(
     private fun userBubble(text: String): JPanel {
         val bg = JBColor(Color(0xEBF5FB), Color(0x1B2A3B))
         val area = contentArea(text, bg)
-        lastContentArea = area
+        appendToLast = { icon -> area.text = area.text.trimEnd() + "  " + icon }
         return bubble(bg, JBColor(Color(0x2E86C1), Color(0x5DADE2))).also { p ->
             p.add(roleLabel("\uD83D\uDC64 You", JBColor(Color(0x1A5276), Color(0x85C1E9))), BorderLayout.NORTH)
             p.add(area, BorderLayout.CENTER)
@@ -218,14 +219,15 @@ class ConversationPanel(
         for (seg in segments) {
             when (seg) {
                 is MessageSegment.Text -> {
-                    val formatted = formatTextSegment(seg.content)
-                    if (formatted.isNotBlank()) {
-                        val area = contentArea(formatted, bg)
-                        lastContentArea = area
-                        area.alignmentX = Component.LEFT_ALIGNMENT
-                        panel.add(area)
-                        panel.add(Box.createVerticalStrut(4))
+                    val pane = MarkdownRenderer.createPane(seg.content, onNavigateToPath)
+                    pane.alignmentX = Component.LEFT_ALIGNMENT
+                    var source = seg.content
+                    appendToLast = { icon ->
+                        source = source.trimEnd() + "  " + icon
+                        pane.text = MarkdownRenderer.toHtml(source)
                     }
+                    panel.add(pane)
+                    panel.add(Box.createVerticalStrut(4))
                 }
 
                 is MessageSegment.Code -> {
@@ -237,26 +239,6 @@ class ConversationPanel(
             }
         }
         return panel
-    }
-
-    private fun formatTextSegment(text: String): String {
-        return text.lines().joinToString("\n") { line ->
-            var l = line
-            val h3 = Regex("^###\\s+(.+)").find(l)
-            if (h3 != null) return@joinToString "  \u2500\u2500\u2500 ${h3.groupValues[1].trim()} \u2500\u2500\u2500"
-            val h2 = Regex("^##\\s+(.+)").find(l)
-            if (h2 != null) return@joinToString "\u2550\u2550 ${h2.groupValues[1].trim().uppercase()} \u2550\u2550"
-            val h1 = Regex("^#\\s+(.+)").find(l)
-            if (h1 != null) return@joinToString "\u2550\u2550\u2550 ${
-                h1.groupValues[1].trim().uppercase()
-            } \u2550\u2550\u2550"
-            if (l.trim().matches(Regex("^[-*_]{3,}$"))) return@joinToString "\u2500".repeat(40)
-            l = l.replace(Regex("^(\\s*)[-*]\\s+"), "$1\u2022 ")
-            l = l.replace(Regex("\\*{3}(.+?)\\*{3}")) { it.groupValues[1].uppercase() }
-            l = l.replace(Regex("\\*{2}(.+?)\\*{2}")) { it.groupValues[1].uppercase() }
-            l = l.replace(Regex("(?<![*])\\*([^*]+?)\\*(?![*])")) { it.groupValues[1] }
-            l
-        }
     }
 
     private fun collapsibleCodeBlock(lang: String, code: String): JPanel {
@@ -347,7 +329,7 @@ class ConversationPanel(
 
     private fun contentArea(text: String, bg: Color) = JBTextArea(text).apply {
         isEditable = false; lineWrap = true; wrapStyleWord = true
-        font = Font(Font.MONOSPACED, Font.PLAIN, 12); background = bg; border = null
+        font = JBFont.label(); background = bg; border = null
     }
 
     private fun systemBubble(text: String) = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {

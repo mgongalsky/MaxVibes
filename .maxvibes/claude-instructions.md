@@ -2,18 +2,18 @@ This project uses MaxVibes IDE plugin clipboard protocol for code modifications.
 
 When you receive a JSON message containing "_protocol", "systemInstruction", "task", "fileTree", or "files" fields — this is a MaxVibes protocol message from the IDE plugin. Follow these rules STRICTLY:
 
-1. RESPOND WITH ONLY A JSON OBJECT. Your entire response must be valid JSON — no markdown, no text before/after, no code blocks, no explanations outside the JSON.
+1. RESPOND WITH ONLY A JSON OBJECT. Your entire response must be valid JSON — no text before/after, no code fences around the JSON, no explanations outside the JSON. (Markdown belongs *inside* the "message" field — see section 7.)
 
 2. DO NOT use computer tools, bash, file creation, artifacts, or any other tools. ALL code must go inside the JSON response in the "modifications" array.
 
 3. Response format:
-{
-"message": "Your explanation or answer",
-"requestedFiles": ["path/to/file.kt"],
-"reasoning": "why you need those files",
-"commitMessage": "feat: optional git commit message",
-"modifications": [...]
-}
+   {
+   "message": "Your explanation or answer",
+   "requestedFiles": ["path/to/file.kt"],
+   "reasoning": "why you need those files",
+   "commitMessage": "feat: optional git commit message",
+   "modifications": [...]
+   }
 
 4. All fields are optional except "message" (always recommended):
 - "message" — your explanation or discussion
@@ -23,16 +23,28 @@ When you receive a JSON message containing "_protocol", "systemInstruction", "ta
 - "commitMessage" — optional Git commit message (see below)
 
 5. Plan-only mode:
-If the request contains `planOnly: true` or the user asks to discuss/plan — respond with a **text discussion only** in the "message" field. Do NOT include a "modifications" array. Talk through the approach, trade-offs, and implementation steps. This is for collaborative planning before writing code.
+   If the request contains `planOnly: true` or the user asks to discuss/plan — respond with a **text discussion only** in the "message" field. Do NOT include a "modifications" array. Talk through the approach, trade-offs, and implementation steps. This is for collaborative planning before writing code.
 
 6. Commit messages:
-You may include `"commitMessage"` with a concise English Git commit message (conventional commits preferred: `feat:`, `fix:`, `refactor:`, `chore:` etc.). The plugin automatically inserts it into the IDE commit dialog.
-Include `commitMessage` when:
+   You may include `"commitMessage"` with a concise English Git commit message (conventional commits preferred: `feat:`, `fix:`, `refactor:`, `chore:` etc.). The plugin automatically inserts it into the IDE commit dialog.
+   Include `commitMessage` when:
 - You made actual code modifications (modifications array is non-empty)
 - OR the user explicitly asks for a commit message
-Omit it for planning discussions or when no code changes were made.
+  Omit it for planning discussions or when no code changes were made.
 
-7. Modification types — PREFER element-level for existing files:
+7. Message formatting (Markdown):
+   The IDE renders the "message" field as Markdown. Format it for readability:
+- Use ## and ### headings to structure longer answers
+- Use bullet lists for enumerations and **bold** for key terms
+- Wrap identifiers, element paths and file paths in `backticks`
+- Use fenced code blocks with a language tag (```kotlin) for multi-line code snippets
+- File links are clickable and navigate in the IDE: [ChatPanel.kt](src/main/kotlin/com/maxvibes/plugin/ui/ChatPanel.kt). Element links work too: [validate()](file:src/main/kotlin/User.kt/class[User]/function[validate])
+- Keep paragraphs short (2–4 sentences)
+- Do not indent prose with 4+ spaces — indented text renders as a code block
+
+The "reasoning" field is displayed as plain text — do NOT use Markdown there.
+
+8. Modification types — PREFER element-level for existing files:
 
 | type             | When                          | path format                                              | content              | extra fields          |
 |------------------|-------------------------------|----------------------------------------------------------|----------------------|-----------------------|
@@ -44,11 +56,11 @@ Omit it for planning discussions or when no code changes were made.
 | CREATE_FILE      | New file                      | src/main/kotlin/.../File.kt                              | Full file            |                       |
 | REPLACE_FILE     | Rewrite entire file           | src/main/kotlin/.../File.kt                              | Full file            |                       |
 
-8. Element path format:
-file:src/main/kotlin/com/example/User.kt/class[User]/function[validate]
-Segments: class[Name], interface[Name], object[Name], function[Name], property[Name], companion_object, init, constructor[primary], enum_entry[Name]
+9. Element path format:
+   file:src/main/kotlin/com/example/User.kt/class[User]/function[validate]
+   Segments: class[Name], interface[Name], object[Name], function[Name], property[Name], companion_object, init, constructor[primary], enum_entry[Name]
 
-9. CREATE_ELEMENT positioning rules:
+10. CREATE_ELEMENT positioning rules:
 
 To add to end/start of a class — path points to the CLASS:
 {
@@ -70,7 +82,7 @@ To insert after/before a specific element — path points to THAT ELEMENT:
 
 NEVER use "anchor" field — it does not exist and will be silently ignored.
 
-10. Key rules for modifications:
+11. Key rules for modifications:
 - PREFER REPLACE_ELEMENT/CREATE_ELEMENT over REPLACE_FILE — this saves tokens significantly
 - Only use REPLACE_FILE when the majority of the file changes
 - Only use CREATE_FILE for genuinely new files
@@ -81,4 +93,4 @@ NEVER use "anchor" field — it does not exist and will be silently ignored.
 - "content" must be complete, compilable Kotlin code
 - The IDE applies changes automatically via PSI API
 
-11. For regular conversation (not MaxVibes protocol messages), respond normally as usual.
+12. For regular conversation (not MaxVibes protocol messages), respond normally as usual.
