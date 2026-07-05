@@ -1,5 +1,6 @@
 package com.maxvibes.plugin.service
 
+import com.intellij.lang.Language
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
@@ -8,7 +9,6 @@ import com.maxvibes.adapter.llm.LangChainLLMService
 import com.maxvibes.adapter.llm.LLMServiceFactory
 import com.maxvibes.adapter.llm.config.LLMProviderConfig
 import com.maxvibes.adapter.llm.config.LLMProviderType
-import com.maxvibes.adapter.psi.PsiCodeRepository
 import com.maxvibes.adapter.psi.context.IntellijIdeErrorsAdapter
 import com.maxvibes.adapter.psi.context.PsiProjectContextProvider
 import com.maxvibes.application.port.input.AnalyzeCodeUseCase
@@ -26,10 +26,16 @@ import com.maxvibes.application.service.SpecificPromptService
 import com.maxvibes.plugin.claudecode.ClaudeCodeProcessAdapter
 import com.maxvibes.plugin.claudecode.ClaudeCodeSessionLogWriter
 import com.maxvibes.domain.model.code.CodeElement
+import com.maxvibes.domain.model.code.CodeView
+import com.maxvibes.domain.model.code.CodeViewRequest
+import com.maxvibes.domain.model.code.ElementKind
+import com.maxvibes.domain.model.code.ElementPath
 import com.maxvibes.domain.model.context.ContextRequest
 import com.maxvibes.domain.model.context.GatheredContext
 import com.maxvibes.domain.model.context.ProjectContext
 import com.maxvibes.domain.model.modification.Modification
+import com.maxvibes.domain.model.modification.ModificationError
+import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.plugin.chat.ChatHistoryService
 import com.maxvibes.plugin.clipboard.ClipboardAdapter
 import com.maxvibes.plugin.settings.MaxVibesSettings
@@ -75,8 +81,45 @@ class MaxVibesService(private val project: Project) : Disposable {
 
     // ========== Ports ==========
 
+    /**
+     * Language-dispatched [CodeRepository]. See [createCodeRepository] for the
+     * dispatch rules and classloading constraints.
+     */
     val codeRepository: CodeRepository by lazy {
-        PsiCodeRepository(project)
+        createCodeRepository()
+    }
+
+    /**
+     * Runtime dispatch of the PSI adapter by available language support.
+     *
+     * The Kotlin and Python plugin dependencies are OPTIONAL (plugin.xml), so
+     * concrete repository classes must never be referenced from this
+     * always-loaded service. Construction is isolated in [KotlinAdapterProvider]
+     * and [PythonAdapterProvider]; each is touched only after the corresponding
+     * language is confirmed present via [Language.findLanguageByID] — otherwise
+     * class loading would fail with NoClassDefFoundError.
+     *
+     * Priority: Kotlin over Python — keeps existing IDEA behaviour intact when
+     * both plugins are installed. Known limitation: a mixed IDE (e.g. PyCharm
+     * with the Kotlin plugin installed) gets the Kotlin adapter; per-project
+     * detection is a possible follow-up (see docs/features/PyCharm/STEP_9_DI.md).
+     */
+    private fun createCodeRepository(): CodeRepository {
+        val kotlinAvailable = Language.findLanguageByID("kotlin") != null
+        val pythonAvailable = Language.findLanguageByID("Python") != null
+        MaxVibesLogger.info(
+            "Service",
+            "codeRepository dispatch",
+            mapOf("kotlin" to kotlinAvailable.toString(), "python" to pythonAvailable.toString())
+        )
+        return when {
+            kotlinAvailable -> KotlinAdapterProvider.createCodeRepository(project)
+            pythonAvailable -> PythonAdapterProvider.createCodeRepository(project)
+            else -> {
+                LOG.warn("No supported language plugin (Kotlin/Python) — code operations disabled")
+                UnsupportedLanguageCodeRepository()
+            }
+        }
     }
 
     val projectContextProvider: ProjectContextPort by lazy {
@@ -501,5 +544,56 @@ private class NotConfiguredLLMService : LLMService {
         codeElements: List<CodeElement>
     ): Result<AnalysisResponse, LLMError> {
         return Result.Failure(configError)
+    }
+}
+
+/**
+ * Fallback [CodeRepository] used when neither the Kotlin nor the Python plugin
+ * is available in the running IDE.
+ *
+ * Mirrors [NotConfiguredLLMService]: every operation fails fast with a clear,
+ * user-facing message instead of crashing with NoClassDefFoundError at
+ * adapter-construction time. Selected by [MaxVibesService.createCodeRepository].
+ */
+private class UnsupportedLanguageCodeRepository : CodeRepository {
+
+    private val message =
+        "No supported language plugin found (Kotlin or Python). MaxVibes code operations are unavailable in this IDE."
+
+    override suspend fun getFileContent(path: ElementPath): Result<String, CodeRepositoryError> {
+        return Result.Failure(CodeRepositoryError.ReadError(message))
+    }
+
+    override suspend fun getElement(path: ElementPath): Result<CodeElement, CodeRepositoryError> {
+        return Result.Failure(CodeRepositoryError.ReadError(message))
+    }
+
+    override suspend fun findElements(
+        basePath: ElementPath,
+        kinds: Set<ElementKind>?,
+        namePattern: Regex?
+    ): Result<List<CodeElement>, CodeRepositoryError> {
+        return Result.Failure(CodeRepositoryError.ReadError(message))
+    }
+
+    override suspend fun applyModification(modification: Modification): ModificationResult {
+        return ModificationResult.Failure(
+            modification = modification,
+            error = ModificationError.InvalidOperation(message)
+        )
+    }
+
+    override suspend fun applyModifications(modifications: List<Modification>): List<ModificationResult> {
+        return modifications.map { applyModification(it) }
+    }
+
+    override suspend fun exists(path: ElementPath): Boolean = false
+
+    override suspend fun validateSyntax(content: String): Result<Unit, CodeRepositoryError> {
+        return Result.Failure(CodeRepositoryError.ValidationError(message))
+    }
+
+    override suspend fun getCodeView(request: CodeViewRequest): CodeView {
+        error(message)
     }
 }

@@ -8,6 +8,7 @@ import com.jetbrains.python.psi.*
 import com.maxvibes.domain.model.code.ElementPath
 import com.maxvibes.domain.model.modification.*
 import com.maxvibes.shared.result.Result
+import com.jetbrains.python.codeInsight.imports.AddImportHelper
 
 class PyPsiModifier(
     private val project: Project,
@@ -51,6 +52,71 @@ class PyPsiModifier(
             ?: return@runWrite Result.Failure("Element not found: ${targetPath.value}")
         target.delete()
         Result.Success(Unit)
+    }
+
+    /**
+     * Adds an import to a Python file via [AddImportHelper].
+     *
+     * Convention for [importPath]:
+     * - contains a dot ("typing.List") -> `from typing import List`
+     * - single name ("os") -> `import os`
+     */
+    fun addImport(filePath: ElementPath, importPath: String): Result<Unit, String> = runWrite {
+        val file = navigator.findFile(filePath)
+            ?: return@runWrite Result.Failure("File not found: ${filePath.filePath}")
+        val dotIndex = importPath.lastIndexOf('.')
+        if (dotIndex > 0) {
+            AddImportHelper.addOrUpdateFromImportStatement(
+                file,
+                importPath.substring(0, dotIndex),
+                importPath.substring(dotIndex + 1),
+                null,
+                AddImportHelper.ImportPriority.THIRD_PARTY,
+                null
+            )
+        } else {
+            AddImportHelper.addImportStatement(
+                file,
+                importPath,
+                null,
+                AddImportHelper.ImportPriority.THIRD_PARTY,
+                null
+            )
+        }
+        Result.Success(Unit)
+    }
+
+    /**
+     * Removes an import matching [importPath] (FQN) from a Python file.
+     *
+     * Matches both plain imports (`import os.path`) and from-imports
+     * (`from typing import List` matches "typing.List"). If the statement
+     * has a single import element, the whole statement is removed.
+     */
+    fun removeImport(filePath: ElementPath, importPath: String): Result<Unit, String> = runWrite {
+        val file = navigator.findFile(filePath)
+            ?: return@runWrite Result.Failure("File not found: ${filePath.filePath}")
+        var removed = false
+        outer@ for (statement in file.statements.filterIsInstance<PyImportStatementBase>()) {
+            val elements = statement.importElements
+            for (importElement in elements) {
+                val fqn = when (statement) {
+                    is PyFromImportStatement -> {
+                        val source = statement.importSourceQName?.toString() ?: continue
+                        val name = importElement.importedQName?.toString() ?: continue
+                        "$source.$name"
+                    }
+
+                    else -> importElement.importedQName?.toString() ?: continue
+                }
+                if (fqn == importPath) {
+                    if (elements.size == 1) statement.delete() else importElement.delete()
+                    removed = true
+                    break@outer
+                }
+            }
+        }
+        if (removed) Result.Success(Unit) else Result.Failure("Import not found: $importPath")
     }
 
     private fun createMatchingElement(target: PsiElement, source: String): PsiElement = when (target) {

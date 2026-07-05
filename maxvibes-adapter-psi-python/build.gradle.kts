@@ -12,7 +12,8 @@ dependencies {
 
 intellij {
   version.set("2023.1.5")
-  type.set("PY")
+  type.set("PC")
+  plugins.set(listOf("PythonCore"))
   downloadSources.set(false)
   instrumentCode.set(false)
 }
