@@ -15,7 +15,6 @@ import com.maxvibes.application.port.input.ModifyCodeRequest
 import com.maxvibes.domain.model.code.ElementPath
 import com.maxvibes.plugin.service.MaxVibesService
 import kotlinx.coroutines.runBlocking
-import org.jetbrains.kotlin.psi.KtFile
 
 class ModifyCodeAction : AnAction() {
 
@@ -27,10 +26,10 @@ class ModifyCodeAction : AnAction() {
         val project = e.project ?: return
         val psiFile = e.getData(CommonDataKeys.PSI_FILE) ?: return
 
-        if (psiFile !is KtFile) {
+        if (!SupportedLanguages.isSupported(psiFile)) {
             Messages.showWarningDialog(
                 project,
-                "MaxVibes currently supports only Kotlin files",
+                "MaxVibes supports Kotlin and Python files",
                 "MaxVibes"
             )
             return
@@ -85,6 +84,6 @@ class ModifyCodeAction : AnAction() {
         val psiFile = runReadAction {
             e.getData(CommonDataKeys.PSI_FILE)
         }
-        e.presentation.isEnabledAndVisible = psiFile is KtFile
+        e.presentation.isEnabledAndVisible = SupportedLanguages.isSupported(psiFile)
     }
 }
