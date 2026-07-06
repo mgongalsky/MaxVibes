@@ -41,7 +41,10 @@ data class ClipboardRequest(
     val specificPrompt: String? = null,
 
     /** Результаты shell-команд предыдущего хода (уже отформатированные для LLM). */
-    val commandResults: String? = null
+    val commandResults: String? = null,
+
+    /** Attached images (screenshots) — one-shot, sent with this message only. Claude Code transport only. */
+    val attachedImages: List<AttachedImage> = emptyList()
 )
 
 data class InteractionHistoryEntry(
@@ -97,4 +100,15 @@ data class InteractionCommand(
     val command: String,
     val reason: String = "",
     val timeoutSec: Int = 120
+)
+
+/**
+ * An image attached to a user message. Travels as an Anthropic image content block
+ * next to the protocol JSON — never inside it.
+ */
+data class AttachedImage(
+    /** MIME type: image/png or image/jpeg. */
+    val mediaType: String,
+    /** Base64 payload without the data: prefix. */
+    val base64Data: String
 )

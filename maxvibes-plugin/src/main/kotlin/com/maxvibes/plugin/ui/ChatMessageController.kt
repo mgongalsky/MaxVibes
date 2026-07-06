@@ -23,6 +23,7 @@ import kotlinx.coroutines.runBlocking
 import com.maxvibes.shared.result.Result
 import com.maxvibes.adapter.llm.dto.toChatMessageDTO
 import com.maxvibes.domain.model.interaction.InteractionMode
+import com.maxvibes.domain.model.interaction.AttachedImage
 import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 import com.maxvibes.domain.model.modification.AppliedModInfo
 import com.maxvibes.domain.model.modification.toCategory
@@ -39,7 +40,9 @@ interface ChatPanelCallbacks {
     fun registerElementPaths(modifications: List<ModificationResult>)
     fun formatMarkdown(text: String): String
     fun updateTokenDisplay()
-    fun addUserMessageBubble(text: String)
+
+    /** Adds a user message bubble, optionally with attached image thumbnails. */
+    fun addUserMessageBubble(text: String, images: List<AttachedImage> = emptyList())
     fun addAssistantMessageBubble(
         text: String,
         tokenInfo: String?,
@@ -83,6 +86,9 @@ interface ChatPanelCallbacks {
 
     /** Renders a Run all / Decline all bar above a multi-command batch. */
     fun addCommandBatchBar(count: Int, onRunAll: () -> Unit, onDeclineAll: () -> Unit): CommandBatchBarView
+
+    /** Rebuilds the attached-images preview strip (empty list hides it). */
+    fun onImagesChanged(images: List<AttachedImage>)
 }
 
 /**
@@ -116,6 +122,9 @@ class ChatMessageController(
         private set
     var attachedErrors: String? = null
         private set
+
+    /** Attached images (Claude Code mode only) — one-shot, cleared after send. */
+    private val attachedImages = mutableListOf<AttachedImage>()
 
     companion object {
         private const val MAX_AUTO_RETRIES = 1
@@ -300,6 +309,9 @@ class ChatMessageController(
         val session = chatTreeService.getActiveSession()
         val trace = attachedTrace
         val errs = attachedErrors
+        if (attachedImages.isNotEmpty()) {
+            callbacks.appendToChat("⚠️ ${attachedImages.size} attached image(s) dropped — attach them to a regular message, not to Approve")
+        }
         clearAttachmentsAfterSend()
         MaxVibesLogger.info(
             "Controller", "approve", mapOf(
@@ -1147,6 +1159,30 @@ Check:
         callbacks.onAttachmentsChanged(attachedTrace, attachedErrors)
     }
 
+    /** Attaches an image; enforces the per-message cap. Returns false when the cap is hit. */
+    fun attachImage(image: AttachedImage): Boolean {
+        if (attachedImages.size >= ImageAttachments.MAX_IMAGES) {
+            callbacks.setStatus("🖼 Max ${ImageAttachments.MAX_IMAGES} images per message")
+            return false
+        }
+        attachedImages.add(image)
+        callbacks.onImagesChanged(attachedImages.toList())
+        callbacks.setStatus("🖼 Image attached (${attachedImages.size})")
+        return true
+    }
+
+    fun clearImages() {
+        attachedImages.clear()
+        callbacks.onImagesChanged(emptyList())
+    }
+
+    fun removeImage(index: Int) {
+        if (index in attachedImages.indices) {
+            attachedImages.removeAt(index)
+            callbacks.onImagesChanged(attachedImages.toList())
+        }
+    }
+
     fun fetchIdeErrors() {
         callbacks.setStatus("Fetching IDE errors...")
         object : Task.Backgroundable(project, "Fetching IDE errors", false) {
@@ -1177,7 +1213,9 @@ Check:
     fun clearAttachmentsAfterSend() {
         attachedTrace = null
         attachedErrors = null
+        attachedImages.clear()
         callbacks.onAttachmentsChanged(null, null)
+        callbacks.onImagesChanged(emptyList())
     }
 
     fun createNewSession() {
@@ -1228,6 +1266,7 @@ Check:
     ) {
         val trace = attachedTrace
         val errs = attachedErrors
+        val imgs = attachedImages.toList()
         clearAttachmentsAfterSend()
         MaxVibesLogger.info(
             "Controller", "sendMessage", mapOf(
@@ -1236,10 +1275,14 @@ Check:
                 "isPlanOnly" to isPlanOnly,
                 "hasTrace" to (trace != null),
                 "hasErrors" to (errs != null),
+                "images" to imgs.size,
                 "addHistory" to addHistory,
                 "specificPrompt" to (selectedSpecificPromptName ?: "null")
             )
         )
+        if (imgs.isNotEmpty() && mode != InteractionMode.CLAUDE_CODE) {
+            callbacks.appendToChat("⚠️ ${imgs.size} image(s) dropped — images are only sent in Claude Code mode")
+        }
         when (mode) {
             InteractionMode.API -> dispatchApiMessage(userInput, trace, errs, isPlanOnly, isDryRun)
             InteractionMode.CLIPBOARD -> dispatchClipboardMessage(
@@ -1257,7 +1300,8 @@ Check:
                 trace,
                 errs,
                 isPlanOnly,
-                selectedSpecificPromptName
+                selectedSpecificPromptName,
+                images = imgs
             )
         }
     }
@@ -1380,7 +1424,8 @@ Check:
         trace: String?,
         errs: String?,
         isPlanOnly: Boolean,
-        selectedSpecificPromptName: String? = null
+        selectedSpecificPromptName: String? = null,
+        images: List<AttachedImage> = emptyList()
     ) {
         val cs = service.claudeCodeService
         var session = chatTreeService.getActiveSession()
@@ -1396,9 +1441,10 @@ Check:
             if (!trace.isNullOrBlank()) append("\n[trace: ${trace.lines().size} lines]")
             if (!errs.isNullOrBlank()) append("\n[attached ide errors]")
             if (isPlanOnly) append("\n[plan-only]")
+            if (images.isNotEmpty()) append("\n[🖼 ${images.size} image(s)]")
         }
         session = chatTreeService.addMessage(session.id, MessageRole.USER, fullMsg)
-        callbacks.addUserMessageBubble(userInput)
+        callbacks.addUserMessageBubble(userInput, images)
 
         callbacks.setInputEnabled(false)
         callbacks.setStatus("Claude Code: sending...")
@@ -1413,7 +1459,8 @@ Check:
                 planOnly = isPlanOnly,
                 ideErrors = errs,
                 globalContextFiles = globalContextFiles,
-                specificPromptContent = specificPromptContent
+                specificPromptContent = specificPromptContent,
+                attachedImages = images
             )
         }
     }

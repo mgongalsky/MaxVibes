@@ -3,6 +3,10 @@ package com.maxvibes.plugin.ui
 import com.intellij.icons.AllIcons
 import com.intellij.ide.DataManager
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.actionSystem.ActionManager
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.IdeActions
+import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.util.Disposer
@@ -19,6 +23,7 @@ import com.maxvibes.domain.model.chat.ChatMessage
 import com.maxvibes.domain.model.chat.ChatSession
 import com.maxvibes.domain.model.chat.MessageRole
 import com.maxvibes.domain.model.code.ElementPath
+import com.maxvibes.domain.model.interaction.AttachedImage
 import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 import com.maxvibes.domain.model.interaction.InteractionMode
 import com.maxvibes.domain.model.modification.Modification
@@ -106,6 +111,10 @@ class ChatPanel(
         toolTipText = "Remove attached trace"; font = font.deriveFont(9f); preferredSize =
         Dimension(20, 20); isVisible = false
     }
+    private val attachmentsPanel = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
+        background = JBColor.background()
+        isVisible = false
+    }
 
     private val statusLabel = JBLabel("Ready").apply { foreground = JBColor.GRAY }
     private val tokenLabel = JBLabel("").apply {
@@ -152,7 +161,7 @@ class ChatPanel(
     }
 
     /** Single dropdown button showing the active specific prompt name. */
-    private val promptNameLabel = JBLabel("") // unused placeholder — kept for binary compat
+    private val promptNameLabel = JBLabel("") // unused placeholder \u2014 kept for binary compat
 
     /** Button to create a new specific prompt file. */
     private val newPromptButton = JButton("+").apply {
@@ -202,7 +211,7 @@ class ChatPanel(
 
     /**
      * Lazy reference to the per-project activity tracker. Resolved on first touch
-     * (via [buildState] or the listener) — not eagerly in init{}, because
+     * (via [buildState] or the listener) \u2014 not eagerly in init{}, because
      * [MaxVibesService] initialisation order is sensitive.
      */
     private val activityTracker: ClaudeCodeActivityTracker by lazy { service.claudeCodeActivityTracker }
@@ -218,7 +227,7 @@ class ChatPanel(
     }
 
     /**
-     * 200ms poll timer — re-renders during active activity so the elapsed-time counter
+     * 200ms poll timer \u2014 re-renders during active activity so the elapsed-time counter
      * in [liveActivityBubble] ticks even when no fresh events arrive. Started by [render]
      * when liveActivity transitions to non-null, stopped when it returns to null.
      */
@@ -261,7 +270,7 @@ class ChatPanel(
         modeManager.syncFromSettings()
         syncComboBoxToMode()
         activityTracker.addListener(activityListener)
-        // Tie our teardown to the tool window's lifetime — when the tool window
+        // Tie our teardown to the tool window's lifetime \u2014 when the tool window
         // closes, IntelliJ disposes its children, which triggers our dispose().
         Disposer.register(toolWindow.disposable, this)
     }
@@ -278,8 +287,8 @@ class ChatPanel(
         conversationPanel.addAssistantBubble(formatMarkdown(text))
     }
 
-    override fun addUserMessageBubble(text: String) {
-        conversationPanel.addUserBubble(text)
+    override fun addUserMessageBubble(text: String, images: List<AttachedImage>) {
+        conversationPanel.addUserBubble(text, images)
     }
 
     override fun addAssistantMessageBubble(
@@ -564,6 +573,7 @@ class ChatPanel(
             background = JBColor.background(); border = JBUI.Borders.empty(2, 8, 0, 8)
             add(traceIndicator); add(clearTraceButton)
             add(errorsIndicator); add(clearErrorsButton)
+            add(attachmentsPanel)
             isVisible = false
         }
 
@@ -616,6 +626,12 @@ class ChatPanel(
         add(JPanel(BorderLayout()).apply {
             add(inputPanel, BorderLayout.CENTER); add(statusBar, BorderLayout.SOUTH)
         }, BorderLayout.SOUTH)
+    }
+
+    /** Paste handler: a clipboard image becomes an attachment, anything else pastes as text. */
+    private fun pasteImageOrText() {
+        val img = ImageAttachments.fromClipboard()
+        if (img != null) messageController.attachImage(img) else inputArea.paste()
     }
 
     private fun setupListeners() {
@@ -740,6 +756,24 @@ class ChatPanel(
                 }
             }
         })
+
+        // IntelliJ's action system consumes Ctrl+V ($Paste via CutCopyPasteSupport for
+        // Swing text components) BEFORE Swing InputMap bindings, so the interception
+        // must be a component-registered action \u2014 those take precedence in the dispatcher.
+        val pasteOverride = object : DumbAwareAction() {
+            override fun actionPerformed(e: AnActionEvent) = pasteImageOrText()
+        }
+        pasteOverride.registerCustomShortcutSet(
+            ActionManager.getInstance().getAction(IdeActions.ACTION_PASTE).shortcutSet,
+            inputArea
+        )
+        // Belt and suspenders: Swing-level bindings to the same handler for focus states
+        // where the event does reach the component directly.
+        inputArea.actionMap.put("maxvibes-paste", object : javax.swing.AbstractAction() {
+            override fun actionPerformed(e: java.awt.event.ActionEvent) = pasteImageOrText()
+        })
+        inputArea.inputMap.put(javax.swing.KeyStroke.getKeyStroke("ctrl V"), "maxvibes-paste")
+        inputArea.inputMap.put(javax.swing.KeyStroke.getKeyStroke("shift INSERT"), "maxvibes-paste")
     }
 
     private fun sendMessage() {
@@ -780,16 +814,16 @@ class ChatPanel(
      * allowing the user to toggle between the two states manually.
      *
      * The [forceActivateListener] is removed at the top of every call so it never accumulates
-     * across renders or leaks across mode switches (e.g. CLIPBOARD → CLAUDE_CODE).
+     * across renders or leaks across mode switches (e.g. CLIPBOARD \u2192 CLAUDE_CODE).
      */
     private fun updateModeUI(state: ChatPanelState) {
-        // Always tear down any previously attached force-activate listener BEFORE the when —
+        // Always tear down any previously attached force-activate listener BEFORE the when \u2014
         // the listener is only meaningful in CLIPBOARD's AWAITING_PASTE / SESSION_ACTIVE branches
         // and must not survive a mode switch or a state transition out of those branches.
         forceActivateListener?.let { modeIndicator.removeMouseListener(it) }
         forceActivateListener = null
 
-        // The Claude Code transcript link is meaningful only in CLAUDE_CODE mode —
+        // The Claude Code transcript link is meaningful only in CLAUDE_CODE mode \u2014
         // one switch here covers every branch of the when below.
         ccLogLink.isVisible = state.mode == InteractionMode.CLAUDE_CODE
 
@@ -913,7 +947,7 @@ class ChatPanel(
             errorsIndicator.text = "\uD83D\uDC1E Errors: $count"
         }
 
-        val showBar = hasTrace || hasErrs
+        val showBar = hasTrace || hasErrs || attachmentsPanel.isVisible
         val bar = traceIndicator.parent
         bar?.isVisible = showBar
         bar?.revalidate(); bar?.repaint()
@@ -1019,7 +1053,7 @@ class ChatPanel(
      * Opens the per-dialog Claude Code transcript for the active session in the editor.
      *
      * The transcript is appended by an external writer ([com.maxvibes.plugin.claudecode.ClaudeCodeSessionLogWriter]),
-     * so the VFS copy may be stale — `refresh(false, false)` before opening picks up
+     * so the VFS copy may be stale \u2014 `refresh(false, false)` before opening picks up
      * everything written so far. While a send is in flight, re-clicking the link
      * refreshes the editor content again.
      */
@@ -1198,7 +1232,7 @@ class ChatPanel(
         val mode = modeManager.currentMode
         val approveVisible = mode == InteractionMode.CLAUDE_CODE &&
                 session.clipboardStatus == ClipboardSessionStatus.AWAITING_APPROVE
-        // currentFor returns null in non-Claude-Code modes and when no send is in flight —
+        // currentFor returns null in non-Claude-Code modes and when no send is in flight \u2014
         // the bubble stays hidden automatically in those cases.
         val liveActivity = activityTracker.currentFor(session.id)
         return ChatPanelState(
@@ -1221,6 +1255,65 @@ class ChatPanel(
 
     override fun onAttachmentsChanged(trace: String?, errors: String?) {
         render(buildState())
+    }
+
+    private fun createAttachmentThumbnail(image: AttachedImage, index: Int): JComponent {
+        val clearListener = object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) = messageController.clearImages()
+        }
+
+        val previewIcon = runCatching {
+            val bytes = java.util.Base64.getDecoder().decode(image.base64Data)
+            val buffered = javax.imageio.ImageIO.read(java.io.ByteArrayInputStream(bytes)) ?: return@runCatching null
+            val maxSize = 40
+            val scale = minOf(
+                maxSize.toDouble() / buffered.width.toDouble(),
+                maxSize.toDouble() / buffered.height.toDouble(),
+                1.0
+            )
+            val width = maxOf(1, (buffered.width * scale).toInt())
+            val height = maxOf(1, (buffered.height * scale).toInt())
+            ImageIcon(buffered.getScaledInstance(width, height, Image.SCALE_SMOOTH))
+        }.getOrNull()
+
+        return JPanel(FlowLayout(FlowLayout.LEFT, 3, 0)).apply {
+            background = JBColor.background()
+            border = JBUI.Borders.compound(
+                JBUI.Borders.customLine(JBColor.border(), 1),
+                JBUI.Borders.empty(2, 4)
+            )
+            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            toolTipText = "Attached image ${index + 1} — click to remove"
+
+            val previewLabel = if (previewIcon != null) JBLabel(previewIcon) else JBLabel("\uD83D\uDDBC")
+            val indexLabel = JBLabel("#${index + 1}").apply {
+                foreground = JBColor.GRAY
+                font = font.deriveFont(10f)
+            }
+
+            add(previewLabel)
+            add(indexLabel)
+            addMouseListener(clearListener)
+            previewLabel.addMouseListener(clearListener)
+            indexLabel.addMouseListener(clearListener)
+        }
+    }
+
+    override fun onImagesChanged(images: List<AttachedImage>) {
+        attachmentsPanel.removeAll()
+        images.forEachIndexed { index, image ->
+            attachmentsPanel.add(createAttachmentThumbnail(image, index))
+        }
+
+        val hasImages = images.isNotEmpty()
+        attachmentsPanel.isVisible = hasImages
+
+        val bar = attachmentsPanel.parent
+        bar?.isVisible = hasImages || traceIndicator.isVisible || errorsIndicator.isVisible
+        attachmentsPanel.revalidate()
+        attachmentsPanel.repaint()
+        bar?.revalidate()
+        bar?.repaint()
     }
 
     override fun onError(message: String) {

@@ -4,6 +4,7 @@ import com.maxvibes.application.port.output.ChatRole
 import com.maxvibes.domain.model.interaction.InteractionHistoryEntry
 import com.maxvibes.domain.model.interaction.InteractionPhase
 import com.maxvibes.domain.model.interaction.ClipboardRequest
+import com.maxvibes.domain.model.interaction.AttachedImage
 
 /**
  * Pure builder for [ClipboardRequest].
@@ -38,7 +39,8 @@ internal object InteractionRequestBuilder {
         attachedContext: String? = null,
         specificPromptContent: String? = null,
         omitSystemInstruction: Boolean = false,
-        commandResults: String? = null
+        commandResults: String? = null,
+        attachedImages: List<AttachedImage> = emptyList()
     ): ClipboardRequest {
         // Minimal-mode: LLM already has full context in its chat window — send only the delta.
         val isMinimal = !isFirstMessage && !addHistory
@@ -95,6 +97,9 @@ internal object InteractionRequestBuilder {
             // commandResults: one-shot outcomes of the previous turn's commands —
             // always forwarded, even in minimal mode (they ARE the payload of this turn).
             commandResults = commandResults,
+            // attachedImages: one-shot payload, forwarded even in minimal mode — the transport
+            // turns them into image content blocks next to the protocol JSON.
+            attachedImages = attachedImages,
             planOnly = if (isMinimal) false else state.planOnly,
             // specificPromptContent is passed through unconditionally — even in minimal mode.
             specificPrompt = specificPromptContent

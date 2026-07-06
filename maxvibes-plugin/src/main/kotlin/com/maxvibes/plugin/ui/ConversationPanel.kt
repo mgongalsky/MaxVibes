@@ -22,6 +22,7 @@ import java.awt.*
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.*
+import com.maxvibes.domain.model.interaction.AttachedImage
 
 sealed class MessageSegment {
     data class Text(val content: String) : MessageSegment()
@@ -79,7 +80,36 @@ class ConversationPanel(
         messagesPanel.revalidate(); messagesPanel.repaint()
     }
 
-    fun addUserBubble(text: String) = addComp(userBubble(text))
+    fun addUserBubble(text: String, images: List<AttachedImage> = emptyList()) {
+        if (images.isEmpty()) {
+            addComp(userBubble(text)); return
+        }
+        val bg = JBColor(Color(0xEBF5FB), Color(0x1B2A3B))
+        val area = contentArea(text, bg)
+        appendToLast = { icon -> area.text = area.text.trimEnd() + "  " + icon }
+        val thumbs = JPanel(FlowLayout(FlowLayout.LEFT, 6, 4)).apply {
+            background = bg
+            images.forEach { img ->
+                add(JBLabel(ImageAttachments.thumbnail(img, 280, 180) ?: javax.swing.ImageIcon()).apply {
+                    cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+                    toolTipText = "Click to open full size"
+                    addMouseListener(object : MouseAdapter() {
+                        override fun mouseClicked(e: MouseEvent) = ImageAttachments.openInViewer(project, img)
+                    })
+                })
+            }
+        }
+        addComp(bubble(bg, JBColor(Color(0x2E86C1), Color(0x5DADE2))).also { p ->
+            p.add(roleLabel("\uD83D\uDC64 You", JBColor(Color(0x1A5276), Color(0x85C1E9))), BorderLayout.NORTH)
+            p.add(JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                background = bg
+                area.alignmentX = Component.LEFT_ALIGNMENT
+                thumbs.alignmentX = Component.LEFT_ALIGNMENT
+                add(area); add(thumbs)
+            }, BorderLayout.CENTER)
+        })
+    }
 
     fun addAssistantBubble(
         text: String,

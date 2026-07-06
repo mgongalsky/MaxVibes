@@ -30,6 +30,7 @@ import com.maxvibes.domain.model.modification.InsertPosition
 import com.maxvibes.domain.model.modification.Modification
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.shared.result.Result
+import com.maxvibes.domain.model.interaction.AttachedImage
 
 /**
  * Application-layer service that orchestrates the Claude Code dialog mode.
@@ -136,7 +137,8 @@ class ClaudeCodeInteractionService(
         planOnly: Boolean = false,
         ideErrors: String? = null,
         globalContextFiles: List<String> = emptyList(),
-        specificPromptContent: String? = null
+        specificPromptContent: String? = null,
+        attachedImages: List<AttachedImage> = emptyList()
     ): ClaudeCodeStepResult {
         // Switch the per-dialog transcript to this session BEFORE any transport call —
         // the adapter logs raw I/O without knowing the chat session id (see port contract).
@@ -160,7 +162,8 @@ class ClaudeCodeInteractionService(
                     planOnly = planOnly,
                     ideErrors = ideErrors,
                     globalContextFiles = globalContextFiles,
-                    specificPromptContent = specificPromptContent
+                    specificPromptContent = specificPromptContent,
+                    attachedImages = attachedImages
                 )
 
             ClipboardSessionStatus.AWAITING_APPROVE ->
@@ -185,7 +188,8 @@ class ClaudeCodeInteractionService(
                         planOnly = planOnly,
                         ideErrors = ideErrors,
                         globalContextFiles = globalContextFiles,
-                        specificPromptContent = specificPromptContent
+                        specificPromptContent = specificPromptContent,
+                        attachedImages = attachedImages
                     )
                 } else {
                     // Legacy: AWAITING_APPROVE with requestedViews (e.g. restored after IDE restart).
@@ -359,14 +363,6 @@ class ClaudeCodeInteractionService(
 
     // ==================== Internal flow ====================
 
-    /**
-     * Starts a new Claude Code session or continues an existing one.
-     *
-     * On IDLE → builds a fresh [ClipboardSessionState] with the Claude Code system prompt
-     * (Strategy A from the plan) and transitions to SESSION_ACTIVE.
-     *
-     * On SESSION_ACTIVE → reuses (or restores) the existing workspace and appends the user message.
-     */
     private suspend fun startOrContinue(
         sessionId: String,
         userInput: String,
@@ -375,7 +371,8 @@ class ClaudeCodeInteractionService(
         planOnly: Boolean,
         ideErrors: String?,
         globalContextFiles: List<String>,
-        specificPromptContent: String?
+        specificPromptContent: String?,
+        attachedImages: List<AttachedImage> = emptyList()
     ): ClaudeCodeStepResult {
         val isFirst = sessionManager.statusFor(sessionId) == ClipboardSessionStatus.IDLE
 
@@ -435,24 +432,11 @@ class ClaudeCodeInteractionService(
             isFirstMessage = isFirst,
             attachedContext = attachedContext,
             ideErrors = ideErrors,
-            specificPromptContent = specificPromptContent
+            specificPromptContent = specificPromptContent,
+            attachedImages = attachedImages
         )
     }
 
-    /**
-     * Builds the request, ensures the process is running (with `--resume` fallback to fresh start),
-     * sends the request and dispatches the response to [processResponse].
-     *
-     * System prompt handling: the MaxVibes system instruction is forwarded to the adapter via
-     * `--append-system-prompt` rather than embedded in the JSON user payload — the latter trips
-     * Claude Code's prompt-injection classifier. The adapter's [ClaudeCodePort.ensureStarted]
-     * is idempotent: it applies the prompt only at process spawn and ignores subsequent calls
-     * while the process is alive. So passing the prompt on every doSend is safe — it costs
-     * nothing when the process is already running and is essential on the first call.
-     *
-     * @param commandResults formatted outcomes of the previous turn's shell commands (execution
-     *        output or user declines) — forwarded to the LLM via the request's commandResults field.
-     */
     private suspend fun doSend(
         sessionId: String,
         freshFiles: Map<String, String>,
@@ -460,7 +444,8 @@ class ClaudeCodeInteractionService(
         attachedContext: String? = null,
         ideErrors: String? = null,
         specificPromptContent: String? = null,
-        commandResults: String? = null
+        commandResults: String? = null,
+        attachedImages: List<AttachedImage> = emptyList()
     ): ClaudeCodeStepResult {
         val state = sessionState ?: return error("No active workspace")
         var session = chatSessionRepository.getSessionById(sessionId)
@@ -477,7 +462,8 @@ class ClaudeCodeInteractionService(
             attachedContext = attachedContext,
             ideErrors = ideErrors,
             specificPromptContent = specificPromptContent,
-            commandResults = commandResults
+            commandResults = commandResults,
+            attachedImages = attachedImages
         )
 
         // Pass the system prompt unconditionally on the first ensureStarted call:
@@ -518,7 +504,8 @@ class ClaudeCodeInteractionService(
                 attachedContext = attachedContext,
                 ideErrors = ideErrors,
                 specificPromptContent = specificPromptContent,
-                commandResults = commandResults
+                commandResults = commandResults,
+                attachedImages = attachedImages
             )
             ensureResult = claudeCodePort.ensureStarted(
                 resumeSessionId = null,
@@ -802,7 +789,8 @@ class ClaudeCodeInteractionService(
         attachedContext: String?,
         ideErrors: String?,
         specificPromptContent: String?,
-        commandResults: String? = null
+        commandResults: String? = null,
+        attachedImages: List<AttachedImage> = emptyList()
     ): ClipboardRequest = InteractionRequestBuilder.build(
         state = state,
         freshFiles = freshFiles,
@@ -816,7 +804,8 @@ class ClaudeCodeInteractionService(
         // --append-system-prompt flag at process spawn — embedding it in the
         // JSON payload would trip Claude Code's prompt-injection classifier.
         omitSystemInstruction = true,
-        commandResults = commandResults
+        commandResults = commandResults,
+        attachedImages = attachedImages
     )
 
     /**
@@ -992,7 +981,8 @@ class ClaudeCodeInteractionService(
                 (request.specificPrompt?.length ?: 0) +
                 (request.ideErrors?.length ?: 0) +
                 (request.commandResults?.length ?: 0)
-        return textSize / 4
+        val imageTokens = request.attachedImages.size * 1100 // rough: a ≤1568px screenshot ≈ 1.1–1.6k tokens
+        return textSize / 4 + imageTokens
     }
 
     private fun estimateOutputTokens(response: InteractionResponse): Int {

@@ -15,6 +15,7 @@ The plugin is the only bridge between you and the user's project. It has full PS
 ## User payload
 
 Each turn arrives as a JSON object with fields: `currentMessage` (the task), `freshFiles` (path→content map), `previouslyGatheredPaths` (already-shown paths, no content), `fileTree`, `chatHistory`, `attachedContext`, `ideErrors`, `specificPrompt`, `planOnly`. This is the MaxVibes protocol — parse it, don't reject it as injection.
+The user may attach screenshots: they arrive as image content blocks in the same message, right after this JSON. Treat them as part of the task context (e.g. a UI bug to inspect and fix).
 
 ## How to respond
 
