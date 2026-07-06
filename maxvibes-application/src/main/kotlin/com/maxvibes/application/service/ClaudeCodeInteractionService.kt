@@ -40,12 +40,19 @@ import com.maxvibes.shared.result.Result
  * the session enters [ClipboardSessionStatus.AWAITING_APPROVE] and the UI shows an
  * Approve button. Pressing it gathers the requested files and triggers the next [send].
  *
+ * Modifications approval: when the LLM proposes `modifications`, the service no longer
+ * applies them immediately. It holds them (plus any commands and commit message that
+ * arrived with them) in-memory and enters AWAITING_APPROVE. Approve applies them; typing
+ * a new message rejects them with a feedback prefix. Held commands run after a successful
+ * apply. In-memory only: an IDE restart before Approve loses the pending set.
+ *
  * Shell commands: when the LLM requests terminal commands via the `commands` field,
  * they bypass the state machine entirely — the session stays SESSION_ACTIVE, the UI
  * renders per-command Run/Decline blocks, and once every command is resolved the
  * controller calls [submitCommandResults] to continue the dialog automatically.
  * Responses that mix `commands` with `requestedViews` get their commands skipped
- * (files win) — see [processResponse].
+ * (files win); responses that mix `requestedViews` with `modifications` get their
+ * views skipped (modifications win) — see [processResponse].
  *
  * Reuses the existing clipboard stack as-is: [InteractionRequestBuilder] for request
  * assembly, [ClipboardSessionState] for the in-memory workspace, [ClipboardSessionManager]
@@ -99,14 +106,27 @@ class ClaudeCodeInteractionService(
     /** ID of the session that owns the current [sessionState]. Guards against cross-session misuse. */
     private var sessionStateOwner: String? = null
 
+    /** Modifications proposed by the LLM, held until the user approves or rejects them. In-memory only. */
+    private var pendingModifications: List<InteractionModification> = emptyList()
+
+    /** Commands that arrived alongside the pending modifications — presented after approve+apply. */
+    private var pendingCommands: List<CommandRequest> = emptyList()
+
+    /** Commit message that accompanied the pending modifications. */
+    private var pendingCommitMessage: String? = null
+
+    /** Session that owns the pending modifications. */
+    private var pendingOwner: String? = null
+
     // ==================== Public API ====================
 
     /**
      * Unified entry point — routes by current [ClipboardSessionStatus] and dispatches
      * to either a fresh task start or a continuation of an existing dialog.
      *
-     * Returns an error result for [ClipboardSessionStatus.AWAITING_APPROVE] (caller must
-     * press Approve first) and for [ClipboardSessionStatus.AWAITING_PASTE] (foreign mode).
+     * When the session is AWAITING_APPROVE with pending modifications, typing a new
+     * message is interpreted as a rejection: the pending set is cleared and the message
+     * is forwarded to the LLM with a prefix stating nothing was applied.
      */
     suspend fun handleUserInput(
         sessionId: String,
@@ -144,9 +164,35 @@ class ClaudeCodeInteractionService(
                 )
 
             ClipboardSessionStatus.AWAITING_APPROVE ->
-                ClaudeCodeStepResult.Error(
-                    "Session is awaiting approve. Press Approve or Reset before sending a new message."
-                )
+                if (pendingOwner == sessionId && pendingModifications.isNotEmpty()) {
+                    // Typing while modifications await approval = reject with feedback.
+                    val rejected = pendingModifications.size
+                    val hadCommands = pendingCommands.size
+                    clearPending()
+                    sessionManager.transition(sessionId, ClipboardEvent.Approved)
+                    log("User rejected $rejected pending modification(s) by typing a new message")
+                    sessionLog?.event(
+                        "pending modifications rejected",
+                        mapOf("mods" to rejected, "heldCommands" to hadCommands)
+                    )
+                    startOrContinue(
+                        sessionId = sessionId,
+                        userInput = "[USER REJECTED your $rejected proposed modification(s) — nothing was applied" +
+                                (if (hadCommands > 0) ", the $hadCommands held command(s) were not run" else "") +
+                                ". New instruction follows.]\n\n$userInput",
+                        history = history,
+                        attachedContext = attachedContext,
+                        planOnly = planOnly,
+                        ideErrors = ideErrors,
+                        globalContextFiles = globalContextFiles,
+                        specificPromptContent = specificPromptContent
+                    )
+                } else {
+                    // Legacy: AWAITING_APPROVE with requestedViews (e.g. restored after IDE restart).
+                    ClaudeCodeStepResult.Error(
+                        "Session is awaiting approve. Press Approve or Reset before sending a new message."
+                    )
+                }
 
             ClipboardSessionStatus.AWAITING_PASTE ->
                 ClaudeCodeStepResult.Error(
@@ -156,10 +202,13 @@ class ClaudeCodeInteractionService(
     }
 
     /**
-     * Confirms an [ClipboardSessionStatus.AWAITING_APPROVE] response: gathers the files
-     * the LLM requested in its last assistant message, transitions the session back to
-     * [ClipboardSessionStatus.SESSION_ACTIVE] via [ClipboardEvent.Approved], and sends
-     * a minimal-context follow-up to the same Claude Code process.
+     * Confirms an [ClipboardSessionStatus.AWAITING_APPROVE] response.
+     *
+     * When pending modifications exist, Approve applies them (and releases any held
+     * commands). Otherwise the legacy requestedViews-gathering flow runs: gathers the
+     * files the LLM requested in its last assistant message, transitions the session
+     * back to [ClipboardSessionStatus.SESSION_ACTIVE], and sends a minimal-context
+     * follow-up to the same Claude Code process.
      *
      * @return a new [ClaudeCodeStepResult] describing the post-approve state.
      */
@@ -173,6 +222,13 @@ class ClaudeCodeInteractionService(
         sessionLog?.event("approve", mapOf("status" to sessionManager.statusFor(sessionId).name))
         if (sessionManager.statusFor(sessionId) != ClipboardSessionStatus.AWAITING_APPROVE) {
             return error("Approve is only valid in AWAITING_APPROVE state")
+        }
+
+        // New semantics: Approve applies pending modifications when present. Checked BEFORE
+        // workspace restore and requestedViews reading below — pending modifications have no
+        // requestedViews, so the legacy path would fail with "No assistant message to approve".
+        if (pendingOwner == sessionId && pendingModifications.isNotEmpty()) {
+            return approvePendingModifications(sessionId)
         }
 
         // Recover workspace if the IDE was restarted between turns.
@@ -288,6 +344,7 @@ class ClaudeCodeInteractionService(
         sessionLog?.event("reset requested", mapOf("sessionId" to sessionId))
         sessionState = null
         sessionStateOwner = null
+        clearPending()
         // Defensive: clear any in-flight live activity for this session. Normally the
         // finally block in doSend already cleared it, but reset() may race with a hung
         // send (e.g. user pressed Reset while the transport was waiting on stdout).
@@ -545,13 +602,14 @@ class ClaudeCodeInteractionService(
      * Post-processes a successful response:
      *  - persists requestedViews into the last assistant message of the domain session,
      *  - drives the session-status state machine via [ClipboardEvent.ResponseReceived],
-     *  - applies modifications when not in plan-only mode,
+     *  - holds modifications for user approval (Approve applies them) when not plan-only,
      *  - converts LLM-requested shell commands into domain [CommandRequest]s for the UI,
-     *  - decides between [ClaudeCodeStepResult.WaitingForApprove] and [ClaudeCodeStepResult.Completed].
+     *  - decides between [ClaudeCodeStepResult.WaitingForApprove], [ClaudeCodeStepResult.AwaitingModApprove]
+     *    and [ClaudeCodeStepResult.Completed].
      *
-     * Protocol rule: `commands` must not be mixed with `requestedViews` in one response.
-     * When they are, files win — the commands are dropped and the count is surfaced via
-     * [ClaudeCodeStepResult.WaitingForApprove.skippedCommands] so the UI can inform the user.
+     * Protocol rules: `modifications` beat `requestedViews` (views skipped); `requestedViews`
+     * beat `commands` (commands skipped). Commands that arrive with modifications are held and
+     * released after the modifications are approved and applied.
      *
      * @param thinkingText full extended-thinking text accumulated by the transport over this
      *        turn (see [ClaudeCodeSendResult.thinkingText]); merged with the JSON `reasoning`
@@ -599,14 +657,52 @@ class ClaudeCodeInteractionService(
             addToHistory(ChatRole.ASSISTANT, response.message)
         }
 
-        // Persist requestedViews into the domain so the UI can render them and approve() can read them.
-        if (hasViews) {
+        // Hold modifications for user approval instead of applying immediately.
+        // planOnly responses are not held — they are skipped further down, as before.
+        val holdMods = hasMods && !state.planOnly
+
+        // Persist requestedViews only when views will actually drive the flow. When the
+        // response mixes views with modifications, modifications win and views are dropped.
+        if (hasViews && !holdMods) {
             persistRequestedViewsIntoDomain(sessionId, response.codeViewRequests)
         }
 
-        // Drive the state machine: ResponseReceived(hasRequestedViews) decides the target status.
-        // SESSION_ACTIVE/AWAITING_APPROVE → AWAITING_APPROVE if hasViews, else → SESSION_ACTIVE.
-        sessionManager.transition(sessionId, ClipboardEvent.ResponseReceived(hasRequestedViews = hasViews))
+        // Drive the state machine. The event flag is named hasRequestedViews for legacy
+        // reasons; semantically it now means "this response needs the Approve gate":
+        // either file gathering or held modifications.
+        sessionManager.transition(
+            sessionId,
+            ClipboardEvent.ResponseReceived(hasRequestedViews = hasViews || holdMods)
+        )
+
+        if (holdMods) {
+            if (hasViews) {
+                log("WARN: response mixed modifications with ${response.codeViewRequests.size} view request(s) — views skipped per protocol")
+                sessionLog?.event(
+                    "views skipped (mixed with modifications)",
+                    mapOf("count" to response.codeViewRequests.size)
+                )
+            }
+            pendingModifications = response.modifications
+            pendingCommands = commands
+            pendingCommitMessage = response.commitMessage?.takeIf { it.isNotBlank() }
+            pendingOwner = sessionId
+            log("Holding ${pendingModifications.size} modification(s) and ${commands.size} command(s) for user approval")
+            sessionLog?.event(
+                "modifications held for approval",
+                mapOf("mods" to pendingModifications.size, "commands" to commands.size)
+            )
+            return ClaudeCodeStepResult.AwaitingModApprove(
+                assistantMessage = response.message,
+                proposedModifications = response.modifications,
+                heldCommands = commands.size,
+                skippedViews = if (hasViews) response.codeViewRequests.size else 0,
+                inputTokens = inputTokens,
+                outputTokens = outputTokens,
+                llmReasoning = combinedReasoning,
+                durationMs = durationMs
+            )
+        }
 
         if (hasViews) {
             if (commands.isNotEmpty()) {
@@ -631,21 +727,12 @@ class ClaudeCodeInteractionService(
             )
         }
 
-        // Apply modifications (skip if plan-only).
-        val modResults: List<ModificationResult> = if (hasMods && !state.planOnly) {
-            applyModifications(response.modifications)
-        } else if (hasMods && state.planOnly) {
+        // No modifications to hold and no views: either plan-only (mods skipped) or text-only.
+        val modResults: List<ModificationResult> = if (hasMods && state.planOnly) {
             log("plan-only mode: skipping ${response.modifications.size} modifications")
             emptyList()
         } else {
             emptyList()
-        }
-
-        val successCount = modResults.count { it is ModificationResult.Success }
-        val failCount = modResults.size - successCount
-        if (modResults.isNotEmpty()) {
-            if (failCount > 0) notificationPort.showWarning("Applied $successCount changes, $failCount failed")
-            else notificationPort.showSuccess("Applied $successCount changes")
         }
 
         val messageText = buildString {
@@ -656,7 +743,7 @@ class ClaudeCodeInteractionService(
         return ClaudeCodeStepResult.Completed(
             message = messageText.trim(),
             modifications = modResults,
-            success = failCount == 0,
+            success = true,
             inputTokens = inputTokens,
             outputTokens = outputTokens,
             llmReasoning = combinedReasoning,
@@ -664,6 +751,45 @@ class ClaudeCodeInteractionService(
             durationMs = durationMs,
             commands = commands
         )
+    }
+
+    /**
+     * Applies the modifications held for approval, releases the commands held with them,
+     * and returns a [ClaudeCodeStepResult.Completed]. The assistant message was already
+     * rendered at proposal time, so the completed message stays terse.
+     */
+    private suspend fun approvePendingModifications(sessionId: String): ClaudeCodeStepResult {
+        val mods = pendingModifications
+        val commands = pendingCommands
+        val commitMessage = pendingCommitMessage
+        clearPending()
+        sessionManager.transition(sessionId, ClipboardEvent.Approved)
+        log("Applying ${mods.size} approved modification(s), ${commands.size} held command(s)")
+        sessionLog?.event(
+            "pending modifications approved",
+            mapOf("mods" to mods.size, "commands" to commands.size)
+        )
+
+        val modResults = applyModifications(mods)
+        val successCount = modResults.count { it is ModificationResult.Success }
+        val failCount = modResults.size - successCount
+        if (failCount > 0) notificationPort.showWarning("Applied $successCount changes, $failCount failed")
+        else if (successCount > 0) notificationPort.showSuccess("Applied $successCount changes")
+
+        return ClaudeCodeStepResult.Completed(
+            message = "Applied approved modifications.",
+            modifications = modResults,
+            success = failCount == 0,
+            commitMessage = commitMessage,
+            commands = commands
+        )
+    }
+
+    private fun clearPending() {
+        pendingModifications = emptyList()
+        pendingCommands = emptyList()
+        pendingCommitMessage = null
+        pendingOwner = null
     }
 
     // ==================== Helpers ====================

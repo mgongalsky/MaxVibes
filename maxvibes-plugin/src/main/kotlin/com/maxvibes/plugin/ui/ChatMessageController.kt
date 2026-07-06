@@ -80,6 +80,9 @@ interface ChatPanelCallbacks {
         onRun: () -> Unit,
         onDecline: (String?) -> Unit
     ): CommandBlockView
+
+    /** Renders a Run all / Decline all bar above a multi-command batch. */
+    fun addCommandBatchBar(count: Int, onRunAll: () -> Unit, onDeclineAll: () -> Unit): CommandBatchBarView
 }
 
 /**
@@ -290,9 +293,8 @@ class ChatMessageController(
     }
 
     /**
-     * Approve the last Claude Code response — gather the files the LLM requested
-     * and send a minimal-context follow-up. Called from [ChatPanel] when the user
-     * clicks the Approve button.
+     * Approve the last Claude Code response. Applies pending modifications (if any) or
+     * gathers requested files, then continues. Called from [ChatPanel] on the Approve button.
      */
     fun approve() {
         val session = chatTreeService.getActiveSession()
@@ -319,71 +321,129 @@ class ChatMessageController(
 
     // ==================== Command Flow ====================
 
+    /** One command of the current batch with its UI handle and resolution state. */
+    private class CommandItem(
+        val request: CommandRequest,
+        var view: CommandBlockView? = null,
+        var started: Boolean = false,
+        var resolved: Boolean = false
+    )
+
     /** Accumulates Run/Decline outcomes for the current turn's command batch. */
-    private data class CommandTurn(
+    private class CommandTurn(
         val sessionId: String,
         val mode: InteractionMode,
-        val total: Int,
-        val executions: MutableList<CommandExecution> = mutableListOf()
+        val items: MutableList<CommandItem> = mutableListOf(),
+        val executions: MutableList<CommandExecution> = mutableListOf(),
+        var runAllActive: Boolean = false,
+        var batchBar: CommandBatchBarView? = null
     )
 
     private var commandTurn: CommandTurn? = null
 
     /**
-     * Renders command blocks and keeps input locked until every command is resolved
-     * (Run or Decline). When the batch completes, results are automatically sent
-     * back to the LLM through the mode-appropriate channel — see [recordExecution].
+     * Renders command blocks (plus a Run all / Decline all bar for batches) and keeps
+     * input locked until every command is resolved. When the batch completes, results
+     * are automatically sent back to the LLM — see [recordExecution].
      */
     private fun presentCommands(commands: List<CommandRequest>, session: ChatSession, mode: InteractionMode) {
         if (commands.isEmpty()) return
         MaxVibesLogger.info("Controller", "presentCommands", mapOf("count" to commands.size, "mode" to mode.name))
-        commandTurn = CommandTurn(session.id, mode, commands.size)
+        val turn = CommandTurn(session.id, mode)
+        commandTurn = turn
         callbacks.setInputEnabled(false)
         callbacks.setStatus("\u26A1 ${commands.size} command(s) awaiting approval")
+        if (commands.size > 1) {
+            turn.batchBar = callbacks.addCommandBatchBar(
+                count = commands.size,
+                onRunAll = { startRunAll() },
+                onDeclineAll = { declineAllRemaining(null) }
+            )
+        }
         commands.forEach { cmd ->
+            val item = CommandItem(cmd)
+            turn.items.add(item)
             val warnings = service.executeCommandUseCase.warningsFor(cmd)
-            lateinit var view: CommandBlockView
-            view = callbacks.addCommandBubble(
+            item.view = callbacks.addCommandBubble(
                 command = cmd.command,
                 reason = cmd.reason,
                 warnings = warnings,
-                onRun = { runCommand(cmd, view) },
-                onDecline = { comment ->
-                    view.setDeclined(comment)
-                    chatTreeService.addMessage(
-                        commandTurn?.sessionId ?: session.id, MessageRole.SYSTEM,
-                        "\u2716 Declined: ${cmd.command}" + (comment?.let { " \u2014 $it" } ?: "")
-                    )
-                    recordExecution(
-                        CommandExecution(request = cmd, status = CommandStatus.DECLINED, declineComment = comment)
-                    )
-                }
+                onRun = { runCommand(item) },
+                onDecline = { comment -> declineItem(item, comment) }
             )
         }
     }
 
+    /** Runs every unresolved command sequentially, stopping at the first non-zero exit code. */
+    private fun startRunAll() {
+        val turn = commandTurn ?: return
+        if (turn.runAllActive) return
+        turn.runAllActive = true
+        turn.batchBar?.dismiss()
+        turn.items.filter { !it.resolved && !it.started }.forEach { it.view?.setQueued() }
+        // If a manually started command is still running, its completion hook continues the chain.
+        if (turn.items.none { it.started && !it.resolved }) runNextQueued()
+    }
+
+    private fun runNextQueued() {
+        val turn = commandTurn ?: return
+        val next = turn.items.firstOrNull { !it.resolved && !it.started } ?: return
+        runCommand(next)
+    }
+
+    /** Declines every unresolved command; used by Decline all and by the run-all failure stop. */
+    private fun declineAllRemaining(comment: String?) {
+        val turn = commandTurn ?: return
+        turn.batchBar?.dismiss()
+        turn.items.filter { !it.resolved && !it.started }.toList().forEach { declineItem(it, comment) }
+    }
+
+    private fun declineItem(item: CommandItem, comment: String?) {
+        if (item.resolved) return
+        item.resolved = true
+        item.view?.setDeclined(comment)
+        chatTreeService.addMessage(
+            commandTurn?.sessionId ?: chatTreeService.getActiveSession().id, MessageRole.SYSTEM,
+            "\u2716 Declined: ${item.request.command}" + (comment?.let { " \u2014 $it" } ?: "")
+        )
+        recordExecution(
+            CommandExecution(request = item.request, status = CommandStatus.DECLINED, declineComment = comment)
+        )
+    }
+
     /** Executes one approved command in a background task and records its outcome. */
-    private fun runCommand(request: CommandRequest, view: CommandBlockView) {
-        view.setRunning()
-        callbacks.setStatus("\u26A1 Running: ${request.command.take(50)}")
+    private fun runCommand(item: CommandItem) {
+        if (item.resolved || item.started) return
+        item.started = true
+        item.view?.setRunning()
+        callbacks.setStatus("\u26A1 Running: ${item.request.command.take(50)}")
         ProgressManager.getInstance().run(object : Task.Backgroundable(project, "MaxVibes: Running command...", false) {
             override fun run(indicator: ProgressIndicator) {
-                val execution = runBlocking { service.executeCommandUseCase.execute(request) }
+                val execution = runBlocking { service.executeCommandUseCase.execute(item.request) }
                 ApplicationManager.getApplication().invokeLater {
                     val headline = when (execution.status) {
                         CommandStatus.SUCCESS -> "\u2705 exit 0 \u00B7 ${execution.durationMs / 1000}s"
                         CommandStatus.FAILED -> "\u274C exit ${execution.exitCode} \u00B7 ${execution.durationMs / 1000}s"
-                        CommandStatus.TIMEOUT -> "\u23F1 Timeout after ${request.timeoutSec}s"
+                        CommandStatus.TIMEOUT -> "\u23F1 Timeout after ${item.request.timeoutSec}s"
                         CommandStatus.ERROR -> "\u274C Failed to start"
                         CommandStatus.DECLINED -> "\u2716 Declined"
                     }
-                    view.setResult(headline, execution.output, execution.status == CommandStatus.SUCCESS)
+                    item.resolved = true
+                    item.view?.setResult(headline, execution.output, execution.status == CommandStatus.SUCCESS)
                     chatTreeService.addMessage(
                         commandTurn?.sessionId ?: chatTreeService.getActiveSession().id,
                         MessageRole.SYSTEM,
-                        "\u26A1 ${request.command} \u2192 $headline"
+                        "\u26A1 ${item.request.command} \u2192 $headline"
                     )
+                    val turn = commandTurn
                     recordExecution(execution)
+                    if (turn != null && turn.runAllActive && commandTurn === turn) {
+                        if (execution.status == CommandStatus.SUCCESS) {
+                            runNextQueued()
+                        } else {
+                            declineAllRemaining("skipped: previous command failed")
+                        }
+                    }
                 }
             }
         })
@@ -393,11 +453,12 @@ class ChatMessageController(
     private fun recordExecution(execution: CommandExecution) {
         val turn = commandTurn ?: return
         turn.executions.add(execution)
-        val remaining = turn.total - turn.executions.size
+        val remaining = turn.items.size - turn.executions.size
         if (remaining > 0) {
             callbacks.setStatus("\u26A1 $remaining command(s) awaiting approval")
             return
         }
+        turn.batchBar?.dismiss()
         commandTurn = null
         val session = chatTreeService.getSessionById(turn.sessionId)
         if (session == null) {
@@ -792,13 +853,12 @@ class ChatMessageController(
 
     /**
      * Renders a [ClaudeCodeStepResult] to the chat. Mirrors [handleClipboardResult]
-     * but uses the Claude Code result type; auto-applies modifications when present.
+     * but uses the Claude Code result type.
      *
-     * Persistence: writes the assistant message to [chatTreeService] in both
-     * `WaitingForApprove` and `Completed` branches so that the domain session has
-     * an ASSISTANT entry the service can later attach requestedViews to and that
-     * approve() can look up. Without this write, the session is empty from the
-     * domain's perspective and approve() fails with "No assistant message to approve".
+     * Persistence: writes the assistant message to [chatTreeService] in the
+     * `WaitingForApprove`, `AwaitingModApprove` and `Completed` branches so that the
+     * domain session has an ASSISTANT entry the service can later attach requestedViews
+     * to and that approve() can look up.
      */
     private fun handleClaudeCodeResult(result: ClaudeCodeStepResult, session: ChatSession) {
         when (result) {
@@ -819,10 +879,6 @@ class ChatMessageController(
                     durationMs = result.durationMs
                 )
 
-                // Persist the assistant message to the domain so:
-                //   1) the UI can re-render it after restart,
-                //   2) ClaudeCodeInteractionService.approve() can find an ASSISTANT
-                //      message in session.messages and read its requestedViews.
                 chatTreeService.addMessage(
                     session.id, MessageRole.ASSISTANT, result.assistantMessage,
                     tokenInfo = tokenInfo,
@@ -851,6 +907,53 @@ class ChatMessageController(
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
                 callbacks.setStatus("\uD83E\uDD16 Awaiting approval \u2014 click Approve to gather files and continue")
+            }
+
+            is ClaudeCodeStepResult.AwaitingModApprove -> {
+                MaxVibesLogger.info(
+                    "Controller", "claudeCode awaiting mod approve", mapOf(
+                        "mods" to result.proposedModifications.size,
+                        "heldCommands" to result.heldCommands,
+                        "skippedViews" to result.skippedViews,
+                        "in" to result.inputTokens,
+                        "out" to result.outputTokens
+                    )
+                )
+                chatTreeService.addChatTokens(session.id, result.inputTokens, result.outputTokens)
+                val tokenInfo = buildTokenInfoForClaudeCode(result.inputTokens, result.outputTokens, result.durationMs)
+
+                chatTreeService.addMessage(
+                    session.id, MessageRole.ASSISTANT, result.assistantMessage,
+                    tokenInfo = tokenInfo,
+                    reasoning = result.llmReasoning
+                )
+                callbacks.updateTokenDisplay()
+                callbacks.addAssistantMessageBubble(
+                    text = callbacks.formatMarkdown(result.assistantMessage),
+                    tokenInfo = tokenInfo,
+                    modifications = emptyList(),
+                    metaFiles = emptyList(),
+                    reasoning = result.llmReasoning,
+                    requestedViews = emptyList(),
+                    appliedModifications = emptyList()
+                )
+
+                val proposal = result.proposedModifications.joinToString("\n") { "  \u2022 ${it.type}  ${it.path}" }
+                callbacks.appendToChat(
+                    "\uD83D\uDCDD Proposed ${result.proposedModifications.size} modification(s):\n$proposal"
+                )
+                if (result.heldCommands > 0) {
+                    callbacks.appendToChat("\u26A1 ${result.heldCommands} command(s) held \u2014 they run after the modifications are applied")
+                }
+                if (result.skippedViews > 0) {
+                    callbacks.appendToChat("\u26A0\uFE0F ${result.skippedViews} file request(s) skipped \u2014 response mixed them with modifications")
+                }
+
+                callbacks.setInputEnabled(true)
+                callbacks.updateModeIndicator()
+                callbacks.setStatus(
+                    "\uD83E\uDD16 ${result.proposedModifications.size} modification(s) awaiting approval \u2014 Approve to apply, or type to reject"
+                )
             }
 
             is ClaudeCodeStepResult.Completed -> {
@@ -885,8 +988,6 @@ class ChatMessageController(
                     .filterIsInstance<ModificationResult.Success>()
                     .map { AppliedModInfo(path = it.affectedPath.toString(), category = it.modification.toCategory()) }
 
-                // Mirror the clipboard/API flows: persist the assistant message + applied
-                // modifications to the domain so the conversation survives IDE restart.
                 chatTreeService.addMessage(
                     session.id, MessageRole.ASSISTANT, text,
                     appliedModificationPaths = appliedPaths,

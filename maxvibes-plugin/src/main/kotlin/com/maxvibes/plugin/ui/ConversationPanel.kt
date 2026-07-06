@@ -30,12 +30,19 @@ sealed class MessageSegment {
 
 /**
  * Mutable view handle for a command block: the controller drives it through
- * pending → running → result / declined.
+ * pending → running → result / declined. [setQueued] marks a command that is
+ * waiting for its turn in a Run all sequence.
  */
 interface CommandBlockView {
     fun setRunning()
+    fun setQueued()
     fun setResult(headline: String, output: String, ok: Boolean)
     fun setDeclined(comment: String?)
+}
+
+/** View handle for the Run all / Decline all bar above a command batch. */
+interface CommandBatchBarView {
+    fun dismiss()
 }
 
 class ConversationPanel(
@@ -435,7 +442,10 @@ class ConversationPanel(
             }, BorderLayout.SOUTH)
         })
 
-        fun refresh() { messagesPanel.revalidate(); messagesPanel.repaint() }
+        fun refresh() {
+            messagesPanel.revalidate(); messagesPanel.repaint()
+        }
+
         fun statusLabel(text: String, color: Color) = JBLabel(text).apply {
             font = font.deriveFont(Font.BOLD, 11f); foreground = color
             alignmentX = Component.LEFT_ALIGNMENT
@@ -445,7 +455,15 @@ class ConversationPanel(
         return object : CommandBlockView {
             override fun setRunning() = SwingUtilities.invokeLater {
                 controls.isVisible = false
+                statusRow.removeAll()
                 statusRow.add(statusLabel("\u23F3 Running\u2026", JBColor(Color(0x7D6608), Color(0xF7DC6F))))
+                refresh()
+            }
+
+            override fun setQueued() = SwingUtilities.invokeLater {
+                controls.isVisible = false
+                statusRow.removeAll()
+                statusRow.add(statusLabel("\u23F8 Queued\u2026", JBColor(Color(0x7D6608), Color(0xF7DC6F))))
                 refresh()
             }
 
@@ -470,6 +488,30 @@ class ConversationPanel(
                 val text = "\u2716 Declined" + (comment?.let { " \u2014 $it" } ?: "")
                 statusRow.add(statusLabel(text, JBColor(Color(0x922B21), Color(0xD98880))))
                 refresh()
+            }
+        }
+    }
+
+    /** Renders a Run all / Decline all control bar for a multi-command batch. */
+    fun addCommandBatchBar(count: Int, onRunAll: () -> Unit, onDeclineAll: () -> Unit): CommandBatchBarView {
+        val bg = JBColor(Color(0xFDF3E3), Color(0x2B2214))
+        val accent = JBColor(Color(0xD68910), Color(0xF5B041))
+        val runAllBtn = JButton("\u25B6\u25B6 Run all ($count)")
+        val declineAllBtn = JButton("\u2716 Decline all")
+        val row = JPanel(FlowLayout(FlowLayout.LEFT, 6, 0)).apply {
+            background = bg
+            add(runAllBtn); add(declineAllBtn)
+        }
+        runAllBtn.addActionListener { runAllBtn.isEnabled = false; declineAllBtn.isEnabled = false; onRunAll() }
+        declineAllBtn.addActionListener { runAllBtn.isEnabled = false; declineAllBtn.isEnabled = false; onDeclineAll() }
+        addComp(bubble(bg, accent).also { p ->
+            p.add(roleLabel("\u26A1 Command batch", accent), BorderLayout.NORTH)
+            p.add(row, BorderLayout.CENTER)
+        })
+        return object : CommandBatchBarView {
+            override fun dismiss() = SwingUtilities.invokeLater {
+                runAllBtn.isEnabled = false
+                declineAllBtn.isEnabled = false
             }
         }
     }

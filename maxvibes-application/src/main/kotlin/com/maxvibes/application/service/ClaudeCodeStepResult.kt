@@ -2,14 +2,17 @@ package com.maxvibes.application.service
 
 import com.maxvibes.domain.model.code.RequestedViewInfo
 import com.maxvibes.domain.model.command.CommandRequest
+import com.maxvibes.domain.model.interaction.InteractionModification
 import com.maxvibes.domain.model.modification.ModificationResult
 
 /**
  * Outcome of a single step in the Claude Code interaction flow.
  *
  * Mirrors [ClipboardStepResult] but adapted for the auto-transport model:
- * there is no "waiting for paste" — instead, a response with [requestedViews]
- * suspends the flow in [WaitingForApprove] until the user approves the next round.
+ * there is no "waiting for paste" — instead, a response with [WaitingForApprove.requestedViews]
+ * suspends the flow until the user approves the next round, and a response with
+ * modifications suspends in [AwaitingModApprove] until the user approves (apply)
+ * or rejects (types a message).
  */
 sealed class ClaudeCodeStepResult {
 
@@ -36,6 +39,24 @@ sealed class ClaudeCodeStepResult {
         val llmReasoning: String? = null,
         val durationMs: Long = 0L,
         val skippedCommands: Int = 0
+    ) : ClaudeCodeStepResult()
+
+    /**
+     * The LLM proposed code modifications; the service holds them until the user
+     * presses Approve (apply) or types a message (reject with feedback). Commands
+     * from the same response are held too and presented after approve+apply.
+     */
+    data class AwaitingModApprove(
+        val assistantMessage: String,
+        val proposedModifications: List<InteractionModification>,
+        /** Commands held together with the modifications (run after approve). */
+        val heldCommands: Int = 0,
+        /** File requests dropped because the response mixed them with modifications. */
+        val skippedViews: Int = 0,
+        val inputTokens: Int = 0,
+        val outputTokens: Int = 0,
+        val llmReasoning: String? = null,
+        val durationMs: Long = 0L
     ) : ClaudeCodeStepResult()
 
     /**

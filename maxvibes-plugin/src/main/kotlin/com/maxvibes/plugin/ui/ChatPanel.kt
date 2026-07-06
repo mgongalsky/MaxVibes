@@ -308,6 +308,9 @@ class ChatPanel(
         onRun: () -> Unit, onDecline: (String?) -> Unit
     ): CommandBlockView = conversationPanel.addCommandBubble(command, reason, warnings, onRun, onDecline)
 
+    override fun addCommandBatchBar(count: Int, onRunAll: () -> Unit, onDeclineAll: () -> Unit): CommandBatchBarView =
+        conversationPanel.addCommandBatchBar(count, onRunAll, onDeclineAll)
+
     override fun clearChatDisplay() {
         conversationPanel.clearMessages()
         elementNavRegistry.clear()
