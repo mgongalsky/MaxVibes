@@ -87,6 +87,7 @@ import com.maxvibes.domain.model.interaction.AttachedImage
  * @param sessionLog             optional per-dialog verbose transcript ([ClaudeCodeSessionLogPort]).
  *                               The service calls begin(sessionId) at every entry point so the
  *                               transport's raw I/O lands in the right dialog file. Null disables.
+ * @param specificPromptService optional resolver for SKILL requestedViews.
  */
 class ClaudeCodeInteractionService(
     private val contextProvider: ProjectContextPort,
@@ -98,7 +99,8 @@ class ClaudeCodeInteractionService(
     private val sessionManager: ClipboardSessionManager,
     private val chatSessionRepository: ChatSessionRepository,
     private val activityTracker: ClaudeCodeActivityTracker,
-    private val sessionLog: ClaudeCodeSessionLogPort? = null
+    private val sessionLog: ClaudeCodeSessionLogPort? = null,
+    private val specificPromptService: SpecificPromptService? = null
 ) {
 
     /** In-memory workspace: messages, gathered files, prompts, project context. */
@@ -262,11 +264,15 @@ class ClaudeCodeInteractionService(
             )
         }
 
-        // Render views: FULL goes through gatherRequestedFiles, partial goes through codeRepository.getCodeView.
+        // Render views: SKILL comes from the skill repository, FULL through
+        // gatherRequestedFiles, everything else through codeRepository.getCodeView.
+        val skillRequests = viewRequests.filter { it.granularity == CodeGranularity.SKILL }
         val fullPaths = viewRequests
             .filter { it.granularity == CodeGranularity.FULL }
             .map { it.filePath }
-        val partialRequests = viewRequests.filter { it.granularity != CodeGranularity.FULL }
+        val partialRequests = viewRequests.filter {
+            it.granularity != CodeGranularity.FULL && it.granularity != CodeGranularity.SKILL
+        }
 
         val fullFilesMap: Map<String, String> = if (fullPaths.isNotEmpty()) {
             gatherRequestedFiles(fullPaths) ?: return error("Failed to gather requested files")
@@ -283,7 +289,14 @@ class ClaudeCodeInteractionService(
             }
         }
 
-        val freshFiles = fullFilesMap + partialFilesMap
+        val skillFilesMap: Map<String, String> = skillRequests.associate { req ->
+            val body = specificPromptService?.resolveSkillBody(req.filePath)
+            log(if (body != null) "Rendered skill '${req.filePath}' (${body.length} chars)" else "Unknown skill '${req.filePath}'")
+            "skill:${req.filePath}" to (body
+                ?: "// ERROR: Unknown skill '${req.filePath}'. Use one of the names from the Skills section.")
+        }
+
+        val freshFiles = fullFilesMap + partialFilesMap + skillFilesMap
         // Echo the assistant message into history so the LLM sees its own previous request when
         // we send the minimal follow-up (it still has its own context, but this keeps history symmetric).
         if (lastAssistant.content.isNotBlank() &&

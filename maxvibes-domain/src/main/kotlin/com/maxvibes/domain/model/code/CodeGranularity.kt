@@ -31,5 +31,11 @@ enum class CodeGranularity {
      *
      * [CodeViewRequest.elementPath] is mandatory when this value is used.
      */
-    ELEMENT
+    ELEMENT,
+
+    /**
+     * Not a code view: the path is a SKILL NAME, not a file. Resolved by the
+     * interaction services from the skill repository — must never reach the PSI adapter.
+     */
+    SKILL
 }

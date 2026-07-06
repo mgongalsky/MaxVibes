@@ -658,10 +658,12 @@ class ConversationPanel(
                 it.granularity == CodeGranularity.SIGNATURES || it.granularity == CodeGranularity.OUTLINE
             }
             val elem = requestedViews.count { it.granularity == CodeGranularity.ELEMENT }
+            val skills = requestedViews.count { it.granularity == CodeGranularity.SKILL }
             val segments = buildList {
                 if (full > 0) add("<font color='#2980B9'>$full full</font>")
                 if (sigs > 0) add("<font color='#D4AC0D'>$sigs sig</font>")
                 if (elem > 0) add("<font color='#27AE60'>$elem elem</font>")
+                if (skills > 0) add("<font color='#8E44AD'>$skills skill</font>")
             }
             parts += "&#128193; ${segments.joinToString(" &middot; ")}"
         } else if (metaFiles.isNotEmpty()) {
@@ -718,6 +720,7 @@ class ConversationPanel(
                     CodeGranularity.SIGNATURES -> Triple(Color(0x9A7D0A), Color(0xF4D03F), "[sig]")
                     CodeGranularity.OUTLINE -> Triple(Color(0x9A7D0A), Color(0xF4D03F), "[outline]")
                     CodeGranularity.ELEMENT -> Triple(Color(0x1E8449), Color(0x58D68D), "[elem]")
+                    CodeGranularity.SKILL -> Triple(Color(0x6C3483), Color(0xBB8FCE), "[skill]")
                 }
                 val displayText = if (view.elementPath != null)
                     "  \u2022 ${view.path} / ${view.elementPath}  $label"

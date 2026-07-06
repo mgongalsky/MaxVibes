@@ -4,38 +4,70 @@ import com.maxvibes.application.port.output.SpecificPromptRepository
 import com.maxvibes.domain.model.interaction.SpecificPrompt
 
 /**
- * Application service for managing task-scoped specific prompts.
+ * Application service for skills (task-scoped prompts).
  *
- * Wraps [SpecificPromptRepository] with convenience methods for the UI layer.
- * Has no IntelliJ dependencies — fully unit-testable via Gradle.
+ * Wraps [SpecificPromptRepository] for the UI, the prompt builder and the
+ * interaction services. No IntelliJ dependencies — unit-testable via Gradle.
  *
- * "Just Code" is represented as null throughout this service — no special sentinel object.
+ * "Just Code" is represented as null throughout — no sentinel object.
  */
 class SpecificPromptService(private val repository: SpecificPromptRepository) {
 
-    /**
-     * Returns all available prompt names for display in the UI dropdown.
-     * Does NOT include "Just Code" — that is the UI's responsibility to prepend.
-     */
-    fun getAvailablePromptNames(): List<String> =
-        repository.loadAll().map { it.name }
+    companion object {
+        /** Skills up to this size are inlined into the turn; larger ones are fetched on demand. */
+        const val INLINE_THRESHOLD_CHARS = 4000
+    }
+
+    /** All skills with descriptions and file locations — for the manager dialog. */
+    fun loadAll(): List<SpecificPrompt> = repository.loadAll()
+
+    /** Names for the UI dropdown. "Just Code" is prepended by the UI, not here. */
+    fun getAvailablePromptNames(): List<String> = repository.loadAll().map { it.name }
 
     /**
-     * Resolves a prompt's content by name.
-     *
-     * @param name Prompt name, or null for "Just Code" mode.
-     * @return Prompt content string, or null if name is null or prompt not found.
-     *         Null → the `specificPrompt` field is omitted from the JSON request.
+     * Per-turn prompt for the selected skill. Small skills are inlined verbatim;
+     * large ones become a stub instructing the model to fetch the full instructions
+     * via a SKILL-granularity view request. Null when [name] is null (Just Code)
+     * or the skill no longer exists on disk.
      */
     fun resolvePromptContent(name: String?): String? {
         if (name == null) return null
-        return repository.loadByName(name)?.content
+        val prompt = repository.loadByName(name) ?: return null
+        if (prompt.content.length <= INLINE_THRESHOLD_CHARS) return prompt.content
+        return buildString {
+            appendLine("ACTIVE SKILL: ${prompt.name} — ${prompt.description.ifBlank { "(no description)" }}")
+            append(
+                "Its full instructions are too large to inline. BEFORE doing the task, request them via " +
+                        "requestedViews: { \"path\": \"${prompt.name}\", \"granularity\": \"SKILL\" } " +
+                        "(alone, in its own turn). Then follow those instructions as binding."
+            )
+        }
     }
 
+    /** Full body of a skill for a SKILL-granularity view request. Null if the name is unknown. */
+    fun resolveSkillBody(name: String): String? = repository.loadByName(name)?.content
+
     /**
-     * Validates that a previously selected prompt name still exists on disk.
-     * Returns the name if valid, null (Just Code) if the file has been removed.
+     * "## Skills" section for the Claude Code system prompt: the catalog of names and
+     * descriptions plus the rule for requesting a skill body. Null when no skills exist.
      */
+    fun skillCatalogSection(): String? {
+        val all = repository.loadAll()
+        if (all.isEmpty()) return null
+        return buildString {
+            appendLine("## Skills")
+            appendLine()
+            appendLine(
+                "Reusable instruction sets available in this project. When a task matches a skill, request its " +
+                        "full instructions via requestedViews: { \"path\": \"<skill name>\", \"granularity\": \"SKILL\" } " +
+                        "(alone, not mixed with modifications or commands), then follow them as binding."
+            )
+            appendLine()
+            all.forEach { appendLine("- ${it.name}: ${it.description.ifBlank { "(no description)" }}") }
+        }.trimEnd()
+    }
+
+    /** Validates that a previously selected name still exists. Returns it, or null (Just Code). */
     fun validatePromptName(name: String?): String? {
         if (name == null) return null
         return if (repository.loadByName(name) != null) name else null

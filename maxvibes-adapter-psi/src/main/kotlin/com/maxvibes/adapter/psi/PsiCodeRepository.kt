@@ -175,6 +175,15 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
                         ?: error("Element not found: $elemPathStr in ${request.filePath}")
                     renderer.renderElement(element as KtNamedDeclaration)
                 }
+
+                // Not a code view: SKILL requests carry a skill name, not a file path,
+                // and are resolved by the interaction services from the skill repository
+                // BEFORE any CodeRepository call. Reaching this branch is a routing bug.
+                CodeGranularity.SKILL ->
+                    error(
+                        "SKILL granularity must be resolved by the interaction layer, " +
+                                "not the PSI adapter (skill: ${request.filePath})"
+                    )
             }
             CodeView(request.filePath, request.granularity, content)
         }

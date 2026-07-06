@@ -189,6 +189,18 @@ class ChatPanel(
         isEnabled = false
     }
 
+    /** Button to open the skill/specific prompt manager. */
+    private val manageSpecificButton = JButton("\u2699").apply {
+        font = font.deriveFont(12f)
+        toolTipText = "Manage skills & prompts"
+        preferredSize = Dimension(26, 22)
+        isFocusPainted = false
+        addActionListener {
+            SkillManagerDialog(project, service.specificPromptRepository).show()
+            render(buildState())
+        }
+    }
+
     /** Single dropdown button showing the active specific prompt. */
     private val promptSelectButton = JButton("Just Code \u25BE").apply {
         font = font.deriveFont(11f)
@@ -354,6 +366,7 @@ class ChatPanel(
         newPromptButton.isEnabled = enabled
         editPromptButton.isEnabled = enabled
         deletePromptButton.isEnabled = enabled
+        manageSpecificButton.isEnabled = enabled
     }
 
     override fun setStatus(text: String) {
@@ -1124,6 +1137,7 @@ class ChatPanel(
             add(newPromptButton)
             add(editPromptButton)
             add(deletePromptButton)
+            add(manageSpecificButton)
             add(promptSelectButton)
         }
     }

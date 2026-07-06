@@ -228,6 +228,7 @@ class ChatMessageController(
      * [ClipboardInteractionService.redoLastRequest]. Does NOT add a new user message to history.
      */
     fun redoClipboardJson() {
+        saveAllDocuments()
         val session = chatTreeService.getActiveSession()
         val globalContextFiles = chatTreeService.getGlobalContextFiles()
         callbacks.setInputEnabled(false)
@@ -306,6 +307,7 @@ class ChatMessageController(
      * gathers requested files, then continues. Called from [ChatPanel] on the Approve button.
      */
     fun approve() {
+        saveAllDocuments()
         val session = chatTreeService.getActiveSession()
         val trace = attachedTrace
         val errs = attachedErrors
@@ -1122,6 +1124,20 @@ Check:
 """.trimIndent()
     }
 
+    /**
+     * Flushes all unsaved editor Documents to disk. The plugin reads project files
+     * (skills, gathered sources) via java.io — without this flush, edits still sitting
+     * in editor buffers are invisible to the LLM. Same convention as the IDE saving
+     * all documents before a build. EDT-only.
+     */
+    private fun saveAllDocuments() {
+        try {
+            com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().saveAllDocuments()
+        } catch (e: Exception) {
+            MaxVibesLogger.warn("Controller", "saveAllDocuments failed", data = mapOf("msg" to (e.message ?: "?")))
+        }
+    }
+
     private fun copyToClipboard(text: String) {
         try {
             val clipboard = java.awt.Toolkit.getDefaultToolkit().systemClipboard
@@ -1264,6 +1280,7 @@ Check:
         addHistory: Boolean = false,
         selectedSpecificPromptName: String? = null
     ) {
+        saveAllDocuments()
         val trace = attachedTrace
         val errs = attachedErrors
         val imgs = attachedImages.toList()

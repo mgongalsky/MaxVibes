@@ -28,6 +28,9 @@ class PromptService(private val project: Project) : PromptPort {
         }
     }
 
+    /** Supplies the dynamic "## Skills" section appended to the Claude Code system prompt. Wired by MaxVibesService. */
+    var skillCatalogProvider: (() -> String?)? = null
+
     private val promptsDir: File
         get() = File(project.basePath, PROMPTS_DIR)
 
@@ -66,15 +69,19 @@ class PromptService(private val project: Project) : PromptPort {
 
     override fun claudeCodeSystem(): String {
         val customFile = File(promptsDir, CLAUDE_CODE_SYSTEM_FILE)
-        if (customFile.exists() && customFile.canRead()) {
+        val base = if (customFile.exists() && customFile.canRead()) {
             try {
-                return customFile.readText()
+                customFile.readText()
             } catch (_: Exception) {
-                // fall through to resource
+                loadResource(CLAUDE_CODE_SYSTEM_RESOURCE)
+                    ?: error("Missing classpath resource: $CLAUDE_CODE_SYSTEM_RESOURCE")
             }
+        } else {
+            loadResource(CLAUDE_CODE_SYSTEM_RESOURCE)
+                ?: error("Missing classpath resource: $CLAUDE_CODE_SYSTEM_RESOURCE")
         }
-        return loadResource(CLAUDE_CODE_SYSTEM_RESOURCE)
-            ?: error("Missing classpath resource: $CLAUDE_CODE_SYSTEM_RESOURCE")
+        val catalog = skillCatalogProvider?.invoke()
+        return if (catalog.isNullOrBlank()) base else base + "\n\n" + catalog
     }
 
     private fun loadPrompt(fileName: String, default: String): String {

@@ -46,6 +46,7 @@ import com.maxvibes.domain.model.code.RequestedViewInfo
  * @param logger                 Optional logger; pass null in unit tests to suppress output.
  * @param sessionManager         State-machine manager; wired in by MaxVibesService DI.
  * @param chatSessionRepository  Read/write access to persisted chat sessions.
+ * @param specificPromptService optional resolver for SKILL requestedViews.
  */
 class ClipboardInteractionService(
     private val contextProvider: ProjectContextPort,
@@ -55,7 +56,8 @@ class ClipboardInteractionService(
     private val promptPort: PromptPort? = null,
     private val logger: LoggerPort? = null,
     private val sessionManager: ClipboardSessionManager,
-    private val chatSessionRepository: ChatSessionRepository
+    private val chatSessionRepository: ChatSessionRepository,
+    private val specificPromptService: SpecificPromptService? = null
 ) {
     /** In-memory workspace: messages, gathered files, prompts, project context. */
     private var sessionState: ClipboardSessionState? = null
@@ -443,11 +445,16 @@ class ClipboardInteractionService(
                 log("WARN: response mixed file requests with ${commands.size} command(s) — commands skipped per protocol")
             }
 
+            val skillRequests = response.codeViewRequests
+                .filter { it.granularity == com.maxvibes.domain.model.code.CodeGranularity.SKILL }
             val fullRequests = response.codeViewRequests
                 .filter { it.granularity == com.maxvibes.domain.model.code.CodeGranularity.FULL }
                 .map { it.filePath }
             val partialRequests = response.codeViewRequests
-                .filter { it.granularity != com.maxvibes.domain.model.code.CodeGranularity.FULL }
+                .filter {
+                    it.granularity != com.maxvibes.domain.model.code.CodeGranularity.FULL &&
+                            it.granularity != com.maxvibes.domain.model.code.CodeGranularity.SKILL
+                }
 
             val fullFilesMap: Map<String, String> = if (fullRequests.isNotEmpty()) {
                 gatherRequestedFiles(fullRequests) ?: run {
@@ -477,7 +484,14 @@ class ClipboardInteractionService(
                 }
             }
 
-            val mergedFiles = fullFilesMap + partialFilesMap
+            val skillFilesMap: Map<String, String> = skillRequests.associate { req ->
+                val body = specificPromptService?.resolveSkillBody(req.filePath)
+                log(if (body != null) "Rendered skill '${req.filePath}' (${body.length} chars)" else "Unknown skill '${req.filePath}'")
+                "skill:${req.filePath}" to (body
+                    ?: "// ERROR: Unknown skill '${req.filePath}'. Use one of the names from the Skills section.")
+            }
+
+            val mergedFiles = fullFilesMap + partialFilesMap + skillFilesMap
 
             val assistantMsg = response.message.trim().takeIf { it.isNotBlank() }
             val reasoningStr = response.reasoning?.takeIf { it.isNotBlank() }

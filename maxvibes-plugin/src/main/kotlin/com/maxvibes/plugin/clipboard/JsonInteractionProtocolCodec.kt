@@ -350,7 +350,7 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
 
             // granularity is optional; unknown values fall back to FULL
             val granularity = obj[InteractionRequestSchema.VIEW_GRANULARITY]?.jsonPrimitive?.contentOrNull
-                ?.let { raw -> runCatching { CodeGranularity.valueOf(raw) }.getOrElse { CodeGranularity.FULL } }
+                ?.let { raw -> runCatching { CodeGranularity.valueOf(raw.uppercase()) }.getOrElse { CodeGranularity.FULL } }
                 ?: CodeGranularity.FULL
 
             // elementPath is optional (required only for ELEMENT granularity)

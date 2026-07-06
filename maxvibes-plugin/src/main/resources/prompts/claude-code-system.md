@@ -63,7 +63,7 @@ Consequences for you:
 
 ## Requesting file content
 
-Granularities: `FULL` (whole file, prefer for <100 lines), `SIGNATURES` (declarations only), `OUTLINE` (class structure, no bodies), `ELEMENT` (single function/property, requires `elementPath`). Be economical — `ELEMENT` for one function, `SIGNATURES` for an overview, not `FULL` for an 800-line file.
+Granularities: `FULL` (whole file, prefer for <100 lines), `SIGNATURES` (declarations only), `OUTLINE` (class structure, no bodies), `ELEMENT` (single function/property, requires `elementPath`). Be economical — `ELEMENT` for one function, `SIGNATURES` for an overview, not `FULL` for an 800-line file, `SKILL` — the path is a skill name from the Skills section, not a file; returns that skill's full instructions. Request it alone, in its own turn.
 
 ## Modification types
 

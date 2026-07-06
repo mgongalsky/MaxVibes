@@ -131,7 +131,9 @@ class MaxVibesService(private val project: Project) : Disposable {
     }
 
     val promptService: PromptService by lazy {
-        PromptService.getInstance(project)
+        PromptService.getInstance(project).apply {
+            skillCatalogProvider = { specificPromptService.skillCatalogSection() }
+        }
     }
 
     val promptPort: PromptPort
@@ -191,7 +193,8 @@ class MaxVibesService(private val project: Project) : Disposable {
             promptPort = promptPort,
             logger = MaxVibesLogger,
             sessionManager = clipboardSessionManager,
-            chatSessionRepository = chatSessionRepository
+            chatSessionRepository = chatSessionRepository,
+            specificPromptService = specificPromptService
         )
     }
 
@@ -273,7 +276,8 @@ class MaxVibesService(private val project: Project) : Disposable {
             sessionManager = clipboardSessionManager,
             chatSessionRepository = chatSessionRepository,
             activityTracker = claudeCodeActivityTracker,
-            sessionLog = claudeCodeSessionLog
+            sessionLog = claudeCodeSessionLog,
+            specificPromptService = specificPromptService
         )
     }
 
