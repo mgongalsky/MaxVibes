@@ -18,6 +18,9 @@ class ChatResponseDTO {
 
     @Description("List of file/element views requested from the project. Each entry describes what was requested and at what granularity.")
     var requestedViews: List<RequestedViewInfoDTO> = emptyList()
+
+    @Description("Shell commands to run in the user's terminal. LAST RESORT — only for what modifications cannot do (build, tests, git, dependencies, diagnostics). Never create/edit/delete source files via shell; sole exception is working around a PSI modification that just failed — state that in reason. Normally an empty list.")
+    var commands: List<CommandDTO> = emptyList()
 }
 
 class ModificationDTO {
@@ -74,4 +77,17 @@ class PlanningResultDTO {
     var requestedFiles: List<String> = emptyList()
 
     override fun toString(): String = "PlanningResultDTO(files=${requestedFiles.size}, message=${message.take(50)})"
+}
+
+class CommandDTO {
+    @Description("Shell command line to execute from the project root (e.g. 'gradlew.bat test')")
+    var command: String = ""
+
+    @Description("REQUIRED: one human-readable sentence explaining why this command is needed and why modifications cannot do it. Shown to the user for approval.")
+    var reason: String? = null
+
+    @Description("Timeout in seconds for this command (default 120)")
+    var timeoutSec: Int = 120
+
+    override fun toString(): String = "CommandDTO(command=${command.take(60)})"
 }

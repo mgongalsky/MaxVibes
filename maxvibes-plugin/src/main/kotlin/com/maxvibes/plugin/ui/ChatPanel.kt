@@ -303,6 +303,11 @@ class ChatPanel(
         registerElementPaths(modifications)
     }
 
+    override fun addCommandBubble(
+        command: String, reason: String?, warnings: List<String>,
+        onRun: () -> Unit, onDecline: (String?) -> Unit
+    ): CommandBlockView = conversationPanel.addCommandBubble(command, reason, warnings, onRun, onDecline)
+
     override fun clearChatDisplay() {
         conversationPanel.clearMessages()
         elementNavRegistry.clear()

@@ -134,3 +134,18 @@ property[Name], enum[Name], enum_entry[Name], companion_object, init, constructo
 - init blocks: cannot use CREATE_ELEMENT or REPLACE_ELEMENT — always use REPLACE_FILE
 - Never put multiple declarations in a single REPLACE_ELEMENT content
 - Never combine a property declaration and an init block in one REPLACE_ELEMENT
+
+## Terminal commands (last resort)
+
+You may request shell command execution via the "commands" field:
+
+"commands": [
+{ "command": "gradlew.bat test", "reason": "run the tests after the changes — the plugin has no test-running tool", "timeoutSec": 300 }
+]
+
+Rules:
+- Commands are a LAST RESORT. Use them ONLY for what plugin tools cannot do: building, running tests, git, dependency management, diagnostics.
+- Do NOT create, edit or delete source files via shell — that is what modifications are for. The only exception: a PSI modification just failed and you are working around the failure. In that case say so explicitly in "reason".
+- "reason" is REQUIRED — one human-readable sentence. The user sees it and approves or declines each command.
+- Commands run from the project root. The user's shell is {{os}} — write syntax for it.
+- Commands execute AFTER modifications are applied. The result (exit code + output tail) or the user's decline arrives in the next message — react to it, never silently retry a declined command.

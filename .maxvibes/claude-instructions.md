@@ -4,7 +4,7 @@ When you receive a JSON message containing "_protocol", "systemInstruction", "ta
 
 1. RESPOND WITH ONLY A JSON OBJECT. Your entire response must be valid JSON — no text before/after, no code fences around the JSON, no explanations outside the JSON. (Markdown belongs *inside* the "message" field — see section 7.)
 
-2. DO NOT use computer tools, bash, file creation, artifacts, or any other tools. ALL code must go inside the JSON response in the "modifications" array.
+2. DO NOT use computer tools, bash, file creation, artifacts, or any other tools. ALL code must go inside the JSON response in the "modifications" array. If a shell command is genuinely needed, do NOT run it yourself — request it via the "commands" field (see section 9) and the IDE will run it on the user's machine.
 
 3. Response format:
    {
@@ -12,7 +12,8 @@ When you receive a JSON message containing "_protocol", "systemInstruction", "ta
    "requestedFiles": ["path/to/file.kt"],
    "reasoning": "why you need those files",
    "commitMessage": "feat: optional git commit message",
-   "modifications": [...]
+   "modifications": [...],
+   "commands": [...]
    }
 
 4. All fields are optional except "message" (always recommended):
@@ -21,13 +22,14 @@ When you receive a JSON message containing "_protocol", "systemInstruction", "ta
 - "reasoning" — why you need those files
 - "modifications" — code changes (see types below)
 - "commitMessage" — optional Git commit message (see below)
+- "commands" — shell commands for the IDE to run (LAST RESORT — see section 9)
 
 5. Plan-only mode:
-   If the request contains `planOnly: true` or the user asks to discuss/plan — respond with a **text discussion only** in the "message" field. Do NOT include a "modifications" array. Talk through the approach, trade-offs, and implementation steps. This is for collaborative planning before writing code.
+   If the request contains planOnly: true or the user asks to discuss/plan — respond with a text discussion only in the "message" field. Do NOT include "modifications" or "commands" arrays. Talk through the approach, trade-offs, and implementation steps. This is for collaborative planning before writing code.
 
 6. Commit messages:
-   You may include `"commitMessage"` with a concise English Git commit message (conventional commits preferred: `feat:`, `fix:`, `refactor:`, `chore:` etc.). The plugin automatically inserts it into the IDE commit dialog.
-   Include `commitMessage` when:
+   You may include "commitMessage" with a concise English Git commit message (conventional commits preferred: feat:, fix:, refactor:, chore: etc.). The plugin automatically inserts it into the IDE commit dialog.
+   Include commitMessage when:
 - You made actual code modifications (modifications array is non-empty)
 - OR the user explicitly asks for a commit message
   Omit it for planning discussions or when no code changes were made.
@@ -46,43 +48,30 @@ The "reasoning" field is displayed as plain text — do NOT use Markdown there.
 
 8. Modification types — PREFER element-level for existing files:
 
-| type             | When                          | path format                                              | content              | extra fields          |
-|------------------|-------------------------------|----------------------------------------------------------|----------------------|-----------------------|
-| REPLACE_ELEMENT  | Change a function/class/prop  | file:path/File.kt/class[Name]/function[method]           | Complete element     | elementKind           |
-| CREATE_ELEMENT   | Add new element               | see positioning rules below                              | New element code     | elementKind, position |
-| DELETE_ELEMENT   | Remove an element             | file:path/File.kt/class[Name]/function[old]              | (empty)              |                       |
-| ADD_IMPORT       | Add import to file            | file:path/File.kt                                        | (empty)              | importPath            |
-| REMOVE_IMPORT    | Remove import from file       | file:path/File.kt                                        | (empty)              | importPath            |
-| CREATE_FILE      | New file                      | src/main/kotlin/.../File.kt                              | Full file            |                       |
-| REPLACE_FILE     | Rewrite entire file           | src/main/kotlin/.../File.kt                              | Full file            |                       |
+| type | When | path format | content | extra fields |
+|------|------|-------------|---------|--------------|
+| REPLACE_ELEMENT | Change a function/class/prop | file:path/File.kt/class[Name]/function[method] | Complete element | elementKind |
+| CREATE_ELEMENT | Add new element | see positioning rules below | New element code | elementKind, position |
+| DELETE_ELEMENT | Remove an element | file:path/File.kt/class[Name]/function[old] | (empty) | |
+| ADD_IMPORT | Add import to file | file:path/File.kt | (empty) | importPath |
+| REMOVE_IMPORT | Remove import from file | file:path/File.kt | (empty) | importPath |
+| CREATE_FILE | New file | src/main/kotlin/.../File.kt | Full file | |
+| REPLACE_FILE | Rewrite entire file | src/main/kotlin/.../File.kt | Full file | |
 
-9. Element path format:
-   file:src/main/kotlin/com/example/User.kt/class[User]/function[validate]
-   Segments: class[Name], interface[Name], object[Name], function[Name], property[Name], companion_object, init, constructor[primary], enum_entry[Name]
+Element path format: file:src/main/kotlin/com/example/User.kt/class[User]/function[validate]
+Segments: class[Name], interface[Name], object[Name], function[Name], property[Name], companion_object, init, constructor[primary], enum_entry[Name]
 
-10. CREATE_ELEMENT positioning rules:
+CREATE_ELEMENT positioning rules:
 
 To add to end/start of a class — path points to the CLASS:
-{
-"type": "CREATE_ELEMENT",
-"path": "file:src/main/kotlin/com/example/ChatPanel.kt/class[ChatPanel]",
-"content": "fun updateTokenDisplay() { ... }",
-"elementKind": "FUNCTION",
-"position": "LAST_CHILD"
-}
+{ "type": "CREATE_ELEMENT", "path": "file:src/main/kotlin/com/example/ChatPanel.kt/class[ChatPanel]", "content": "fun updateTokenDisplay() { ... }", "elementKind": "FUNCTION", "position": "LAST_CHILD" }
 
 To insert after/before a specific element — path points to THAT ELEMENT:
-{
-"type": "CREATE_ELEMENT",
-"path": "file:src/main/kotlin/com/example/ChatPanel.kt/class[ChatPanel]/property[statusLabel]",
-"content": "private val tokenLabel = JBLabel(\"\")",
-"elementKind": "PROPERTY",
-"position": "AFTER"
-}
+{ "type": "CREATE_ELEMENT", "path": "file:src/main/kotlin/com/example/ChatPanel.kt/class[ChatPanel]/property[statusLabel]", "content": "private val tokenLabel = JBLabel(\"\")", "elementKind": "PROPERTY", "position": "AFTER" }
 
 NEVER use "anchor" field — it does not exist and will be silently ignored.
 
-11. Key rules for modifications:
+Key rules for modifications:
 - PREFER REPLACE_ELEMENT/CREATE_ELEMENT over REPLACE_FILE — this saves tokens significantly
 - Only use REPLACE_FILE when the majority of the file changes
 - Only use CREATE_FILE for genuinely new files
@@ -93,4 +82,20 @@ NEVER use "anchor" field — it does not exist and will be silently ignored.
 - "content" must be complete, compilable Kotlin code
 - The IDE applies changes automatically via PSI API
 
-12. For regular conversation (not MaxVibes protocol messages), respond normally as usual.
+9. Terminal commands (LAST RESORT):
+
+You may ask the IDE to run shell commands on the user's machine via the "commands" field:
+
+"commands": [
+{ "command": "gradlew.bat test", "reason": "run the tests after the changes — the plugin has no test-running tool", "timeoutSec": 300 }
+]
+
+Rules:
+- Commands are a LAST RESORT. Use them ONLY for what modifications cannot do: building, running tests, git, dependency management, diagnostics.
+- Do NOT create, edit or delete source files via shell — that is what "modifications" are for. The ONLY exception: a PSI modification just failed and you are working around that failure. In that case say so explicitly in "reason".
+- "reason" is REQUIRED — one human-readable sentence. The user sees it next to the command and approves or declines each command individually.
+- Commands run from the project root, in the user's shell (stated in the systemInstruction — e.g. PowerShell on Windows). Write syntax for that shell.
+- Multiple commands run sequentially; execution stops at the first non-zero exit code.
+- Commands execute AFTER modifications are applied. The result (exit code + output tail) or the user's decline arrives in the next protocol message — react to it. NEVER silently retry a declined command.
+
+For regular conversation (not MaxVibes protocol messages), respond normally as usual.

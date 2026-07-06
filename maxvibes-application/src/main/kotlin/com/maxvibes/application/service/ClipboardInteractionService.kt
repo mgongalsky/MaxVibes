@@ -3,6 +3,7 @@ package com.maxvibes.application.service
 import com.maxvibes.application.port.output.*
 import com.maxvibes.domain.model.code.ElementKind
 import com.maxvibes.domain.model.code.ElementPath
+import com.maxvibes.domain.model.command.CommandRequest
 import com.maxvibes.domain.model.interaction.*
 import com.maxvibes.domain.model.modification.InsertPosition
 import com.maxvibes.domain.model.modification.Modification
@@ -20,11 +21,19 @@ import com.maxvibes.domain.model.code.RequestedViewInfo
  * Builds JSON requests, copies them to the system clipboard, parses pasted LLM responses,
  * and applies resulting code modifications via [codeRepository].
  *
+ * Shell commands: when the LLM requests terminal commands via the `commands` field, they
+ * bypass the state machine — the session stays SESSION_ACTIVE, the UI renders per-command
+ * Run/Decline blocks, and once every command is resolved the controller calls
+ * [submitCommandResults] to continue the dialog as a normal round-trip. Responses that mix
+ * `commands` with file requests get their commands skipped (files win) — see
+ * [processUnifiedResponse].
+ *
  * State transitions are delegated to [ClipboardSessionManager].
  *
  * Public API surface:
  * - [handleUserInput] — unified entry point; routes by session status.
  * - [startTask] / [continueDialog] / [handlePastedResponse] — explicit stage calls.
+ * - [submitCommandResults] — send resolved shell-command outcomes back as a new round-trip.
  * - [status] — current [ClipboardSessionStatus] for a session.
  * - [reset] — clears in-memory state and sets session back to IDLE.
  * - [redoLastRequest] — re-generates JSON for any session, even after switching chats.
@@ -284,6 +293,7 @@ class ClipboardInteractionService(
             "Parsed: message=${response.message.take(50)}, " +
                     "requestedFiles=${response.requestedFiles.size}, " +
                     "modifications=${response.modifications.size}, " +
+                    "commands=${response.commands.size}, " +
                     "reasoning=$reasoningDisplay"
         )
 
@@ -300,6 +310,34 @@ class ClipboardInteractionService(
         }
 
         return processUnifiedResponse(sessionId, response, inputTokens, outputTokens)
+    }
+
+    /**
+     * Sends the outcomes of the current turn's shell commands (execution results or user
+     * declines) back to the LLM as an automatic round-trip — the command analogue of the
+     * requestedFiles continuation. Called by the UI layer once ALL command blocks of the
+     * turn are resolved (Run or Decline). No new user message is added.
+     *
+     * Session flow: SESSION_ACTIVE → (JsonCopied) → AWAITING_PASTE, exactly like any other
+     * generated request; the user pastes the JSON into the LLM and pastes the reply back.
+     */
+    suspend fun submitCommandResults(sessionId: String, resultsForLlm: String): ClipboardStepResult {
+        log("Submitting command results (${resultsForLlm.length} chars)")
+        if (currentStatus(sessionId) != ClipboardSessionStatus.SESSION_ACTIVE) {
+            return error("Command results can only be submitted in SESSION_ACTIVE state.")
+        }
+        if (sessionState == null || sessionStateOwner != sessionId) {
+            log("sessionState missing or owned by another session in submitCommandResults — restoring for $sessionId")
+            if (!ensureWorkspace(sessionId)) {
+                return error("Cannot restore session state for session $sessionId. Please start a new task.")
+            }
+        }
+        return generateAndCopyJson(
+            sessionId = sessionId,
+            freshFiles = emptyMap(),
+            isFirstMessage = false,
+            commandResults = resultsForLlm
+        )
     }
 
     /**
@@ -391,13 +429,20 @@ class ClipboardInteractionService(
         val hasFiles = response.codeViewRequests.isNotEmpty()
         val hasMods = response.modifications.isNotEmpty()
         val hasMessage = response.message.isNotBlank()
+        val commands = response.commands.mapNotNull { convertCommand(it) }
 
-        log("Processing: hasFiles=$hasFiles, hasMods=$hasMods, hasMessage=$hasMessage")
+        log("Processing: hasFiles=$hasFiles, hasMods=$hasMods, hasMessage=$hasMessage, commands=${commands.size}")
 
         val modResults = if (hasMods) applyModifications(response.modifications)
         else emptyList<ModificationResult>()
 
         if (hasFiles) {
+            // Protocol rule: commands must not be mixed with file requests.
+            // Files win — commands are skipped, and the LLM is told so via commandResults.
+            if (commands.isNotEmpty()) {
+                log("WARN: response mixed file requests with ${commands.size} command(s) — commands skipped per protocol")
+            }
+
             val fullRequests = response.codeViewRequests
                 .filter { it.granularity == com.maxvibes.domain.model.code.CodeGranularity.FULL }
                 .map { it.filePath }
@@ -409,7 +454,12 @@ class ClipboardInteractionService(
                     return buildCompletedResult(
                         response = response,
                         modResults = modResults,
-                        extraMessage = "Failed to gather some requested files.",
+                        extraMessage = buildString {
+                            append("Failed to gather some requested files.")
+                            if (commands.isNotEmpty()) {
+                                append(" ${commands.size} command(s) were skipped (mixed with file requests).")
+                            }
+                        },
                         inputTokens = inputTokens,
                         outputTokens = outputTokens
                     )
@@ -446,7 +496,12 @@ class ClipboardInteractionService(
                 isFirstMessage = false,
                 assistantMessage = assistantMsg,
                 llmReasoning = reasoningStr,
-                requestedViews = requestedViewInfos
+                requestedViews = requestedViewInfos,
+                commandResults = if (commands.isEmpty()) null else
+                    "SKIPPED: your ${commands.size} command(s) were not executed because the response " +
+                            "also contained file requests. Do not mix commands with requestedViews/requestedFiles — " +
+                            "re-issue the commands after receiving the files.",
+                skippedCommands = commands.size
             )
         }
 
@@ -454,10 +509,17 @@ class ClipboardInteractionService(
             response = response,
             modResults = modResults,
             inputTokens = inputTokens,
-            outputTokens = outputTokens
+            outputTokens = outputTokens,
+            commands = commands
         )
     }
 
+    /**
+     * @param commandResults formatted outcomes of the previous turn's shell commands
+     *        (execution output or user declines) — forwarded to the LLM in the request.
+     * @param skippedCommands number of commands dropped because the response mixed them
+     *        with file requests; surfaced to the UI via [ClipboardStepResult.WaitingForResponse].
+     */
     private fun generateAndCopyJson(
         sessionId: String,
         freshFiles: Map<String, String>,
@@ -468,7 +530,9 @@ class ClipboardInteractionService(
         ideErrors: String? = null,
         attachedContext: String? = null,
         requestedViews: List<RequestedViewInfo> = emptyList(),
-        specificPromptContent: String? = null
+        specificPromptContent: String? = null,
+        commandResults: String? = null,
+        skippedCommands: Int = 0
     ): ClipboardStepResult {
         val state = sessionState ?: return error("No active session")
 
@@ -480,7 +544,8 @@ class ClipboardInteractionService(
             planOnlySuffix = PLAN_ONLY_SUFFIX,
             ideErrors = ideErrors,
             attachedContext = attachedContext,
-            specificPromptContent = specificPromptContent
+            specificPromptContent = specificPromptContent,
+            commandResults = commandResults
         )
 
         val copied = clipboardPort.copyRequestToClipboard(request)
@@ -502,7 +567,8 @@ class ClipboardInteractionService(
             llmReasoning = llmReasoning,
             freshFileNames = freshFiles.keys.map { it.substringAfterLast('/') },
             previouslyGatheredCount = request.previouslyGatheredPaths.size,
-            requestedViews = requestedViews
+            requestedViews = requestedViews,
+            skippedCommands = skippedCommands
         )
     }
 
@@ -657,7 +723,8 @@ class ClipboardInteractionService(
         modResults: List<ModificationResult>,
         extraMessage: String = "",
         inputTokens: Int = 0,
-        outputTokens: Int = 0
+        outputTokens: Int = 0,
+        commands: List<CommandRequest> = emptyList()
     ): ClipboardStepResult {
         val successCount = modResults.count { it is ModificationResult.Success }
         val failCount = modResults.size - successCount
@@ -672,7 +739,7 @@ class ClipboardInteractionService(
         }
 
         if (modResults.isNotEmpty()) notificationPort.showSuccess("Done. Session active — you can continue the dialog.")
-        log("Completed: mods=$successCount ok/$failCount fail.")
+        log("Completed: mods=$successCount ok/$failCount fail, commands=${commands.size}.")
 
         return ClipboardStepResult.Completed(
             message = messageText.trim(),
@@ -681,7 +748,8 @@ class ClipboardInteractionService(
             inputTokens = inputTokens,
             outputTokens = outputTokens,
             llmReasoning = response.reasoning?.takeIf { it.isNotBlank() },
-            commitMessage = response.commitMessage?.takeIf { it.isNotBlank() }
+            commitMessage = response.commitMessage?.takeIf { it.isNotBlank() },
+            commands = commands
         )
     }
 
@@ -697,7 +765,8 @@ class ClipboardInteractionService(
                 request.fileTree.length +
                 request.freshFiles.values.sumOf { it.length } +
                 request.chatHistory.sumOf { it.content.length } +
-                (request.attachedContext?.length ?: 0)
+                (request.attachedContext?.length ?: 0) +
+                (request.commandResults?.length ?: 0)
         return textSize / 4
     }
 
@@ -751,11 +820,24 @@ class ClipboardInteractionService(
         }
     }
 
+    /**
+     * Converts an LLM-protocol [InteractionCommand] into a domain [CommandRequest].
+     * Skips entries with a blank command line.
+     */
+    private fun convertCommand(cmd: InteractionCommand): CommandRequest? {
+        if (cmd.command.isBlank()) return null
+        return CommandRequest(
+            command = cmd.command,
+            reason = cmd.reason.takeIf { it.isNotBlank() },
+            timeoutSec = cmd.timeoutSec.coerceIn(1, 3600)
+        )
+    }
+
     companion object {
         private val PLAN_ONLY_SUFFIX = "\n\n" +
                 "## PLAN-ONLY MODE — DISCUSSION REQUIRED\n\n" +
                 "DO NOT generate any code changes in the modifications array.\n" +
-                "Keep modifications empty.\n" +
+                "Keep modifications and commands empty.\n" +
                 "Your goal is to DISCUSS the plan with the user before any code is written.\n\n" +
                 "Instead of code, you must:\n" +
                 "1. Briefly explain what you understand from the task\n" +
@@ -778,7 +860,9 @@ sealed class ClipboardStepResult {
         val llmReasoning: String? = null,
         val freshFileNames: List<String> = emptyList(),
         val previouslyGatheredCount: Int = 0,
-        val requestedViews: List<com.maxvibes.domain.model.code.RequestedViewInfo> = emptyList()
+        val requestedViews: List<com.maxvibes.domain.model.code.RequestedViewInfo> = emptyList(),
+        /** Number of shell commands dropped because the response mixed them with file requests. */
+        val skippedCommands: Int = 0
     ) : ClipboardStepResult()
 
     data class Completed(
@@ -788,7 +872,9 @@ sealed class ClipboardStepResult {
         val inputTokens: Int = 0,
         val outputTokens: Int = 0,
         val llmReasoning: String? = null,
-        val commitMessage: String? = null
+        val commitMessage: String? = null,
+        /** Shell commands requested by the LLM — the UI renders Run/Decline blocks for them. */
+        val commands: List<CommandRequest> = emptyList()
     ) : ClipboardStepResult()
 
     /**

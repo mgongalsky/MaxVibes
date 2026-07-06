@@ -13,6 +13,9 @@ import com.maxvibes.application.service.ClipboardStepResult
 import com.maxvibes.domain.model.chat.ChatMessage
 import com.maxvibes.domain.model.chat.ChatSession
 import com.maxvibes.domain.model.chat.MessageRole
+import com.maxvibes.domain.model.command.CommandExecution
+import com.maxvibes.domain.model.command.CommandRequest
+import com.maxvibes.domain.model.command.CommandStatus
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.plugin.service.MaxVibesLogger
 import com.maxvibes.plugin.service.MaxVibesService
@@ -68,6 +71,15 @@ interface ChatPanelCallbacks {
 
     /** Called to show the welcome screen (e.g. no sessions). */
     fun onShowWelcome()
+
+    /** Renders an interactive shell-command block; returns a view handle for status updates. */
+    fun addCommandBubble(
+        command: String,
+        reason: String?,
+        warnings: List<String>,
+        onRun: () -> Unit,
+        onDecline: (String?) -> Unit
+    ): CommandBlockView
 }
 
 /**
@@ -305,6 +317,199 @@ class ChatMessageController(
         }
     }
 
+    // ==================== Command Flow ====================
+
+    /** Accumulates Run/Decline outcomes for the current turn's command batch. */
+    private data class CommandTurn(
+        val sessionId: String,
+        val mode: InteractionMode,
+        val total: Int,
+        val executions: MutableList<CommandExecution> = mutableListOf()
+    )
+
+    private var commandTurn: CommandTurn? = null
+
+    /**
+     * Renders command blocks and keeps input locked until every command is resolved
+     * (Run or Decline). When the batch completes, results are automatically sent
+     * back to the LLM through the mode-appropriate channel — see [recordExecution].
+     */
+    private fun presentCommands(commands: List<CommandRequest>, session: ChatSession, mode: InteractionMode) {
+        if (commands.isEmpty()) return
+        MaxVibesLogger.info("Controller", "presentCommands", mapOf("count" to commands.size, "mode" to mode.name))
+        commandTurn = CommandTurn(session.id, mode, commands.size)
+        callbacks.setInputEnabled(false)
+        callbacks.setStatus("\u26A1 ${commands.size} command(s) awaiting approval")
+        commands.forEach { cmd ->
+            val warnings = service.executeCommandUseCase.warningsFor(cmd)
+            lateinit var view: CommandBlockView
+            view = callbacks.addCommandBubble(
+                command = cmd.command,
+                reason = cmd.reason,
+                warnings = warnings,
+                onRun = { runCommand(cmd, view) },
+                onDecline = { comment ->
+                    view.setDeclined(comment)
+                    chatTreeService.addMessage(
+                        commandTurn?.sessionId ?: session.id, MessageRole.SYSTEM,
+                        "\u2716 Declined: ${cmd.command}" + (comment?.let { " \u2014 $it" } ?: "")
+                    )
+                    recordExecution(
+                        CommandExecution(request = cmd, status = CommandStatus.DECLINED, declineComment = comment)
+                    )
+                }
+            )
+        }
+    }
+
+    /** Executes one approved command in a background task and records its outcome. */
+    private fun runCommand(request: CommandRequest, view: CommandBlockView) {
+        view.setRunning()
+        callbacks.setStatus("\u26A1 Running: ${request.command.take(50)}")
+        ProgressManager.getInstance().run(object : Task.Backgroundable(project, "MaxVibes: Running command...", false) {
+            override fun run(indicator: ProgressIndicator) {
+                val execution = runBlocking { service.executeCommandUseCase.execute(request) }
+                ApplicationManager.getApplication().invokeLater {
+                    val headline = when (execution.status) {
+                        CommandStatus.SUCCESS -> "\u2705 exit 0 \u00B7 ${execution.durationMs / 1000}s"
+                        CommandStatus.FAILED -> "\u274C exit ${execution.exitCode} \u00B7 ${execution.durationMs / 1000}s"
+                        CommandStatus.TIMEOUT -> "\u23F1 Timeout after ${request.timeoutSec}s"
+                        CommandStatus.ERROR -> "\u274C Failed to start"
+                        CommandStatus.DECLINED -> "\u2716 Declined"
+                    }
+                    view.setResult(headline, execution.output, execution.status == CommandStatus.SUCCESS)
+                    chatTreeService.addMessage(
+                        commandTurn?.sessionId ?: chatTreeService.getActiveSession().id,
+                        MessageRole.SYSTEM,
+                        "\u26A1 ${request.command} \u2192 $headline"
+                    )
+                    recordExecution(execution)
+                }
+            }
+        })
+    }
+
+    /** Records one resolved command; when the batch is complete, auto-continues the dialog. */
+    private fun recordExecution(execution: CommandExecution) {
+        val turn = commandTurn ?: return
+        turn.executions.add(execution)
+        val remaining = turn.total - turn.executions.size
+        if (remaining > 0) {
+            callbacks.setStatus("\u26A1 $remaining command(s) awaiting approval")
+            return
+        }
+        commandTurn = null
+        val session = chatTreeService.getSessionById(turn.sessionId)
+        if (session == null) {
+            callbacks.setInputEnabled(true)
+            return
+        }
+        val formatted = turn.executions.joinToString("\n\n---\n\n") {
+            service.executeCommandUseCase.formatForLlm(it)
+        }
+        MaxVibesLogger.info(
+            "Controller", "commandTurn complete",
+            mapOf("mode" to turn.mode.name, "n" to turn.executions.size)
+        )
+        callbacks.setStatus("\u26A1 Sending command results...")
+        when (turn.mode) {
+            InteractionMode.CLIPBOARD -> runClipboardBg("Sending command results...", session) {
+                service.clipboardService.submitCommandResults(session.id, formatted)
+            }
+
+            InteractionMode.CLAUDE_CODE -> runClaudeCodeBg("Sending command results...", session) {
+                service.claudeCodeService.submitCommandResults(session.id, formatted)
+            }
+
+            InteractionMode.API, InteractionMode.CHEAP_API -> {
+                val task = "=== COMMAND RESULTS ===\n$formatted\n\nReact to these results and continue the task."
+                val history = session.messages.map { it.toChatMessageDTO() }
+                val updated = chatTreeService.addMessage(session.id, MessageRole.USER, task)
+                runApiRequest(
+                    task = task, session = updated, history = history,
+                    isDryRun = false, isPlanOnly = false,
+                    globalContextFiles = lastApiContext?.globalContextFiles
+                        ?: chatTreeService.getGlobalContextFiles(),
+                    ideErrors = null,
+                    progressTitle = "Processing command results"
+                )
+            }
+        }
+    }
+
+    // ==================== Auto-Retry Logic ====================
+
+    private fun triggerAutoRetry(
+        failures: List<ModificationResult.Failure>,
+        session: ChatSession,
+        ctx: ApiRequestContext
+    ) {
+        autoRetryCount++
+        val errorSummary = buildErrorSummary(failures)
+        val retryTask = buildApiRetryTask(failures)
+
+        MaxVibesLogger.warn(
+            "Controller", "autoRetry",
+            data = mapOf("attempt" to autoRetryCount, "failures" to failures.size)
+        )
+
+        val feedbackMsg =
+            "\uD83D\uDD04 Auto-fix: ${failures.size} modification(s) failed \u2014 asking LLM to correct:\n$errorSummary"
+        callbacks.appendToChat(feedbackMsg)
+        callbacks.setStatus("Auto-fixing...")
+
+        val history = session.messages.map { it.toChatMessageDTO() }
+        val retrySession = chatTreeService.addMessage(session.id, MessageRole.USER, retryTask)
+
+        runApiRequest(
+            task = retryTask,
+            session = retrySession,
+            history = history,
+            isDryRun = ctx.isDryRun,
+            isPlanOnly = false,
+            globalContextFiles = ctx.globalContextFiles,
+            ideErrors = ctx.ideErrors,
+            progressTitle = "Auto-fixing"
+        )
+    }
+
+    private fun runApiRequest(
+        task: String,
+        session: ChatSession,
+        history: List<ChatMessageDTO>,
+        isDryRun: Boolean,
+        isPlanOnly: Boolean,
+        globalContextFiles: List<String>,
+        ideErrors: String?,
+        progressTitle: String
+    ) {
+        ProgressManager.getInstance()
+            .run(object : Task.Backgroundable(project, "MaxVibes: $progressTitle...", true) {
+                override fun run(indicator: ProgressIndicator) {
+                    service.notificationService.setProgressIndicator(indicator)
+                    runBlocking {
+                        val req = ContextAwareRequest(
+                            currentMessage = task, history = history, dryRun = isDryRun,
+                            planOnly = isPlanOnly, globalContextFiles = globalContextFiles,
+                            ideErrors = ideErrors
+                        )
+                        val result = service.contextAwareModifyUseCase.execute(req)
+                        ApplicationManager.getApplication().invokeLater { handleApiResult(result, session, isPlanOnly) }
+                    }
+                }
+
+                override fun onCancel() {
+                    ApplicationManager.getApplication().invokeLater {
+                        chatTreeService.addMessage(session.id, MessageRole.SYSTEM, "Cancelled")
+                        callbacks.appendToChat("\u26A0\uFE0F Cancelled")
+                        callbacks.setInputEnabled(true)
+                        callbacks.setStatus("Cancelled")
+                        MaxVibesLogger.warn("Controller", "cancelled by user")
+                    }
+                }
+            })
+    }
+
     // ==================== Result Handlers ====================
 
     private fun handleApiResult(result: ContextAwareResult, session: ChatSession, wasPlanOnly: Boolean = false) {
@@ -378,6 +583,22 @@ class ChatMessageController(
             if (ctx != null) {
                 triggerAutoRetry(failures, updatedSession, ctx)
                 return
+            }
+        }
+
+        if (result.commands.isNotEmpty()) {
+            when {
+                wasPlanOnly ->
+                    callbacks.appendToChat("\u26A0\uFE0F ${result.commands.size} command(s) skipped \u2014 plan-only mode")
+
+                failures.isNotEmpty() ->
+                    callbacks.appendToChat("\u26A0\uFE0F ${result.commands.size} command(s) skipped \u2014 fix failed modifications first")
+
+                else -> {
+                    presentCommands(result.commands, updatedSession, InteractionMode.API)
+                    callbacks.updateBreadcrumb()
+                    return
+                }
             }
         }
 
@@ -501,6 +722,7 @@ class ChatMessageController(
                         callbacks.appendToChat("\uD83D\uDCAC Commit message set in IDE")
                     }
                     callbacks.appendToChat(feedbackMsg)
+                    if (result.commands.isNotEmpty()) callbacks.appendToChat("\u26A0\uFE0F ${result.commands.size} command(s) skipped \u2014 fix failed modifications first")
 
                     val retryTask = buildClipboardRetryTask(failures)
                     copyToClipboard(retryTask)
@@ -523,6 +745,12 @@ class ChatMessageController(
                     result.commitMessage?.let { msg ->
                         callbacks.setCommitMessage(msg)
                         callbacks.appendToChat("\uD83D\uDCAC Commit message set in IDE")
+                    }
+
+                    if (result.commands.isNotEmpty()) {
+                        presentCommands(result.commands, session, InteractionMode.CLIPBOARD)
+                        callbacks.updateModeIndicator()
+                        return
                     }
 
                     callbacks.setInputEnabled(true)
@@ -614,6 +842,12 @@ class ChatMessageController(
                     appliedModifications = emptyList()
                 )
 
+                if (result.skippedCommands > 0) {
+                    callbacks.appendToChat(
+                        "\u26A0\uFE0F ${result.skippedCommands} command(s) skipped \u2014 response mixed them with requestedViews"
+                    )
+                }
+
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
                 callbacks.setStatus("\uD83E\uDD16 Awaiting approval \u2014 click Approve to gather files and continue")
@@ -629,7 +863,8 @@ class ChatMessageController(
                         "in" to result.inputTokens,
                         "out" to result.outputTokens,
                         "durationMs" to result.durationMs,
-                        "hasCommitMsg" to (result.commitMessage != null)
+                        "hasCommitMsg" to (result.commitMessage != null),
+                        "commands" to result.commands.size
                     )
                 )
                 callbacks.registerElementPaths(result.modifications)
@@ -677,6 +912,16 @@ class ChatMessageController(
                     callbacks.appendToChat("\uD83D\uDCAC Commit message set in IDE")
                 }
 
+                if (result.commands.isNotEmpty()) {
+                    if (failures.isEmpty()) {
+                        presentCommands(result.commands, session, InteractionMode.CLAUDE_CODE)
+                        callbacks.updateModeIndicator()
+                        callbacks.updateBreadcrumb()
+                        return
+                    }
+                    callbacks.appendToChat("\u26A0\uFE0F ${result.commands.size} command(s) skipped \u2014 fix failed modifications first")
+                }
+
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
                 if (failures.isNotEmpty()) {
@@ -718,7 +963,7 @@ class ChatMessageController(
 
     /**
      * Formats the bubble-footer info line for Claude Code turns.
-     * Layout: `↑1234 · ↓567 · 42s` — components are omitted when their value is zero.
+     * Layout: `\u21911234 \u00B7 \u2193567 \u00B7 42s` — components are omitted when their value is zero.
      * Returns null when nothing meaningful is available so the bubble suppresses the footer.
      */
     private fun buildTokenInfoForClaudeCode(inTok: Int, outTok: Int, durationMs: Long): String? {
@@ -727,79 +972,6 @@ class ChatMessageController(
         if (outTok > 0) parts += "\u2193${fmt(outTok)}"
         if (durationMs >= 1000) parts += "${durationMs / 1000}s"
         return if (parts.isEmpty()) null else parts.joinToString("  \u00B7  ")
-    }
-
-    // ==================== Auto-Retry Logic ====================
-
-    private fun triggerAutoRetry(
-        failures: List<ModificationResult.Failure>,
-        session: ChatSession,
-        ctx: ApiRequestContext
-    ) {
-        autoRetryCount++
-        val errorSummary = buildErrorSummary(failures)
-        val retryTask = buildApiRetryTask(failures)
-
-        MaxVibesLogger.warn(
-            "Controller", "autoRetry",
-            data = mapOf("attempt" to autoRetryCount, "failures" to failures.size)
-        )
-
-        val feedbackMsg =
-            "\uD83D\uDD04 Auto-fix: ${failures.size} modification(s) failed \u2014 asking LLM to correct:\n$errorSummary"
-        callbacks.appendToChat(feedbackMsg)
-        callbacks.setStatus("Auto-fixing...")
-
-        val history = session.messages.map { it.toChatMessageDTO() }
-        val retrySession = chatTreeService.addMessage(session.id, MessageRole.USER, retryTask)
-
-        runApiRequest(
-            task = retryTask,
-            session = retrySession,
-            history = history,
-            isDryRun = ctx.isDryRun,
-            isPlanOnly = false,
-            globalContextFiles = ctx.globalContextFiles,
-            ideErrors = ctx.ideErrors,
-            progressTitle = "Auto-fixing"
-        )
-    }
-
-    private fun runApiRequest(
-        task: String,
-        session: ChatSession,
-        history: List<ChatMessageDTO>,
-        isDryRun: Boolean,
-        isPlanOnly: Boolean,
-        globalContextFiles: List<String>,
-        ideErrors: String?,
-        progressTitle: String
-    ) {
-        ProgressManager.getInstance()
-            .run(object : Task.Backgroundable(project, "MaxVibes: $progressTitle...", true) {
-                override fun run(indicator: ProgressIndicator) {
-                    service.notificationService.setProgressIndicator(indicator)
-                    runBlocking {
-                        val req = ContextAwareRequest(
-                            currentMessage = task, history = history, dryRun = isDryRun,
-                            planOnly = isPlanOnly, globalContextFiles = globalContextFiles,
-                            ideErrors = ideErrors
-                        )
-                        val result = service.contextAwareModifyUseCase.execute(req)
-                        ApplicationManager.getApplication().invokeLater { handleApiResult(result, session, isPlanOnly) }
-                    }
-                }
-
-                override fun onCancel() {
-                    ApplicationManager.getApplication().invokeLater {
-                        chatTreeService.addMessage(session.id, MessageRole.SYSTEM, "Cancelled")
-                        callbacks.appendToChat("\u26A0\uFE0F Cancelled")
-                        callbacks.setInputEnabled(true)
-                        callbacks.setStatus("Cancelled")
-                        MaxVibesLogger.warn("Controller", "cancelled by user")
-                    }
-                }
-            })
     }
 
     // ==================== Helpers ====================

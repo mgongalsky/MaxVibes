@@ -19,9 +19,11 @@ import com.maxvibes.domain.model.code.CodeViewRequest
 import com.maxvibes.domain.model.code.ElementKind
 import com.maxvibes.domain.model.code.ElementPath
 import com.maxvibes.domain.model.code.RequestedViewInfo
+import com.maxvibes.domain.model.command.CommandRequest
 import com.maxvibes.domain.model.interaction.ClaudeCodeActivity
 import com.maxvibes.domain.model.interaction.ClipboardRequest
 import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
+import com.maxvibes.domain.model.interaction.InteractionCommand
 import com.maxvibes.domain.model.interaction.InteractionModification
 import com.maxvibes.domain.model.interaction.InteractionResponse
 import com.maxvibes.domain.model.modification.InsertPosition
@@ -38,6 +40,13 @@ import com.maxvibes.shared.result.Result
  * the session enters [ClipboardSessionStatus.AWAITING_APPROVE] and the UI shows an
  * Approve button. Pressing it gathers the requested files and triggers the next [send].
  *
+ * Shell commands: when the LLM requests terminal commands via the `commands` field,
+ * they bypass the state machine entirely — the session stays SESSION_ACTIVE, the UI
+ * renders per-command Run/Decline blocks, and once every command is resolved the
+ * controller calls [submitCommandResults] to continue the dialog automatically.
+ * Responses that mix `commands` with `requestedViews` get their commands skipped
+ * (files win) — see [processResponse].
+ *
  * Reuses the existing clipboard stack as-is: [InteractionRequestBuilder] for request
  * assembly, [ClipboardSessionState] for the in-memory workspace, [ClipboardSessionManager]
  * for the state machine, and [CodeRepository] for applying PSI modifications.
@@ -49,10 +58,11 @@ import com.maxvibes.shared.result.Result
  * so the next send replays the full context to the freshly started process.
  *
  * Public API surface:
- *  - [handleUserInput] — unified entry point; routes by session status.
- *  - [approve]         — confirm an [ClipboardSessionStatus.AWAITING_APPROVE] response and continue.
- *  - [status]          — current [ClipboardSessionStatus] for a session.
- *  - [reset]           — clears in-memory state and sets session back to IDLE.
+ *  - [handleUserInput]       — unified entry point; routes by session status.
+ *  - [approve]               — confirm an [ClipboardSessionStatus.AWAITING_APPROVE] response and continue.
+ *  - [submitCommandResults]  — send resolved shell-command outcomes back as an automatic follow-up.
+ *  - [status]                — current [ClipboardSessionStatus] for a session.
+ *  - [reset]                 — clears in-memory state and sets session back to IDLE.
  *
  * Concurrency: the service is single-threaded by contract. Callers must not invoke
  * [handleUserInput]/[approve] concurrently for the same project.
@@ -235,6 +245,36 @@ class ClaudeCodeInteractionService(
         )
     }
 
+    /**
+     * Sends the outcomes of the current turn's shell commands (execution results or user
+     * declines) back to Claude Code as an automatic minimal-context follow-up. Called by
+     * the UI layer once ALL command blocks of the turn are resolved (Run or Decline).
+     *
+     * No new user message is involved — this is a protocol continuation, analogous to the
+     * post-approve file delivery. Valid only in [ClipboardSessionStatus.SESSION_ACTIVE]:
+     * commands never coexist with AWAITING_APPROVE, because mixed responses get their
+     * commands skipped in [processResponse].
+     */
+    suspend fun submitCommandResults(sessionId: String, resultsForLlm: String): ClaudeCodeStepResult {
+        sessionLog?.begin(sessionId)
+        sessionLog?.event("submitCommandResults", mapOf("len" to resultsForLlm.length))
+        if (sessionManager.statusFor(sessionId) != ClipboardSessionStatus.SESSION_ACTIVE) {
+            return error("Command results can only be submitted in SESSION_ACTIVE state")
+        }
+        if (sessionState == null || sessionStateOwner != sessionId) {
+            log("sessionState missing or owned by another session in submitCommandResults — restoring for $sessionId")
+            if (!ensureWorkspace(sessionId)) {
+                return error("Cannot restore session state for session $sessionId. Please start a new task.")
+            }
+        }
+        return doSend(
+            sessionId = sessionId,
+            freshFiles = emptyMap(),
+            isFirstMessage = false,
+            commandResults = resultsForLlm
+        )
+    }
+
     /** Returns the current [ClipboardSessionStatus] for the given session. */
     fun status(sessionId: String): ClipboardSessionStatus = sessionManager.statusFor(sessionId)
 
@@ -352,6 +392,9 @@ class ClaudeCodeInteractionService(
      * is idempotent: it applies the prompt only at process spawn and ignores subsequent calls
      * while the process is alive. So passing the prompt on every doSend is safe — it costs
      * nothing when the process is already running and is essential on the first call.
+     *
+     * @param commandResults formatted outcomes of the previous turn's shell commands (execution
+     *        output or user declines) — forwarded to the LLM via the request's commandResults field.
      */
     private suspend fun doSend(
         sessionId: String,
@@ -359,7 +402,8 @@ class ClaudeCodeInteractionService(
         isFirstMessage: Boolean,
         attachedContext: String? = null,
         ideErrors: String? = null,
-        specificPromptContent: String? = null
+        specificPromptContent: String? = null,
+        commandResults: String? = null
     ): ClaudeCodeStepResult {
         val state = sessionState ?: return error("No active workspace")
         var session = chatSessionRepository.getSessionById(sessionId)
@@ -375,7 +419,8 @@ class ClaudeCodeInteractionService(
             addHistory = addHistory,
             attachedContext = attachedContext,
             ideErrors = ideErrors,
-            specificPromptContent = specificPromptContent
+            specificPromptContent = specificPromptContent,
+            commandResults = commandResults
         )
 
         // Pass the system prompt unconditionally on the first ensureStarted call:
@@ -415,7 +460,8 @@ class ClaudeCodeInteractionService(
                 addHistory = true,
                 attachedContext = attachedContext,
                 ideErrors = ideErrors,
-                specificPromptContent = specificPromptContent
+                specificPromptContent = specificPromptContent,
+                commandResults = commandResults
             )
             ensureResult = claudeCodePort.ensureStarted(
                 resumeSessionId = null,
@@ -500,7 +546,12 @@ class ClaudeCodeInteractionService(
      *  - persists requestedViews into the last assistant message of the domain session,
      *  - drives the session-status state machine via [ClipboardEvent.ResponseReceived],
      *  - applies modifications when not in plan-only mode,
+     *  - converts LLM-requested shell commands into domain [CommandRequest]s for the UI,
      *  - decides between [ClaudeCodeStepResult.WaitingForApprove] and [ClaudeCodeStepResult.Completed].
+     *
+     * Protocol rule: `commands` must not be mixed with `requestedViews` in one response.
+     * When they are, files win — the commands are dropped and the count is surfaced via
+     * [ClaudeCodeStepResult.WaitingForApprove.skippedCommands] so the UI can inform the user.
      *
      * @param thinkingText full extended-thinking text accumulated by the transport over this
      *        turn (see [ClaudeCodeSendResult.thinkingText]); merged with the JSON `reasoning`
@@ -519,12 +570,17 @@ class ClaudeCodeInteractionService(
 
         val hasViews = response.codeViewRequests.isNotEmpty()
         val hasMods = response.modifications.isNotEmpty()
-        log("Processing response: hasViews=$hasViews, hasMods=$hasMods, msg=${response.message.take(60)}")
+        val commands: List<CommandRequest> = response.commands.mapNotNull { convertCommand(it) }
+        log(
+            "Processing response: hasViews=$hasViews, hasMods=$hasMods, " +
+                    "commands=${commands.size}, msg=${response.message.take(60)}"
+        )
         sessionLog?.event(
             "response",
             mapOf(
                 "hasViews" to hasViews,
                 "hasMods" to hasMods,
+                "commands" to commands.size,
                 "msgLen" to response.message.length,
                 "thinkingLen" to (thinkingText?.length ?: 0)
             )
@@ -553,6 +609,10 @@ class ClaudeCodeInteractionService(
         sessionManager.transition(sessionId, ClipboardEvent.ResponseReceived(hasRequestedViews = hasViews))
 
         if (hasViews) {
+            if (commands.isNotEmpty()) {
+                log("WARN: response mixed requestedViews with ${commands.size} command(s) — commands skipped per protocol")
+                sessionLog?.event("commands skipped (mixed with requestedViews)", mapOf("count" to commands.size))
+            }
             val requestedViewInfos = response.codeViewRequests.map {
                 RequestedViewInfo(
                     path = it.filePath,
@@ -566,7 +626,8 @@ class ClaudeCodeInteractionService(
                 inputTokens = inputTokens,
                 outputTokens = outputTokens,
                 llmReasoning = combinedReasoning,
-                durationMs = durationMs
+                durationMs = durationMs,
+                skippedCommands = commands.size
             )
         }
 
@@ -600,7 +661,8 @@ class ClaudeCodeInteractionService(
             outputTokens = outputTokens,
             llmReasoning = combinedReasoning,
             commitMessage = response.commitMessage?.takeIf { it.isNotBlank() },
-            durationMs = durationMs
+            durationMs = durationMs,
+            commands = commands
         )
     }
 
@@ -613,7 +675,8 @@ class ClaudeCodeInteractionService(
         addHistory: Boolean,
         attachedContext: String?,
         ideErrors: String?,
-        specificPromptContent: String?
+        specificPromptContent: String?,
+        commandResults: String? = null
     ): ClipboardRequest = InteractionRequestBuilder.build(
         state = state,
         freshFiles = freshFiles,
@@ -626,7 +689,8 @@ class ClaudeCodeInteractionService(
         // Claude Code transport delivers the system instruction via the CLI's
         // --append-system-prompt flag at process spawn — embedding it in the
         // JSON payload would trip Claude Code's prompt-injection classifier.
-        omitSystemInstruction = true
+        omitSystemInstruction = true,
+        commandResults = commandResults
     )
 
     /**
@@ -773,6 +837,20 @@ class ClaudeCodeInteractionService(
         }
     }
 
+    /**
+     * Converts an LLM-protocol [InteractionCommand] into a domain [CommandRequest].
+     * Mirrors [ClipboardInteractionService.convertCommand] — kept duplicated by the same
+     * conscious decision as [convertModification] until both services stabilise.
+     */
+    private fun convertCommand(cmd: InteractionCommand): CommandRequest? {
+        if (cmd.command.isBlank()) return null
+        return CommandRequest(
+            command = cmd.command,
+            reason = cmd.reason.takeIf { it.isNotBlank() },
+            timeoutSec = cmd.timeoutSec.coerceIn(1, 3600)
+        )
+    }
+
     private fun addToHistory(role: ChatRole, content: String) {
         val state = sessionState ?: return
         state.dialogHistory.add(ChatMessageDTO(role = role, content = content))
@@ -786,7 +864,8 @@ class ClaudeCodeInteractionService(
                 request.currentMessage.length +
                 (request.attachedContext?.length ?: 0) +
                 (request.specificPrompt?.length ?: 0) +
-                (request.ideErrors?.length ?: 0)
+                (request.ideErrors?.length ?: 0) +
+                (request.commandResults?.length ?: 0)
         return textSize / 4
     }
 
@@ -835,7 +914,7 @@ class ClaudeCodeInteractionService(
         private val PLAN_ONLY_SUFFIX = "\n\n" +
                 "## PLAN-ONLY MODE — DISCUSSION REQUIRED\n\n" +
                 "DO NOT generate any code changes in the modifications array.\n" +
-                "Keep modifications empty.\n" +
+                "Keep modifications and commands empty.\n" +
                 "Your goal is to DISCUSS the plan with the user before any code is written.\n\n" +
                 "Instead of code, you must:\n" +
                 "1. Briefly explain what you understand from the task\n" +

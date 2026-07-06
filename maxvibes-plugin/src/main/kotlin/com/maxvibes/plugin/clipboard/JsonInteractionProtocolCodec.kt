@@ -103,6 +103,9 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
             request.ideErrors?.takeIf { it.isNotBlank() }?.let {
                 put(InteractionRequestSchema.FIELD_IDE_ERRORS, it)
             }
+            request.commandResults?.takeIf { it.isNotBlank() }?.let {
+                put(InteractionRequestSchema.FIELD_COMMAND_RESULTS, it)
+            }
         }
         return json.encodeToString(JsonObject.serializer(), obj)
     }
@@ -209,7 +212,8 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
             codeViewRequests = mergedRequests,
             modifications = obj[InteractionRequestSchema.RESP_MODIFICATIONS]?.jsonArray
                 ?.mapNotNull { parseModification(it.jsonObject) } ?: emptyList(),
-            commitMessage = obj[InteractionRequestSchema.RESP_COMMIT_MESSAGE]?.jsonPrimitive?.contentOrNull
+            commitMessage = obj[InteractionRequestSchema.RESP_COMMIT_MESSAGE]?.jsonPrimitive?.contentOrNull,
+            commands = obj[InteractionRequestSchema.RESP_COMMANDS]?.jsonArray?.mapNotNull { parseCommand(it.jsonObject) } ?: emptyList()
         )
     }
 
@@ -231,6 +235,20 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
             position = obj[InteractionRequestSchema.MOD_POSITION]?.jsonPrimitive?.contentOrNull
                 ?: InteractionRequestSchema.DEFAULT_POSITION,
             importPath = obj[InteractionRequestSchema.MOD_IMPORT_PATH]?.jsonPrimitive?.contentOrNull ?: ""
+        )
+    }
+
+    /**
+     * Parses a single `commands[]` entry.
+     * Returns `null` (skips the entry) if the mandatory `command` field is absent or blank.
+     */
+    private fun parseCommand(obj: JsonObject): InteractionCommand? {
+        val command = obj[InteractionRequestSchema.CMD_COMMAND]?.jsonPrimitive?.contentOrNull
+            ?.takeIf { it.isNotBlank() } ?: return null
+        return InteractionCommand(
+            command = command,
+            reason = obj[InteractionRequestSchema.CMD_REASON]?.jsonPrimitive?.contentOrNull ?: "",
+            timeoutSec = obj[InteractionRequestSchema.CMD_TIMEOUT_SEC]?.jsonPrimitive?.intOrNull ?: 120
         )
     }
 

@@ -100,8 +100,17 @@ class PromptService(private val project: Project) : PromptPort {
     private fun openInEditor(file: VirtualFile) {
         FileEditorManager.getInstance(project).openFile(file, true)
     }
-}
 
+    /**
+     * Human-readable OS + shell descriptor for prompt substitution ({{os}}).
+     * Example: "Windows (PowerShell)" / "macOS (sh)" / "Linux (sh)".
+     */
+    fun osDescriptor(): String = when {
+        com.intellij.openapi.util.SystemInfo.isWindows -> "Windows (PowerShell)"
+        com.intellij.openapi.util.SystemInfo.isMac -> "macOS (sh)"
+        else -> "Linux (sh)"
+    }
+}
 // ==================== Default Prompts ====================
 
 private val DEFAULT_CHAT_SYSTEM = """
@@ -174,6 +183,23 @@ enum[Name], enum_entry[Name], companion_object, init, constructor[primary]
 - Use ADD_IMPORT/REMOVE_IMPORT for import changes
 - Write clean, idiomatic Kotlin following existing project patterns
 - If the user just asks a question, respond normally without JSON
+
+## Terminal commands (LAST RESORT)
+
+Environment: {{os}}. Commands run from the project root.
+
+You may ask the IDE to run shell commands via a top-level "commands" field in your JSON (next to "modifications"):
+
+"commands": [
+    { "command": "gradlew.bat test", "reason": "run the tests after the changes", "timeoutSec": 300 }
+]
+
+Rules:
+- ONLY for what modifications cannot do: build, tests, git, dependency management, diagnostics.
+- Do NOT create, edit or delete source files via shell — use "modifications". Sole exception: a PSI modification just failed and you are working around it — say so explicitly in "reason".
+- "reason" is REQUIRED — one human-readable sentence; the user approves or declines each command.
+- Commands run AFTER modifications are applied, sequentially, stopping at the first non-zero exit code.
+- Results (exit code + output tail) or the user's decline arrive in the next message — react to them; never silently retry a declined command.
 """.trimIndent()
 
 private val DEFAULT_PLANNING_SYSTEM = """

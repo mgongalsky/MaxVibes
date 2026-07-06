@@ -46,6 +46,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import com.maxvibes.application.service.ClaudeCodeActivityTracker
+import com.maxvibes.application.port.input.ExecuteCommandUseCase
+import com.maxvibes.application.port.output.CommandRunnerPort
+import com.maxvibes.application.service.CommandExecutionService
+import com.maxvibes.plugin.command.ProcessCommandRunner
 
 /**
  * Main service for MaxVibes plugin.
@@ -188,6 +192,21 @@ class MaxVibesService(private val project: Project) : Disposable {
             logger = MaxVibesLogger,
             sessionManager = clipboardSessionManager,
             chatSessionRepository = chatSessionRepository
+        )
+    }
+
+    // ========== Command Execution ==========
+
+    /** Executes LLM-requested shell commands (GeneralCommandLine + CapturingProcessHandler, cwd = project root). */
+    val commandRunner: CommandRunnerPort by lazy {
+        ProcessCommandRunner(project)
+    }
+
+    /** Soft validation warnings + execution + LLM-facing result formatting. */
+    val executeCommandUseCase: ExecuteCommandUseCase by lazy {
+        CommandExecutionService(
+            runner = commandRunner,
+            logger = MaxVibesLogger
         )
     }
 

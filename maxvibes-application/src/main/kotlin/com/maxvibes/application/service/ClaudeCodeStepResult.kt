@@ -1,6 +1,7 @@
 package com.maxvibes.application.service
 
 import com.maxvibes.domain.model.code.RequestedViewInfo
+import com.maxvibes.domain.model.command.CommandRequest
 import com.maxvibes.domain.model.modification.ModificationResult
 
 /**
@@ -33,7 +34,8 @@ sealed class ClaudeCodeStepResult {
         val inputTokens: Int = 0,
         val outputTokens: Int = 0,
         val llmReasoning: String? = null,
-        val durationMs: Long = 0L
+        val durationMs: Long = 0L,
+        val skippedCommands: Int = 0
     ) : ClaudeCodeStepResult()
 
     /**
@@ -58,7 +60,8 @@ sealed class ClaudeCodeStepResult {
         val outputTokens: Int = 0,
         val llmReasoning: String? = null,
         val commitMessage: String? = null,
-        val durationMs: Long = 0L
+        val durationMs: Long = 0L,
+        val commands: List<CommandRequest> = emptyList()
     ) : ClaudeCodeStepResult()
 
     /**

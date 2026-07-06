@@ -118,7 +118,9 @@ class ContextAwareModifyService(
         val chatResponse = (chatResult as Result.Success).value
         logger?.info(
             TAG,
-            "Chat succeeded, modifications=${chatResponse.modifications.size}, tokens(in/out)=${chatResponse.tokenUsage?.inputTokens}/${chatResponse.tokenUsage?.outputTokens}"
+            "Chat succeeded, modifications=${chatResponse.modifications.size}, " +
+                    "commands=${chatResponse.commands.size}, " +
+                    "tokens(in/out)=${chatResponse.tokenUsage?.inputTokens}/${chatResponse.tokenUsage?.outputTokens}"
         )
 
         val modificationResults = if (chatResponse.modifications.isNotEmpty() && !request.planOnly) {
@@ -157,7 +159,8 @@ class ContextAwareModifyService(
             chatInputTokens = chatResponse.tokenUsage?.inputTokens ?: 0,
             chatOutputTokens = chatResponse.tokenUsage?.outputTokens ?: 0,
             commitMessage = chatResponse.commitMessage,
-            requestedViews = chatResponse.requestedViews
+            requestedViews = chatResponse.requestedViews,
+            commands = chatResponse.commands
         )
     }
 

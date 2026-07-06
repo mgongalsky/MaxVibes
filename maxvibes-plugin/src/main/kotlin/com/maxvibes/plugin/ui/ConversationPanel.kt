@@ -5,6 +5,7 @@ import com.intellij.openapi.fileTypes.FileType
 import com.intellij.openapi.fileTypes.FileTypeManager
 import com.intellij.openapi.fileTypes.PlainTextFileType
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.Messages
 import com.intellij.ui.EditorTextField
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
@@ -25,6 +26,16 @@ import javax.swing.*
 sealed class MessageSegment {
     data class Text(val content: String) : MessageSegment()
     data class Code(val lang: String, val code: String) : MessageSegment()
+}
+
+/**
+ * Mutable view handle for a command block: the controller drives it through
+ * pending → running → result / declined.
+ */
+interface CommandBlockView {
+    fun setRunning()
+    fun setResult(headline: String, output: String, ok: Boolean)
+    fun setDeclined(comment: String?)
 }
 
 class ConversationPanel(
@@ -241,7 +252,7 @@ class ConversationPanel(
         return panel
     }
 
-    private fun collapsibleCodeBlock(lang: String, code: String): JPanel {
+    private fun collapsibleCodeBlock(lang: String, code: String, startCollapsed: Boolean = false): JPanel {
         val editorBg = EditorColorsManager.getInstance().globalScheme.defaultBackground
         val borderColor = JBColor(Color(0x3A3A3A), Color(0x4A4A4A))
         val lineCount = code.lines().size
@@ -271,9 +282,10 @@ class ConversationPanel(
             alignmentX = Component.LEFT_ALIGNMENT
         }
 
-        var expanded = true
+        var expanded = !startCollapsed
+        editor.isVisible = expanded
         val toggleBtn = JButton().apply {
-            text = "\u25BC $langLabel  ($lineCount lines)"
+            text = (if (expanded) "\u25BC" else "\u25BA") + " $langLabel  ($lineCount lines)"
             font = Font(Font.MONOSPACED, Font.PLAIN, 10)
             foreground = JBColor(Color(0xAAAAAA), Color(0xAAAAAA))
             background = JBColor(Color(0x2D2D2D), Color(0x2D2D2D))
@@ -339,6 +351,127 @@ class ConversationPanel(
             font = font.deriveFont(Font.ITALIC, 10f)
             foreground = JBColor(Color(0x888888), Color(0x666666))
         })
+    }
+
+    // ==================== Command block ====================
+
+    /**
+     * Renders an interactive shell-command block: command line, LLM reason, soft
+     * warnings, and Run/Decline controls. Returns a [CommandBlockView] handle the
+     * controller uses to drive the block through running → result / declined.
+     *
+     * Decline opens an input dialog for an optional comment (forwarded to the LLM);
+     * Cancel in that dialog keeps the block active.
+     */
+    fun addCommandBubble(
+        command: String,
+        reason: String?,
+        warnings: List<String>,
+        onRun: () -> Unit,
+        onDecline: (String?) -> Unit
+    ): CommandBlockView {
+        val bg = JBColor(Color(0xFDF3E3), Color(0x2B2214))
+        val accent = JBColor(Color(0xD68910), Color(0xF5B041))
+
+        val body = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            background = bg
+            alignmentX = Component.LEFT_ALIGNMENT
+        }
+        body.add(JBTextArea(command).apply {
+            isEditable = false; lineWrap = true; wrapStyleWord = false
+            font = Font(Font.MONOSPACED, Font.PLAIN, 12)
+            background = bg; border = JBUI.Borders.empty(2, 0, 4, 0)
+            alignmentX = Component.LEFT_ALIGNMENT
+        })
+        if (!reason.isNullOrBlank()) {
+            body.add(JBTextArea(reason).apply {
+                isEditable = false; lineWrap = true; wrapStyleWord = true
+                font = JBFont.label().deriveFont(Font.ITALIC)
+                foreground = JBColor(Color(0x6E5B3C), Color(0xC9A96A))
+                background = bg; border = JBUI.Borders.empty(0, 0, 4, 0)
+                alignmentX = Component.LEFT_ALIGNMENT
+            })
+        }
+        warnings.forEach { w ->
+            body.add(JBLabel("\u26A0 $w").apply {
+                font = font.deriveFont(Font.BOLD, 10f)
+                foreground = JBColor(Color(0xB9770E), Color(0xF8C471))
+                alignmentX = Component.LEFT_ALIGNMENT
+                border = JBUI.Borders.empty(1, 0)
+            })
+        }
+
+        val controls = JPanel(FlowLayout(FlowLayout.LEFT, 6, 0)).apply {
+            background = bg; alignmentX = Component.LEFT_ALIGNMENT
+        }
+        val statusRow = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            background = bg; alignmentX = Component.LEFT_ALIGNMENT
+        }
+        val runBtn = JButton("\u25B6 Run")
+        val declineBtn = JButton("\u2716 Decline")
+        controls.add(runBtn); controls.add(declineBtn)
+        runBtn.addActionListener {
+            runBtn.isEnabled = false; declineBtn.isEnabled = false
+            onRun()
+        }
+        declineBtn.addActionListener {
+            val comment = Messages.showInputDialog(
+                project, "Optional comment for the LLM:", "Decline Command", null
+            ) // null = Cancel — the block stays active
+            if (comment != null) {
+                runBtn.isEnabled = false; declineBtn.isEnabled = false
+                onDecline(comment.ifBlank { null })
+            }
+        }
+
+        addComp(bubble(bg, accent).also { p ->
+            p.add(roleLabel("\u26A1 Terminal command", accent), BorderLayout.NORTH)
+            p.add(body, BorderLayout.CENTER)
+            p.add(JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.Y_AXIS); background = bg
+                add(controls); add(statusRow)
+            }, BorderLayout.SOUTH)
+        })
+
+        fun refresh() { messagesPanel.revalidate(); messagesPanel.repaint() }
+        fun statusLabel(text: String, color: Color) = JBLabel(text).apply {
+            font = font.deriveFont(Font.BOLD, 11f); foreground = color
+            alignmentX = Component.LEFT_ALIGNMENT
+            border = JBUI.Borders.empty(3, 0, 2, 0)
+        }
+
+        return object : CommandBlockView {
+            override fun setRunning() = SwingUtilities.invokeLater {
+                controls.isVisible = false
+                statusRow.add(statusLabel("\u23F3 Running\u2026", JBColor(Color(0x7D6608), Color(0xF7DC6F))))
+                refresh()
+            }
+
+            override fun setResult(headline: String, output: String, ok: Boolean) = SwingUtilities.invokeLater {
+                controls.isVisible = false
+                statusRow.removeAll()
+                val color = if (ok) JBColor(Color(0x1E8449), Color(0x58D68D))
+                else JBColor(Color(0xC0392B), Color(0xEC7063))
+                statusRow.add(statusLabel(headline, color))
+                if (output.isNotBlank()) {
+                    statusRow.add(
+                        collapsibleCodeBlock("output", output, startCollapsed = output.lines().size > 25)
+                            .also { it.alignmentX = Component.LEFT_ALIGNMENT }
+                    )
+                }
+                refresh()
+            }
+
+            override fun setDeclined(comment: String?) = SwingUtilities.invokeLater {
+                controls.isVisible = false
+                statusRow.removeAll()
+                val text = "\u2716 Declined" + (comment?.let { " \u2014 $it" } ?: "")
+                statusRow.add(statusLabel(text, JBColor(Color(0x922B21), Color(0xD98880))))
+                refresh()
+            }
+        }
     }
 
     // ==================== Footer ====================
@@ -535,7 +668,7 @@ class ConversationPanel(
             }
         }
 
-        // appliedModifications (new) or legacy ok/fail
+// appliedModifications (new) or legacy ok/fail
         if (appliedModifications.isNotEmpty()) {
             add(sectionLabel("\u2705 Applied modifications:"))
             appliedModifications.forEach { mod ->

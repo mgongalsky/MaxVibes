@@ -24,6 +24,9 @@ internal object InteractionRequestBuilder {
      *        Claude Code transport, which delivers the system instruction through
      *        the CLI's `--append-system-prompt` flag rather than embedding it in
      *        every user-event JSON payload.
+     * @param commandResults formatted outcomes of the previous turn's shell commands
+     *        (execution output or user declines). One-shot per-message context like
+     *        [ideErrors] — always forwarded when provided, never stored in state.
      */
     fun build(
         state: ClipboardSessionState,
@@ -34,7 +37,8 @@ internal object InteractionRequestBuilder {
         ideErrors: String? = null,
         attachedContext: String? = null,
         specificPromptContent: String? = null,
-        omitSystemInstruction: Boolean = false
+        omitSystemInstruction: Boolean = false,
+        commandResults: String? = null
     ): ClipboardRequest {
         // Minimal-mode: LLM already has full context in its chat window — send only the delta.
         val isMinimal = !isFirstMessage && !addHistory
@@ -56,11 +60,11 @@ internal object InteractionRequestBuilder {
         // System prompt resolution:
         //  - omitSystemInstruction wins unconditionally (Claude Code transport).
         //  - else: omitted in minimal mode (LLM already has it in its chat window).
-        //  - else: full system instruction.
+        //  - else: full system instruction with template variables substituted.
         val systemInstruction = when {
             omitSystemInstruction -> ""
             isMinimal -> ""
-            else -> buildSystemInstruction(state, planOnlySuffix)
+            else -> applyPromptVariables(buildSystemInstruction(state, planOnlySuffix), state)
         }
 
         return ClipboardRequest(
@@ -85,14 +89,14 @@ internal object InteractionRequestBuilder {
                 )
             },
             // attachedContext: one-shot per-message context — NOT stored in session state.
-            // Passed directly from the UI layer for the turn it was attached.
             attachedContext = if (isMinimal) null else attachedContext,
-            // ideErrors: one-shot per-message diagnostics — NOT stored in session state.
-            // Always forwarded when provided; ignored in subsequent turns where null is passed.
+            // ideErrors: one-shot per-message diagnostics — always forwarded when provided.
             ideErrors = ideErrors,
+            // commandResults: one-shot outcomes of the previous turn's commands —
+            // always forwarded, even in minimal mode (they ARE the payload of this turn).
+            commandResults = commandResults,
             planOnly = if (isMinimal) false else state.planOnly,
             // specificPromptContent is passed through unconditionally — even in minimal mode.
-            // The LLM needs the task-scoped prompt in every message to retain task context.
             specificPrompt = specificPromptContent
         )
     }
@@ -101,20 +105,40 @@ internal object InteractionRequestBuilder {
 
     /**
      * Resolves the system instruction string for this turn.
-     *
-     * Uses the planning system prompt when no files have been gathered yet (first turn),
-     * and the chat system prompt thereafter — optionally appending a plan-only suffix.
      */
     private fun buildSystemInstruction(state: ClipboardSessionState, planOnlySuffix: String): String {
         return if (state.allGatheredFiles.isEmpty()) {
-            // First turn — no file context yet, use the planning prompt.
             state.prompts.planningSystem
         } else {
-            // Subsequent turns — use chat prompt, optionally extended for plan-only mode.
             buildString {
                 append(state.prompts.chatSystem)
                 if (state.planOnly && planOnlySuffix.isNotBlank()) append(planOnlySuffix)
             }
+        }
+    }
+
+    /**
+     * Substitutes {{template}} variables in the system prompt.
+     * Mirrors LangChainLLMService.applyPromptVariables for the clipboard path —
+     * previously the clipboard mode sent prompts with raw {{placeholders}}.
+     * Pure JVM: OS detection via system property, no IntelliJ SDK.
+     */
+    private fun applyPromptVariables(template: String, state: ClipboardSessionState): String {
+        val ctx = state.projectContext
+        return template
+            .replace("{{projectName}}", ctx.name)
+            .replace("{{language}}", ctx.techStack.language)
+            .replace("{{buildTool}}", ctx.techStack.buildTool ?: "unknown")
+            .replace("{{frameworks}}", ctx.techStack.frameworks.joinToString(", ").ifEmpty { "none" })
+            .replace("{{os}}", osDescriptor())
+    }
+
+    private fun osDescriptor(): String {
+        val os = System.getProperty("os.name")?.lowercase() ?: ""
+        return when {
+            "windows" in os -> "Windows (PowerShell)"
+            "mac" in os -> "macOS (sh)"
+            else -> "Linux (sh)"
         }
     }
 }

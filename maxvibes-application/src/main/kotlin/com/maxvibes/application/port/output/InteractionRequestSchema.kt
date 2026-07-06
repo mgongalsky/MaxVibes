@@ -85,6 +85,23 @@ object InteractionRequestSchema {
     /** Optional conventional-commit message suggested by the LLM. */
     const val RESP_COMMIT_MESSAGE = "commitMessage"
 
+    /** Shell commands the LLM asks the IDE to run (last resort). */
+    const val RESP_COMMANDS = "commands"
+
+    // ── Command entry fields ───────────────────────────────────────────
+
+    /** Shell command line to execute from the project root. */
+    const val CMD_COMMAND = "command"
+
+    /** Human-readable justification shown to the user next to the command. */
+    const val CMD_REASON = "reason"
+
+    /** Optional timeout in seconds for a command entry. */
+    const val CMD_TIMEOUT_SEC = "timeoutSec"
+
+    /** Field for command results sent back to the LLM in the next request. */
+    const val FIELD_COMMAND_RESULTS = "commandResults"
+
     // ── Modification entry fields ──────────────────────────────────────
 
     /** Operation type (CREATE_FILE, REPLACE_ELEMENT, etc.). */

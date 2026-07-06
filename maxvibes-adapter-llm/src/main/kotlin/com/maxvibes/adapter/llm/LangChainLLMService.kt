@@ -287,7 +287,8 @@ class LangChainLLMService(
                         requestedFiles = extractFileRequests(dto.message),
                         reasoning = dto.reasoning,
                         commitMessage = dto.commitMessage,
-                        requestedViews = dto.requestedViews.mapNotNull { convertRequestedView(it) }
+                        requestedViews = dto.requestedViews.mapNotNull { convertRequestedView(it) },
+                        commands = dto.commands.mapNotNull { convertCommand(it) }
                     )
                 }
             } catch (e: Throwable) {
@@ -382,6 +383,7 @@ class LangChainLLMService(
 
 DO NOT generate any code modifications.
 You MUST keep the "modifications" list EMPTY: [].
+Keep the "commands" list EMPTY as well.
 
 Your goal is to DISCUSS the plan with the user before any code is written.
 
@@ -404,6 +406,17 @@ Never include code blocks with proposed changes in your message body if you are 
             .replace("{{language}}", projectContext.techStack.language)
             .replace("{{buildTool}}", projectContext.techStack.buildTool ?: "unknown")
             .replace("{{frameworks}}", projectContext.techStack.frameworks.joinToString(", ").ifEmpty { "none" })
+            .replace("{{os}}", osDescriptor())
+    }
+
+    /** Human-readable OS + shell descriptor for the {{os}} prompt variable. Plain JVM — no IntelliJ deps in this module. */
+    private fun osDescriptor(): String {
+        val os = System.getProperty("os.name")?.lowercase() ?: ""
+        return when {
+            "windows" in os -> "Windows (PowerShell)"
+            "mac" in os -> "macOS (sh)"
+            else -> "Linux (sh)"
+        }
     }
 
     // ==================== Phase 1: Planning (AiServices) ====================
@@ -531,6 +544,16 @@ Never include code blocks with proposed changes in your message body if you are 
         )
     }
 
+    /** Convert CommandDTO (from AiServices) to domain CommandRequest. Skips blank commands. */
+    private fun convertCommand(dto: com.maxvibes.adapter.llm.dto.CommandDTO): com.maxvibes.domain.model.command.CommandRequest? {
+        if (dto.command.isBlank()) return null
+        return com.maxvibes.domain.model.command.CommandRequest(
+            command = dto.command,
+            reason = dto.reason?.takeIf { it.isNotBlank() },
+            timeoutSec = dto.timeoutSec.coerceIn(1, 3600)
+        )
+    }
+
     // ==================== Fallback Response Parsing (improved) ====================
 
     private fun parseChatResponse(response: String): ChatResponse {
@@ -548,6 +571,7 @@ Never include code blocks with proposed changes in your message body if you are 
         val message: String
         val modifications: List<Modification>
         var reasoning: String? = null
+        var commands: List<com.maxvibes.domain.model.command.CommandRequest> = emptyList()
 
         if (jsonMatch != null) {
             val beforeJson = response.substring(0, jsonMatch.range.first).trim()
@@ -558,6 +582,8 @@ Never include code blocks with proposed changes in your message body if you are 
                 val jsonContent = jsonMatch.groupValues[1]
                 val jsonObject = Json.parseToJsonElement(jsonContent).jsonObject
                 reasoning = jsonObject["reasoning"]?.jsonPrimitive?.contentOrNull
+                commands = jsonObject["commands"]?.jsonArray
+                    ?.mapNotNull { parseCommandElement(it.jsonObject) } ?: emptyList()
                 val modificationsArray = jsonObject["modifications"]?.jsonArray ?: emptyList()
                 modificationsArray.mapNotNull { parseModificationElement(it.jsonObject) }
             } catch (e: Throwable) {
@@ -577,6 +603,8 @@ Never include code blocks with proposed changes in your message body if you are 
                     val jsonStr = jsonContent.substring(0, end + 1)
                     val jsonObject = Json.parseToJsonElement(jsonStr).jsonObject
                     reasoning = jsonObject["reasoning"]?.jsonPrimitive?.contentOrNull
+                    commands = jsonObject["commands"]?.jsonArray
+                        ?.mapNotNull { parseCommandElement(it.jsonObject) } ?: emptyList()
                     val modificationsArray = jsonObject["modifications"]?.jsonArray ?: emptyList()
                     modificationsArray.mapNotNull { parseModificationElement(it.jsonObject) }
                 } catch (e: Throwable) {
@@ -602,7 +630,19 @@ Never include code blocks with proposed changes in your message body if you are 
             message = finalMessage,
             modifications = modifications,
             requestedFiles = extractFileRequests(finalMessage),
-            reasoning = reasoning
+            reasoning = reasoning,
+            commands = commands
+        )
+    }
+
+    /** Parses a single commands[] entry from a fallback (non-AiServices) JSON response. */
+    private fun parseCommandElement(json: JsonObject): com.maxvibes.domain.model.command.CommandRequest? {
+        val command = json["command"]?.jsonPrimitive?.contentOrNull
+            ?.takeIf { it.isNotBlank() } ?: return null
+        return com.maxvibes.domain.model.command.CommandRequest(
+            command = command,
+            reason = json["reason"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() },
+            timeoutSec = (json["timeoutSec"]?.jsonPrimitive?.intOrNull ?: 120).coerceIn(1, 3600)
         )
     }
 

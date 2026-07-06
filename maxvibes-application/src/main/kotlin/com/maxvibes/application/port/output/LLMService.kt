@@ -86,7 +86,9 @@ data class ChatResponse(
     val reasoning: String? = null,
     val commitMessage: String? = null,
     /** Typed view requests parsed from LLM JSON response — used for coloured bubble rendering */
-    val requestedViews: List<com.maxvibes.domain.model.code.RequestedViewInfo> = emptyList()
+    val requestedViews: List<com.maxvibes.domain.model.code.RequestedViewInfo> = emptyList(),
+    /** Shell-команды, запрошенные LLM (last resort) — выполняются после подтверждения пользователем */
+    val commands: List<com.maxvibes.domain.model.command.CommandRequest> = emptyList()
 )
 
 /**

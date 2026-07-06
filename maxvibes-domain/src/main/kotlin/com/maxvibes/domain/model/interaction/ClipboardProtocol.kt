@@ -38,7 +38,10 @@ data class ClipboardRequest(
      * Optional task-scoped prompt injected alongside the system instruction.
      * Null when "Just Code" mode is active (no specific prompt selected).
      */
-    val specificPrompt: String? = null
+    val specificPrompt: String? = null,
+
+    /** Результаты shell-команд предыдущего хода (уже отформатированные для LLM). */
+    val commandResults: String? = null
 )
 
 data class InteractionHistoryEntry(
@@ -67,7 +70,10 @@ data class InteractionResponse(
     /** Модификации кода. */
     val modifications: List<InteractionModification> = emptyList(),
     /** Сгенерированный commit message — плагин автоматически вставит его в поле коммита в IDE. */
-    val commitMessage: String? = null
+    val commitMessage: String? = null,
+
+    /** Shell-команды, запрошенные LLM (last resort). Выполняются после подтверждения пользователем. */
+    val commands: List<InteractionCommand> = emptyList()
 )
 
 /**
@@ -81,4 +87,14 @@ data class InteractionModification(
     val position: String = "LAST_CHILD",
     /** For ADD_IMPORT/REMOVE_IMPORT: fully qualified import path, e.g. "com.example.dto.UserDTO" */
     val importPath: String = ""
+)
+
+/**
+ * Shell-команда в clipboard-формате (сырой вид из JSON-ответа LLM).
+ * Конвертируется в доменный CommandRequest на этапе обработки.
+ */
+data class InteractionCommand(
+    val command: String,
+    val reason: String = "",
+    val timeoutSec: Int = 120
 )
