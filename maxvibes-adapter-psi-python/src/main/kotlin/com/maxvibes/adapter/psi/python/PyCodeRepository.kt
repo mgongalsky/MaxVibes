@@ -197,6 +197,13 @@ class PyCodeRepository(private val project: Project) : CodeRepository {
                 CodeGranularity.USAGES ->
                     error("USAGES granularity is not supported for Python yet (${request.filePath})")
 
+                // Call hierarchies are Kotlin-only for now, same as USAGES.
+                CodeGranularity.CALLERS ->
+                    error("CALLERS granularity is not supported for Python yet (${request.filePath})")
+
+                CodeGranularity.CALLEES ->
+                    error("CALLEES granularity is not supported for Python yet (${request.filePath})")
+
                 // Not a code view: SKILL requests carry a skill name, not a file path,
                 // and are resolved by the interaction services from the skill repository
                 // BEFORE any CodeRepository call. Reaching this branch is a routing bug.

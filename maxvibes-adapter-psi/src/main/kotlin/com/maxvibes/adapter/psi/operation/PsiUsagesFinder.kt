@@ -2,14 +2,13 @@ package com.maxvibes.adapter.psi.operation
 
 import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
-import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiElement
 import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.search.searches.ReferencesSearch
 import com.intellij.psi.util.PsiTreeUtil
-import org.jetbrains.kotlin.psi.KtClassOrObject
 import org.jetbrains.kotlin.psi.KtImportDirective
 import org.jetbrains.kotlin.psi.KtNamedDeclaration
+import org.jetbrains.kotlin.psi.KtNamedFunction
 import org.jetbrains.kotlin.psi.KtParameter
 
 /**
@@ -20,6 +19,13 @@ import org.jetbrains.kotlin.psi.KtParameter
  * in an LLM prompt. Search scope is the whole project, so usages are found
  * across module boundaries.
  *
+ * When the target is a function with super declarations in project sources
+ * (ports, base classes), usages of those supers are included too, tagged
+ * `[via Owner.fn]`: a call through the interface is a real dependency of the
+ * implementation. Without this, `ProcessCommandRunner.run` reports "no usages"
+ * while every call goes through `CommandRunnerPort.run`, turning the mandatory
+ * pre-DELETE_ELEMENT check into a false "safe to remove".
+ *
  * Overloads are excluded by construction: [ReferencesSearch] only returns
  * references that resolve to the exact element passed in. The declaration
  * itself is never part of the result either.
@@ -29,7 +35,8 @@ import org.jetbrains.kotlin.psi.KtParameter
 class PsiUsagesFinder(private val project: Project) {
 
     /**
-     * Finds all references to [target] in project scope and renders them.
+     * Finds all references to [target] (and, for functions, its project-scope
+     * super declarations) in project scope and renders them.
      *
      * @param target       resolved declaration to search for (never a whole file)
      * @param fallbackName used in the header when [target] has no name
@@ -39,12 +46,21 @@ class PsiUsagesFinder(private val project: Project) {
             error("Usage search is unavailable while indexes are being rebuilt - retry in a moment")
         }
 
-        val displayName = displayName(target, fallbackName)
+        val displayName = declarationDisplayName(target, fallbackName)
+        val scope = GlobalSearchScope.projectScope(project)
 
-        val usages = ReferencesSearch
-            .search(target, GlobalSearchScope.projectScope(project))
-            .findAll()
-            .mapNotNull { toUsage(it.element) }
+        val searchTargets = mutableListOf<Pair<PsiElement, String?>>(target to null)
+        if (target is KtNamedFunction) {
+            projectSuperDeclarations(project, target).forEach { (declaration, label) ->
+                searchTargets.add(declaration to label)
+            }
+        }
+
+        val usages = searchTargets
+            .flatMap { (searchTarget, via) ->
+                ReferencesSearch.search(searchTarget, scope).findAll()
+                    .mapNotNull { toUsage(it.element, via) }
+            }
             .sortedWith(compareBy({ it.filePath }, { it.line }, { it.column }))
 
         if (usages.isEmpty()) {
@@ -68,6 +84,7 @@ class PsiUsagesFinder(private val project: Project) {
             }
             sb.append("  ").append(usage.line).append(": ")
             if (usage.tag != null) sb.append(usage.tag).append(' ')
+            if (usage.via != null) sb.append("[via ").append(usage.via).append("] ")
             sb.append(usage.text).append('\n')
         }
 
@@ -87,48 +104,13 @@ class PsiUsagesFinder(private val project: Project) {
         val line: Int,
         val column: Int,
         val tag: String?,
+        val via: String?,
         val text: String
     )
 
-    private fun displayName(target: PsiElement, fallback: String): String {
-        val named = target as? KtNamedDeclaration ?: return fallback
-        val name = named.name ?: return fallback
-        val owner = PsiTreeUtil.getParentOfType(named, KtClassOrObject::class.java)?.name
-        return if (owner != null) "$owner.$name" else name
-    }
-
-    private fun toUsage(element: PsiElement): Usage? {
-        val psiFile = element.containingFile ?: return null
-        val virtualFile = psiFile.virtualFile ?: return null
-
-        val basePath = project.basePath?.trimEnd('/')
-        val absolutePath = virtualFile.path
-        val relativePath =
-            if (basePath != null && absolutePath.startsWith(basePath))
-                absolutePath.removePrefix(basePath).trimStart('/')
-            else absolutePath
-
-        val document = PsiDocumentManager.getInstance(project).getDocument(psiFile)
-            ?: psiFile.viewProvider.document
-        val offset = element.textRange?.startOffset ?: return null
-
-        val line: Int
-        val column: Int
-        val lineText: String
-        if (document != null && offset <= document.textLength) {
-            val lineIndex = document.getLineNumber(offset)
-            line = lineIndex + 1
-            column = offset - document.getLineStartOffset(lineIndex)
-            lineText = document.charsSequence
-                .subSequence(document.getLineStartOffset(lineIndex), document.getLineEndOffset(lineIndex))
-                .toString().trim()
-        } else {
-            line = 0
-            column = 0
-            lineText = element.text.lineSequence().firstOrNull()?.trim().orEmpty()
-        }
-
-        return Usage(relativePath, line, column, tagFor(element), lineText)
+    private fun toUsage(element: PsiElement, via: String?): Usage? {
+        val location = locate(project, element) ?: return null
+        return Usage(location.filePath, location.line, location.column, tagFor(element), via, location.lineText)
     }
 
     /** "[import]" for import directives, "[in X]" for the closest named container. */
@@ -141,8 +123,7 @@ class PsiUsagesFinder(private val project: Project) {
             container = PsiTreeUtil.getParentOfType(container, KtNamedDeclaration::class.java)
         }
         val name = container?.name ?: return null
-        val display = if (name.any { it.isWhitespace() }) "`$name`" else name
-        return "[in $display]"
+        return "[in ${backtickIfNeeded(name)}]"
     }
 
     private companion object {

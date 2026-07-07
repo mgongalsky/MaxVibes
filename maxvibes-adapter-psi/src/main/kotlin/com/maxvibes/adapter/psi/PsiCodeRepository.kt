@@ -9,6 +9,7 @@ import com.intellij.psi.PsiDirectory
 import com.intellij.psi.PsiManager
 import com.maxvibes.adapter.psi.kotlin.KotlinElementFactory
 import com.maxvibes.adapter.psi.mapper.PsiToDomainMapper
+import com.maxvibes.adapter.psi.operation.PsiCallHierarchyFinder
 import com.maxvibes.adapter.psi.operation.PsiModifier
 import com.maxvibes.adapter.psi.operation.PsiNavigator
 import com.maxvibes.adapter.psi.renderer.PsiCodeViewRenderer
@@ -27,6 +28,7 @@ import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.psi.KtNamedDeclaration
 import java.io.File
 import com.maxvibes.adapter.psi.operation.PsiUsagesFinder
+import org.jetbrains.kotlin.psi.KtNamedFunction
 
 /**
  * Implementation of [CodeRepository] backed by the IntelliJ PSI API.
@@ -41,6 +43,7 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
     private val elementFactory = KotlinElementFactory(project)
     private val modifier = PsiModifier(project, elementFactory)
     private val usagesFinder = PsiUsagesFinder(project)
+    private val callHierarchyFinder = PsiCallHierarchyFinder(project)
 
     /** Renders PSI elements into prompt-ready text at the requested granularity level. */
     private val renderer = PsiCodeViewRenderer()
@@ -187,6 +190,23 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
                         ?: error("Element not found: $elemPathStr in ${request.filePath}")
                     usagesFinder.renderUsages(element, fallbackName = elemPathStr)
                 }
+
+                // Multi-level tree of calling functions (upward call hierarchy).
+                // Functions only; calls through interfaces/base classes handled by the finder.
+                CodeGranularity.CALLERS -> {
+                    val elemPathStr = request.elementPath
+                        ?: error("elementPath is required for CALLERS granularity")
+                    val fullPath = ElementPath("file:${request.filePath}/$elemPathStr")
+                    val element = navigator.findElement(fullPath)
+                        ?: error("Element not found: $elemPathStr in ${request.filePath}")
+                    val function = element as? KtNamedFunction
+                        ?: error("CALLERS is only supported for functions: $elemPathStr")
+                    callHierarchyFinder.renderCallers(function, fallbackName = elemPathStr)
+                }
+
+                // Downward half of the call hierarchy — lands with the next change set.
+                CodeGranularity.CALLEES ->
+                    error("CALLEES granularity is not implemented yet (${request.filePath})")
 
                 // Not a code view: SKILL requests carry a skill name, not a file path,
                 // and are resolved by the interaction services from the skill repository

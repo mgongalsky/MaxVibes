@@ -728,12 +728,16 @@ class ConversationPanel(
             val elem = requestedViews.count { it.granularity == CodeGranularity.ELEMENT }
             val skills = requestedViews.count { it.granularity == CodeGranularity.SKILL }
             val usages = requestedViews.count { it.granularity == CodeGranularity.USAGES }
+            val callers = requestedViews.count { it.granularity == CodeGranularity.CALLERS }
+            val callees = requestedViews.count { it.granularity == CodeGranularity.CALLEES }
             val segments = buildList {
                 if (full > 0) add("<font color='#2980B9'>$full full</font>")
                 if (sigs > 0) add("<font color='#D4AC0D'>$sigs sig</font>")
                 if (elem > 0) add("<font color='#27AE60'>$elem elem</font>")
                 if (skills > 0) add("<font color='#8E44AD'>$skills skill</font>")
                 if (usages > 0) add("<font color='#CA6F1E'>$usages usages</font>")
+                if (callers > 0) add("<font color='#148F77'>$callers callers</font>")
+                if (callees > 0) add("<font color='#1F618D'>$callees callees</font>")
             }
             parts += "&#128193; ${segments.joinToString(" &middot; ")}"
         } else if (metaFiles.isNotEmpty()) {
@@ -791,6 +795,8 @@ class ConversationPanel(
                     CodeGranularity.OUTLINE -> Triple(Color(0x9A7D0A), Color(0xF4D03F), "[outline]")
                     CodeGranularity.ELEMENT -> Triple(Color(0x1E8449), Color(0x58D68D), "[elem]")
                     CodeGranularity.USAGES -> Triple(Color(0xAF601A), Color(0xEB984E), "[usages]")
+                    CodeGranularity.CALLERS -> Triple(Color(0x117A65), Color(0x76D7C4), "[callers]")
+                    CodeGranularity.CALLEES -> Triple(Color(0x1F618D), Color(0x7FB3D5), "[callees]")
                     CodeGranularity.SKILL -> Triple(Color(0x6C3483), Color(0xBB8FCE), "[skill]")
                 }
                 val displayText = if (view.elementPath != null)

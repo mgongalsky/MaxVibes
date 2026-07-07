@@ -70,7 +70,8 @@ Granularities:
 - `SIGNATURES` — all declarations without bodies. Best first look at a large file.
 - `OUTLINE` — compact class structure: header, properties, method signatures.
 - `ELEMENT` — one function/property/class with its body. Requires `elementPath`.
-- `USAGES` — semantic Find Usages: a flat list of every place one element is referenced across the whole project (file, line, containing declaration; imports tagged `[import]`). Requires `elementPath`. Kotlin files only for now. Capped at 50 hits, then `...and N more`. `no usages found in project scope` is a definitive "safe to remove" signal, not an error.
+- `USAGES` — semantic Find Usages: a flat list of every place one element is referenced across the whole project (file, line, containing declaration; imports tagged `[import]`, calls through an interface/base class tagged `[via Owner.fn]`). Requires `elementPath`. Kotlin files only for now. Capped at 50 hits, then `...and N more`. `no usages found in project scope` is a definitive "safe to remove" signal, not an error. One level only — for multi-level call chains use `CALLERS`.
+- `CALLERS` — call-hierarchy tree UPWARD from one function: who calls it, who calls those callers, and so on (the Call Hierarchy action, as text). Requires `elementPath`; FUNCTIONS only. Kotlin files only for now. Depth ≤ 3, ≤ 40 nodes; calls through interfaces/base classes are included, tagged `(via Owner.fn)`. Each node is `Container.function (path.kt:line)`. `no callers found in project scope` means the function is never called anywhere in the project — a dead-code candidate.
 - `SKILL` — the path is a skill name from the Skills section, not a file; returns that skill's full instructions. Request it alone, in its own turn. All other granularities can be freely mixed in one `requestedViews` array.
 
 Be economical — `ELEMENT` for one function, `SIGNATURES` for an overview, not `FULL` for an 800-line file.
@@ -82,6 +83,15 @@ When to use `USAGES`:
 - Before `DELETE_ELEMENT` a `USAGES` check is MANDATORY: delete only after it returns no usages, or after you have accounted for every hit.
 
 Example: `{ "path": "src/main/kotlin/LinesGame.kt", "granularity": "USAGES", "elementPath": "class[LinesGame]/function[drawHud]" }`
+
+When to use `CALLERS`:
+
+- The user asks how a call reaches a function or what pipeline surrounds it ("who calls X and through which chain") — ONE `CALLERS` request instead of requesting files level by level.
+- Before changing a function's signature, renaming or deleting it when callers matter beyond one level: `CALLERS` shows the whole chain at once; `USAGES` stays the tool for the detailed one-level list (all element kinds, imports, exact line text).
+- Iterative deepening: a node suffixed `…▸ deeper callers exist — request CALLERS on this function` is a re-query point. From `Container.function (relative/path.kt:…)` build `{ "path": "relative/path.kt", "granularity": "CALLERS", "elementPath": "class[Container]/function[function]" }`; for a top-level function use just `function[name]`. Strip backticks from quoted names; if such an element cannot be resolved, treat that leaf as final.
+- Tree markers: `(shown above)` — this function already appears earlier in the tree (recursion or diamond), expanded there; `(N call sites: lines …)` — several calls from the same function, one node; `…and N more callers of X omitted` — node budget hit, re-request `CALLERS` on X to see them.
+
+Example: `{ "path": "src/main/kotlin/.../PsiModifier.kt", "granularity": "CALLERS", "elementPath": "class[PsiModifier]/function[replaceElement]" }`
 ## Modification types
 
 | Type | Use for | path | content |

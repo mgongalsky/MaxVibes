@@ -48,4 +48,24 @@ enum class CodeGranularity {
      * usages are searched for a specific declaration, never a whole file.
      */
     USAGES,
+
+    /**
+     * Multi-level tree of CALLING functions (upward call hierarchy): who calls
+     * the target, who calls those callers, and so on — the programmatic analogue
+     * of the IDE Call Hierarchy action. Calls made through super declarations
+     * (ports/interfaces, base classes) are included and tagged `(via Owner.fn)`.
+     * Depth- and node-limited; leaf markers support iterative deepening.
+     *
+     * [CodeViewRequest.elementPath] is mandatory and must address a function.
+     */
+    CALLERS,
+
+    /**
+     * Multi-level tree of CALLED functions (downward call hierarchy): what the
+     * target's body invokes, recursively. Project declarations are expanded;
+     * external (library) calls are terminal `[external]` leaves.
+     *
+     * [CodeViewRequest.elementPath] is mandatory and must address a function.
+     */
+    CALLEES,
 }
