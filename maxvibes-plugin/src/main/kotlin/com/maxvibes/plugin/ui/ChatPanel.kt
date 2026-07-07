@@ -1356,4 +1356,8 @@ class ChatPanel(
         runCatching { activityPollTimer.stop() }
         runCatching { liveActivityBubble.dispose() }
     }
+
+    override fun addPostApplyErrorsBubble(
+        summary: String, details: String, onSend: () -> Unit, onDismiss: () -> Unit
+    ): PostApplyErrorsView = conversationPanel.addPostApplyErrorsBubble(summary, details, onSend, onDismiss)
 }

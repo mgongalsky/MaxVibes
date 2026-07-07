@@ -26,6 +26,7 @@ import org.jetbrains.kotlin.psi.KtClass
 import org.jetbrains.kotlin.psi.KtFile
 import org.jetbrains.kotlin.psi.KtNamedDeclaration
 import java.io.File
+import com.maxvibes.adapter.psi.operation.PsiUsagesFinder
 
 /**
  * Implementation of [CodeRepository] backed by the IntelliJ PSI API.
@@ -39,6 +40,7 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
     private val navigator = PsiNavigator(project)
     private val elementFactory = KotlinElementFactory(project)
     private val modifier = PsiModifier(project, elementFactory)
+    private val usagesFinder = PsiUsagesFinder(project)
 
     /** Renders PSI elements into prompt-ready text at the requested granularity level. */
     private val renderer = PsiCodeViewRenderer()
@@ -174,6 +176,16 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
                     val element = navigator.findElement(fullPath)
                         ?: error("Element not found: $elemPathStr in ${request.filePath}")
                     renderer.renderElement(element as KtNamedDeclaration)
+                }
+
+                // Flat semantic Find Usages of one element across the whole project
+                CodeGranularity.USAGES -> {
+                    val elemPathStr = request.elementPath
+                        ?: error("elementPath is required for USAGES granularity")
+                    val fullPath = ElementPath("file:${request.filePath}/$elemPathStr")
+                    val element = navigator.findElement(fullPath)
+                        ?: error("Element not found: $elemPathStr in ${request.filePath}")
+                    usagesFinder.renderUsages(element, fallbackName = elemPathStr)
                 }
 
                 // Not a code view: SKILL requests carry a skill name, not a file path,

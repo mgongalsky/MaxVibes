@@ -9,7 +9,7 @@ package com.maxvibes.domain.model.code
  * @param filePath project-relative path to the file (e.g. "src/main/kotlin/…/Foo.kt")
  * @param granularity how much of the file to return; defaults to [CodeGranularity.FULL]
  * @param elementPath PSI element path (e.g. "class[Foo]/function[bar]") —
- *                    **required** when [granularity] is [CodeGranularity.ELEMENT]
+ *                    **required** when [granularity] is [CodeGranularity.ELEMENT] or [CodeGranularity.USAGES]
  */
 data class CodeViewRequest(
     val filePath: String,

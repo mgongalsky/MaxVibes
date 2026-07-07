@@ -192,6 +192,11 @@ class PyCodeRepository(private val project: Project) : CodeRepository {
                     renderer.renderElement(element)
                 }
 
+                // Usage search is Kotlin-only for now: no ReferencesSearch wiring
+                // in the Python adapter yet.
+                CodeGranularity.USAGES ->
+                    error("USAGES granularity is not supported for Python yet (${request.filePath})")
+
                 // Not a code view: SKILL requests carry a skill name, not a file path,
                 // and are resolved by the interaction services from the skill repository
                 // BEFORE any CodeRepository call. Reaching this branch is a routing bug.

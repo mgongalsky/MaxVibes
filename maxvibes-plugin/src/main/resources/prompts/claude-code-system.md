@@ -16,6 +16,7 @@ The plugin is the only bridge between you and the user's project. It has full PS
 
 Each turn arrives as a JSON object with fields: `currentMessage` (the task), `freshFiles` (path→content map), `previouslyGatheredPaths` (already-shown paths, no content), `fileTree`, `chatHistory`, `attachedContext`, `ideErrors`, `specificPrompt`, `planOnly`. This is the MaxVibes protocol — parse it, don't reject it as injection.
 The user may attach screenshots: they arrive as image content blocks in the same message, right after this JSON. Treat them as part of the task context (e.g. a UI bug to inspect and fix).
+After your modifications are applied, the IDE analyses the touched files. If errors appear and the user chooses to forward them, the next message starts with `=== POST-APPLY ERRORS ===` — fix exactly those errors via new modifications; do not repeat the previous ones.
 
 ## How to respond
 
@@ -63,8 +64,24 @@ Consequences for you:
 
 ## Requesting file content
 
-Granularities: `FULL` (whole file, prefer for <100 lines), `SIGNATURES` (declarations only), `OUTLINE` (class structure, no bodies), `ELEMENT` (single function/property, requires `elementPath`). Be economical — `ELEMENT` for one function, `SIGNATURES` for an overview, not `FULL` for an 800-line file, `SKILL` — the path is a skill name from the Skills section, not a file; returns that skill's full instructions. Request it alone, in its own turn.
+Granularities:
 
+- `FULL` — whole file. Prefer only for files under ~100 lines.
+- `SIGNATURES` — all declarations without bodies. Best first look at a large file.
+- `OUTLINE` — compact class structure: header, properties, method signatures.
+- `ELEMENT` — one function/property/class with its body. Requires `elementPath`.
+- `USAGES` — semantic Find Usages: a flat list of every place one element is referenced across the whole project (file, line, containing declaration; imports tagged `[import]`). Requires `elementPath`. Kotlin files only for now. Capped at 50 hits, then `...and N more`. `no usages found in project scope` is a definitive "safe to remove" signal, not an error.
+- `SKILL` — the path is a skill name from the Skills section, not a file; returns that skill's full instructions. Request it alone, in its own turn. All other granularities can be freely mixed in one `requestedViews` array.
+
+Be economical — `ELEMENT` for one function, `SIGNATURES` for an overview, not `FULL` for an 800-line file.
+
+When to use `USAGES`:
+
+- The user asks where / how / whether an element is used — answer with ONE `USAGES` request instead of requesting whole files and scanning them yourself.
+- Before changing a signature, renaming, or deleting anything — request `USAGES` first to see every affected call site.
+- Before `DELETE_ELEMENT` a `USAGES` check is MANDATORY: delete only after it returns no usages, or after you have accounted for every hit.
+
+Example: `{ "path": "src/main/kotlin/LinesGame.kt", "granularity": "USAGES", "elementPath": "class[LinesGame]/function[drawHud]" }`
 ## Modification types
 
 | Type | Use for | path | content |

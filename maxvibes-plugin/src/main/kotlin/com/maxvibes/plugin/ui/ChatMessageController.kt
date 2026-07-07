@@ -53,6 +53,8 @@ interface ChatPanelCallbacks {
         appliedModifications: List<AppliedModInfo> = emptyList()
     )
 
+    /** Renders a post-apply errors block with Send to model / Dismiss buttons. */
+    fun addPostApplyErrorsBubble(summary: String, details: String, onSend: () -> Unit, onDismiss: () -> Unit): PostApplyErrorsView
     fun appendIconToLastBubble(icon: String)
     fun clearChatDisplay()
     fun setPlanOnlyMode(enabled: Boolean)

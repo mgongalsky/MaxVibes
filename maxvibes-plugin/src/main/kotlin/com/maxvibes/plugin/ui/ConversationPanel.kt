@@ -46,6 +46,12 @@ interface CommandBatchBarView {
     fun dismiss()
 }
 
+/** View handle for the post-apply errors block. */
+interface PostApplyErrorsView {
+    fun setSent()
+    fun setDismissed()
+}
+
 class ConversationPanel(
     private val project: Project,
     private val onNavigateToPath: (String) -> Unit
@@ -546,6 +552,68 @@ class ConversationPanel(
         }
     }
 
+    /** Post-apply errors: summary, collapsible details, Send to model / Dismiss. */
+    fun addPostApplyErrorsBubble(
+        summary: String,
+        details: String,
+        onSend: () -> Unit,
+        onDismiss: () -> Unit
+    ): PostApplyErrorsView {
+        val bg = JBColor(Color(0xFDEDEC), Color(0x2B1A18))
+        val accent = JBColor(Color(0xC0392B), Color(0xEC7063))
+
+        val body = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            background = bg
+            alignmentX = Component.LEFT_ALIGNMENT
+        }
+        body.add(
+            collapsibleCodeBlock("errors", details, startCollapsed = details.lines().size > 15)
+                .also { it.alignmentX = Component.LEFT_ALIGNMENT }
+        )
+
+        val sendBtn = JButton("\u27A4 Send to model")
+        val dismissBtn = JButton("\u2716 Dismiss")
+        val controls = JPanel(FlowLayout(FlowLayout.LEFT, 6, 0)).apply {
+            background = bg; alignmentX = Component.LEFT_ALIGNMENT
+            add(sendBtn); add(dismissBtn)
+        }
+        val statusRow = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            background = bg; alignmentX = Component.LEFT_ALIGNMENT
+        }
+        sendBtn.addActionListener { sendBtn.isEnabled = false; dismissBtn.isEnabled = false; onSend() }
+        dismissBtn.addActionListener { sendBtn.isEnabled = false; dismissBtn.isEnabled = false; onDismiss() }
+
+        addComp(bubble(bg, accent).also { p ->
+            p.add(roleLabel("\u26D4 $summary", accent), BorderLayout.NORTH)
+            p.add(body, BorderLayout.CENTER)
+            p.add(JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.Y_AXIS); background = bg
+                add(controls); add(statusRow)
+            }, BorderLayout.SOUTH)
+        })
+
+        fun refresh() { messagesPanel.revalidate(); messagesPanel.repaint() }
+        fun statusLabel(text: String, color: Color) = JBLabel(text).apply {
+            font = font.deriveFont(Font.BOLD, 11f); foreground = color
+            alignmentX = Component.LEFT_ALIGNMENT
+            border = JBUI.Borders.empty(3, 0, 2, 0)
+        }
+        return object : PostApplyErrorsView {
+            override fun setSent() = SwingUtilities.invokeLater {
+                controls.isVisible = false
+                statusRow.add(statusLabel("\u27A4 Sent to model", JBColor(Color(0x1E8449), Color(0x58D68D))))
+                refresh()
+            }
+            override fun setDismissed() = SwingUtilities.invokeLater {
+                controls.isVisible = false
+                statusRow.add(statusLabel("\u2716 Dismissed", JBColor(Color(0x922B21), Color(0xD98880))))
+                refresh()
+            }
+        }
+    }
+
     // ==================== Footer ====================
 
     private fun collapsibleFooter(
@@ -659,11 +727,13 @@ class ConversationPanel(
             }
             val elem = requestedViews.count { it.granularity == CodeGranularity.ELEMENT }
             val skills = requestedViews.count { it.granularity == CodeGranularity.SKILL }
+            val usages = requestedViews.count { it.granularity == CodeGranularity.USAGES }
             val segments = buildList {
                 if (full > 0) add("<font color='#2980B9'>$full full</font>")
                 if (sigs > 0) add("<font color='#D4AC0D'>$sigs sig</font>")
                 if (elem > 0) add("<font color='#27AE60'>$elem elem</font>")
                 if (skills > 0) add("<font color='#8E44AD'>$skills skill</font>")
+                if (usages > 0) add("<font color='#CA6F1E'>$usages usages</font>")
             }
             parts += "&#128193; ${segments.joinToString(" &middot; ")}"
         } else if (metaFiles.isNotEmpty()) {
@@ -720,6 +790,7 @@ class ConversationPanel(
                     CodeGranularity.SIGNATURES -> Triple(Color(0x9A7D0A), Color(0xF4D03F), "[sig]")
                     CodeGranularity.OUTLINE -> Triple(Color(0x9A7D0A), Color(0xF4D03F), "[outline]")
                     CodeGranularity.ELEMENT -> Triple(Color(0x1E8449), Color(0x58D68D), "[elem]")
+                    CodeGranularity.USAGES -> Triple(Color(0xAF601A), Color(0xEB984E), "[usages]")
                     CodeGranularity.SKILL -> Triple(Color(0x6C3483), Color(0xBB8FCE), "[skill]")
                 }
                 val displayText = if (view.elementPath != null)

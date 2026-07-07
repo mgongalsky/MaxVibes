@@ -37,5 +37,15 @@ enum class CodeGranularity {
      * Not a code view: the path is a SKILL NAME, not a file. Resolved by the
      * interaction services from the skill repository — must never reach the PSI adapter.
      */
-    SKILL
+    SKILL,
+
+    /**
+     * Flat list of usages of a single element across the project:
+     * semantic Find Usages (ReferencesSearch), grouped by file with
+     * line numbers and the containing declaration.
+     *
+     * [CodeViewRequest.elementPath] is mandatory when this value is used:
+     * usages are searched for a specific declaration, never a whole file.
+     */
+    USAGES,
 }
