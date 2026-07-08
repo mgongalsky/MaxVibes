@@ -892,7 +892,9 @@ class ChatMessageController(
                 val tokenInfo = buildTokenInfoForClaudeCode(
                     inTok = result.inputTokens,
                     outTok = result.outputTokens,
-                    durationMs = result.durationMs
+                    durationMs = result.durationMs,
+                    costUsd = result.costUsd,
+                    numTurns = result.numTurns
                 )
 
                 chatTreeService.addMessage(
@@ -936,7 +938,10 @@ class ChatMessageController(
                     )
                 )
                 chatTreeService.addChatTokens(session.id, result.inputTokens, result.outputTokens)
-                val tokenInfo = buildTokenInfoForClaudeCode(result.inputTokens, result.outputTokens, result.durationMs)
+                val tokenInfo = buildTokenInfoForClaudeCode(
+                    result.inputTokens, result.outputTokens, result.durationMs,
+                    result.costUsd, result.numTurns
+                )
 
                 chatTreeService.addMessage(
                     session.id, MessageRole.ASSISTANT, result.assistantMessage,
@@ -993,7 +998,9 @@ class ChatMessageController(
                 val tokenInfo = buildTokenInfoForClaudeCode(
                     inTok = result.inputTokens,
                     outTok = result.outputTokens,
-                    durationMs = result.durationMs
+                    durationMs = result.durationMs,
+                    costUsd = result.costUsd,
+                    numTurns = result.numTurns
                 )
 
                 val appliedPaths = result.modifications
@@ -1083,11 +1090,19 @@ class ChatMessageController(
      * Layout: `\u21911234 \u00B7 \u2193567 \u00B7 42s` — components are omitted when their value is zero.
      * Returns null when nothing meaningful is available so the bubble suppresses the footer.
      */
-    private fun buildTokenInfoForClaudeCode(inTok: Int, outTok: Int, durationMs: Long): String? {
+    private fun buildTokenInfoForClaudeCode(
+        inTok: Int,
+        outTok: Int,
+        durationMs: Long,
+        costUsd: Double? = null,
+        numTurns: Int? = null
+    ): String? {
         val parts = mutableListOf<String>()
         if (inTok > 0) parts += "\u2191${fmt(inTok)}"
         if (outTok > 0) parts += "\u2193${fmt(outTok)}"
         if (durationMs >= 1000) parts += "${durationMs / 1000}s"
+        numTurns?.takeIf { it > 1 }?.let { parts += "$it turns" }
+        costUsd?.takeIf { it > 0.0 }?.let { parts += "\$${String.format("%.4f", it)}" }
         return if (parts.isEmpty()) null else parts.joinToString("  \u00B7  ")
     }
 

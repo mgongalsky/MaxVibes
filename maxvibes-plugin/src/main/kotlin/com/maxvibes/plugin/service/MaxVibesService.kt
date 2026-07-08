@@ -46,6 +46,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import com.maxvibes.application.service.ClaudeCodeActivityTracker
+import com.maxvibes.application.service.AgentStreamHub
 import com.maxvibes.application.port.input.ExecuteCommandUseCase
 import com.maxvibes.application.port.output.CommandRunnerPort
 import com.maxvibes.application.service.CommandExecutionService
@@ -247,7 +248,8 @@ class MaxVibesService(private val project: Project) : Disposable {
             settings = MaxVibesSettings.getInstance(),
             scope = serviceScope,
             workingDirectory = project.basePath,
-            sessionLog = claudeCodeSessionLog
+            sessionLog = claudeCodeSessionLog,
+            streamSink = agentStreamHub
         )
     }
 
@@ -277,7 +279,8 @@ class MaxVibesService(private val project: Project) : Disposable {
             chatSessionRepository = chatSessionRepository,
             activityTracker = claudeCodeActivityTracker,
             sessionLog = claudeCodeSessionLog,
-            specificPromptService = specificPromptService
+            specificPromptService = specificPromptService,
+            streamHub = agentStreamHub
         )
     }
 
@@ -290,6 +293,16 @@ class MaxVibesService(private val project: Project) : Disposable {
      */
     val claudeCodeActivityTracker: ClaudeCodeActivityTracker by lazy {
         ClaudeCodeActivityTracker()
+    }
+
+    /**
+     * Live-stream hub for the Claude Code mode: the adapter emits AgentStreamEvents
+     * into it (as AgentStreamSink), the UI subscribes via addListener (Set 2).
+     * Session attribution follows the sessionLog pattern - the interaction service
+     * calls begin(sessionId) before every transport call.
+     */
+    val agentStreamHub: AgentStreamHub by lazy {
+        AgentStreamHub()
     }
 
     // ========== Cheap LLM ==========

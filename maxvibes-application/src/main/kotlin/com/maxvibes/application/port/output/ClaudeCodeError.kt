@@ -24,5 +24,9 @@ sealed class ClaudeCodeError {
     data class ResumeFailed(val sessionId: String, val stderr: String) : ClaudeCodeError()
 
     /** stdout was received but could not be decoded into an `InteractionResponse`. */
+    /** stdout was received but could not be decoded into an `InteractionResponse`. */
     data class ParseFailed(val message: String) : ClaudeCodeError()
+
+    /** The turn was aborted (user Stop or inactivity watchdog). Carries any partial narration. */
+    data class Aborted(val partialText: String?) : ClaudeCodeError()
 }

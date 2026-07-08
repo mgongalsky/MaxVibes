@@ -100,7 +100,8 @@ class ClaudeCodeInteractionService(
     private val chatSessionRepository: ChatSessionRepository,
     private val activityTracker: ClaudeCodeActivityTracker,
     private val sessionLog: ClaudeCodeSessionLogPort? = null,
-    private val specificPromptService: SpecificPromptService? = null
+    private val specificPromptService: SpecificPromptService? = null,
+    private val streamHub: AgentStreamHub? = null
 ) {
 
     /** In-memory workspace: messages, gathered files, prompts, project context. */
@@ -460,6 +461,7 @@ class ClaudeCodeInteractionService(
         commandResults: String? = null,
         attachedImages: List<AttachedImage> = emptyList()
     ): ClaudeCodeStepResult {
+        streamHub?.begin(sessionId)
         val state = sessionState ?: return error("No active workspace")
         var session = chatSessionRepository.getSessionById(sessionId)
             ?: return error("Session not found: $sessionId")
@@ -577,13 +579,17 @@ class ClaudeCodeInteractionService(
                     )
                     chatSessionRepository.saveSession(updated)
                 }
+                val stats = payload.stats
                 processResponse(
                     sessionId = sessionId,
                     response = payload.response,
-                    inputTokens = totalTokens,
-                    outputTokens = estimateOutputTokens(payload.response),
+                    inputTokens = stats?.inputTokens?.takeIf { it > 0 } ?: totalTokens,
+                    outputTokens = stats?.outputTokens?.takeIf { it > 0 }
+                        ?: estimateOutputTokens(payload.response),
                     thinkingText = payload.thinkingText,
-                    durationMs = durationMs
+                    durationMs = stats?.durationMs?.takeIf { it > 0 } ?: durationMs,
+                    costUsd = stats?.costUsd?.takeIf { it > 0.0 },
+                    numTurns = stats?.numTurns?.takeIf { it > 0 }
                 )
             }
 
@@ -622,7 +628,9 @@ class ClaudeCodeInteractionService(
         inputTokens: Int,
         outputTokens: Int,
         thinkingText: String? = null,
-        durationMs: Long = 0L
+        durationMs: Long = 0L,
+        costUsd: Double? = null,
+        numTurns: Int? = null
     ): ClaudeCodeStepResult {
         val state = sessionState ?: return error("No active workspace")
 
@@ -700,7 +708,9 @@ class ClaudeCodeInteractionService(
                 inputTokens = inputTokens,
                 outputTokens = outputTokens,
                 llmReasoning = combinedReasoning,
-                durationMs = durationMs
+                durationMs = durationMs,
+                costUsd = costUsd,
+                numTurns = numTurns
             )
         }
 
@@ -723,7 +733,9 @@ class ClaudeCodeInteractionService(
                 outputTokens = outputTokens,
                 llmReasoning = combinedReasoning,
                 durationMs = durationMs,
-                skippedCommands = commands.size
+                skippedCommands = commands.size,
+                costUsd = costUsd,
+                numTurns = numTurns
             )
         }
 
@@ -749,7 +761,9 @@ class ClaudeCodeInteractionService(
             llmReasoning = combinedReasoning,
             commitMessage = response.commitMessage?.takeIf { it.isNotBlank() },
             durationMs = durationMs,
-            commands = commands
+            commands = commands,
+            costUsd = costUsd,
+            numTurns = numTurns
         )
     }
 
@@ -1024,6 +1038,10 @@ class ClaudeCodeInteractionService(
 
         is ClaudeCodeError.ParseFailed ->
             "Failed to parse Claude Code response: ${error.message}"
+
+        is ClaudeCodeError.Aborted ->
+            "Claude Code turn was aborted." +
+                    (error.partialText?.let { " Partial output preserved (${it.length} chars)." } ?: "")
     }
 
     private fun log(message: String) {

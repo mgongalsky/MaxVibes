@@ -1,11 +1,15 @@
 package com.maxvibes.plugin.claudecode
 
 import com.intellij.execution.configurations.GeneralCommandLine
+import com.maxvibes.application.port.output.AgentStreamEvent
+import com.maxvibes.application.port.output.AgentStreamSink
 import com.maxvibes.application.port.output.ClaudeCodeError
 import com.maxvibes.application.port.output.ClaudeCodePort
 import com.maxvibes.application.port.output.ClaudeCodeSendResult
 import com.maxvibes.application.port.output.ClaudeCodeSessionLogPort
 import com.maxvibes.application.port.output.InteractionProtocolCodec
+import com.maxvibes.application.port.output.SessionStats
+import com.maxvibes.domain.model.interaction.AttachedImage
 import com.maxvibes.domain.model.interaction.ClaudeCodeActivity
 import com.maxvibes.domain.model.interaction.ClipboardRequest
 import com.maxvibes.domain.model.interaction.InteractionResponse
@@ -13,121 +17,124 @@ import com.maxvibes.plugin.clipboard.JsonInteractionProtocolCodec
 import com.maxvibes.plugin.service.MaxVibesLogger
 import com.maxvibes.plugin.settings.MaxVibesSettings
 import com.maxvibes.shared.result.Result
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import java.io.BufferedReader
+import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 import java.io.BufferedWriter
 import java.io.File
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
-import com.maxvibes.domain.model.interaction.AttachedImage
-import kotlinx.serialization.json.*
 
 /**
- * Plugin-layer implementation of [ClaudeCodePort].
+ * Plugin-layer implementation of [ClaudeCodePort] over the stream-json NDJSON protocol.
  *
- * Lifecycle:
- *  - Lazy-starts on the first [ensureStarted] / [send].
- *  - Held alive across multiple sends within one chat session.
- *  - [shutdown] destroys the process. Safe to call multiple times.
+ * Architecture (live-stream rework):
+ *  - A PERSISTENT reader coroutine is started at spawn and lives until the process dies.
+ *    Every stdout line goes: raw into the per-dialog transcript (ground truth), then
+ *    through [StreamJsonEventParser], then out as [AgentStreamEvent]s via [streamSink].
+ *    Continuous draining also keeps the Windows pipe from blocking the CLI.
+ *  - [send] only writes the request to stdin and awaits the turn outcome on a
+ *    per-turn deferred, which the reader completes on the `result` event / EOF.
+ *  - The read timeout is an INACTIVITY threshold: it fires only after
+ *    `claudeCodeReadTimeoutSec` seconds with no stdout line at all, so multi-minute
+ *    rate-limit pauses do not kill a live turn as long as the CLI keeps emitting.
+ *  - [abort] kills the whole process TREE (descendants first) and completes the
+ *    in-flight turn with [ClaudeCodeError.Aborted] carrying the partial narration.
  *
- * Concurrency: all stdin/stdout access is serialized via [sendMutex].
- *
- * COMMAND (May 2026, against `claude --help`):
+ * Command line (verified against claude 2.1.138):
  *   claude -p --input-format stream-json --output-format stream-json --verbose
- *          --disallowed-tools <list>
- *          [--append-system-prompt-file <path>]
- *          [--resume <session-uuid>]
- *          [<extra args from settings>]
+ *          --include-partial-messages --disallowed-tools <list>
+ *          [--append-system-prompt-file <path>] [--resume <uuid>] [<extra args>]
  *
- * Note: `-p` (--print) is REQUIRED for stream-json input/output to work.
- * `--verbose` is required so that stream-json emits all event types (system/init,
- * assistant, result), not just the terminal result.
+ * The final text fed to the channel-protocol codec is the `result` field of the
+ * terminal event, with a self-healing fallback to the accumulated authoritative
+ * assistant text when `result` is blank or missing.
  *
- * Diagnostics: every meaningful step in this adapter writes a JSON line to
- * `.maxvibes/logs/maxvibes.log` via [MaxVibesLogger] under the `ClaudeCode`
- * tag. When something hangs or fails, the log makes it explicit whether the
- * problem is spawn / stdin write / stdout read / parse — without it, the UI
- * only shows a generic "transport error" message.
+ * The legacy onActivity callback is accepted but never invoked - superseded by
+ * [streamSink]; the whole ClaudeCodeActivity contour is removed in Set 2.
  *
- * Additionally, when a [ClaudeCodeSessionLogPort] is supplied, the adapter
- * mirrors the FULL untruncated exchange into the per-dialog transcript
- * (`.maxvibes/logs/claude-code/<chatSessionId>.log`): the complete spawn
- * command line (system prompt included), every raw stream-json line in both
- * directions, all stderr, and lifecycle events. MaxVibesLogger stays the
- * truncated overview; the transcript is the source of truth when debugging
- * a misbehaving dialog.
+ * Concurrency: [send]/[ensureStarted] are serialized via [sendMutex]. [abort] and
+ * [shutdown] are deliberately lock-free (send holds the mutex while awaiting) and
+ * operate on volatile references only.
  */
 class ClaudeCodeProcessAdapter(
     private val settings: MaxVibesSettings,
     private val codec: InteractionProtocolCodec = JsonInteractionProtocolCodec(),
     private val scope: CoroutineScope,
-    /**
-     * Working directory for the spawned `claude` process. When non-null and the
-     * directory exists, the process is started with this as its CWD. This matters
-     * because:
-     *  - claude-code's `CLAUDE.md` auto-loader looks in the current directory;
-     *  - any tool calls the model attempts (when not disabled) are sandboxed to
-     *    the CWD subtree, so launching outside the project means tools can't
-     *    reach project files even by absolute path;
-     *  - error messages and reset behaviour reference paths relative to CWD,
-     *    which is most useful when it's the project root.
-     *
-     * Defaults to null — process inherits the parent (IDE) CWD, which is usually
-     * something useless like the IDE installation's bin directory.
-     */
     private val workingDirectory: String? = null,
-    /**
-     * Optional per-dialog verbose transcript. When non-null, the adapter writes
-     * the FULL untruncated exchange to it (see class KDoc). The active dialog is
-     * selected upstream by the interaction service via
-     * [ClaudeCodeSessionLogPort.begin] — the adapter itself never learns the
-     * chat session id. Null (default) disables the transcript entirely, which
-     * keeps existing DI call-sites and unit tests compiling unchanged.
-     */
-    private val sessionLog: ClaudeCodeSessionLogPort? = null
+    private val sessionLog: ClaudeCodeSessionLogPort? = null,
+    /** Live-event sink (AgentStreamHub in production). Null disables live events entirely. */
+    private val streamSink: AgentStreamSink? = null
 ) : ClaudeCodePort {
 
     private companion object {
         private const val TAG = "ClaudeCode"
-
-        /** Max characters of a stdout/stderr line to include in log entries. */
         private const val LOG_LINE_PREVIEW_MAX = 500
-
-        /** Max characters of request JSON to include in log entries. */
         private const val LOG_REQUEST_PREVIEW_MAX = 300
-
-        /**
-         * Grace period after spawn before we believe the process "really" started.
-         * Long enough that an immediate crash (bad path, missing deps) is observable
-         * via `!isAlive`; short enough that healthy startups still feel snappy.
-         */
         private const val SPAWN_GRACE_MS = 200L
+
+        /** Poll interval of the inactivity watchdog inside [send]. */
+        private const val WATCHDOG_TICK_MS = 1000L
     }
 
-    private var process: Process? = null
-    private var stdin: BufferedWriter? = null
-    private var stdout: BufferedReader? = null
-    private var stderrCollector: Job? = null
+    /** Outcome of one turn, produced by the reader loop (or abort/shutdown/watchdog). */
+    private sealed interface TurnOutcome {
+        data class Finished(val finalText: String?, val isError: Boolean, val stats: SessionStats) : TurnOutcome
+        data class Died(val message: String) : TurnOutcome
+        data class Aborted(val partialText: String?) : TurnOutcome
+    }
+
+    /** Mutable state of the in-flight turn. Appends come from the reader thread only. */
+    private class TurnState(val startedAtMs: Long) {
+        val deferred = CompletableDeferred<TurnOutcome>()
+        private val text = StringBuilder()
+        private val thinking = StringBuilder()
+
+        @Volatile var observedSessionId: String? = null
+        @Volatile var lastActivityAtMs: Long = startedAtMs
+        @Volatile var linesRead: Int = 0
+
+        fun touch() { lastActivityAtMs = System.currentTimeMillis() }
+
+        @Synchronized fun appendText(s: String) { text.append(s) }
+        @Synchronized fun appendThinking(s: String) {
+            if (thinking.isNotEmpty()) thinking.append("\n\n")
+            thinking.append(s)
+        }
+        @Synchronized fun snapshotText(): String = text.toString()
+        @Synchronized fun snapshotThinking(): String = thinking.toString()
+    }
+
+    @Volatile private var process: Process? = null
+    @Volatile private var stdin: BufferedWriter? = null
+    @Volatile private var readerJob: Job? = null
+    @Volatile private var stderrCollector: Job? = null
+    @Volatile private var activeTurn: TurnState? = null
+
+    /** Session id from the last system/init seen - fallback when init precedes the turn. */
+    @Volatile private var lastKnownSessionId: String? = null
+
     private val stderrBuffer = StringBuilder()
     private val sendMutex = Mutex()
+    private val parser = StreamJsonEventParser()
 
-    /**
-     * Snapshot of stderr from the most recent failed start, retained so callers
-     * can surface it to the UI even after the process is torn down. Cleared on
-     * the next successful start.
-     */
     @Volatile
     var lastStderrSnapshot: String = ""
         private set
+
+    // ==================== Availability ====================
 
     override fun isAvailable(): Boolean {
         return try {
@@ -138,61 +145,43 @@ class ClaudeCodeProcessAdapter(
             val finished = proc.waitFor(5, TimeUnit.SECONDS)
             if (!finished) {
                 proc.destroyForcibly()
-                MaxVibesLogger.warn(
-                    TAG, "isAvailable: --version timed out",
-                    data = mapOf("path" to settings.claudeCodePath)
-                )
+                MaxVibesLogger.warn(TAG, "isAvailable: --version timed out",
+                    data = mapOf("path" to settings.claudeCodePath))
                 false
             } else {
                 val ok = proc.exitValue() == 0
-                MaxVibesLogger.info(
-                    TAG, "isAvail",
-                    mapOf(
-                        "path" to settings.claudeCodePath,
-                        "exit" to proc.exitValue(),
-                        "ok" to ok
-                    )
-                )
+                MaxVibesLogger.info(TAG, "isAvail",
+                    mapOf("path" to settings.claudeCodePath, "exit" to proc.exitValue(), "ok" to ok))
                 ok
             }
-        } catch (e: Exception)
-        {
-            MaxVibesLogger.warn(
-                TAG, "isAvailable threw", ex = e,
-                data = mapOf("path" to settings.claudeCodePath)
-            )
+        } catch (e: Exception) {
+            MaxVibesLogger.warn(TAG, "isAvailable threw", ex = e,
+                data = mapOf("path" to settings.claudeCodePath))
             false
         }
     }
+
+    // ==================== Lifecycle ====================
 
     override suspend fun ensureStarted(
         resumeSessionId: String?,
         systemPrompt: String?
     ): Result<Unit, ClaudeCodeError> =
         sendMutex.withLock {
-            if (process?.isAlive == true) {
-                MaxVibesLogger.info(
-                    TAG, "ensureStarted: already alive",
-                    mapOf(
-                        "resume" to (resumeSessionId ?: "null"),
-                        "systemPromptIgnored" to (systemPrompt != null)
-                    )
-                )
-                sessionLog?.event(
-                    "ensureStarted: already alive",
-                    mapOf(
-                        "resume" to (resumeSessionId ?: "null"),
-                        "systemPromptIgnored" to (systemPrompt != null)
-                    )
-                )
+            val alive = process
+            if (alive?.isAlive == true) {
+                MaxVibesLogger.info(TAG, "ensureStarted: already alive",
+                    mapOf("resume" to (resumeSessionId ?: "null"),
+                        "systemPromptIgnored" to (systemPrompt != null)))
+                sessionLog?.event("ensureStarted: already alive",
+                    mapOf("resume" to (resumeSessionId ?: "null"),
+                        "systemPromptIgnored" to (systemPrompt != null)))
                 return Result.Success(Unit)
             }
 
             if (!isAvailable()) {
-                MaxVibesLogger.warn(
-                    TAG, "ensureStarted: binary not found",
-                    data = mapOf("path" to settings.claudeCodePath)
-                )
+                MaxVibesLogger.warn(TAG, "ensureStarted: binary not found",
+                    data = mapOf("path" to settings.claudeCodePath))
                 sessionLog?.event("binary not found", mapOf("path" to settings.claudeCodePath))
                 return Result.Failure(ClaudeCodeError.BinaryNotFound)
             }
@@ -202,51 +191,37 @@ class ClaudeCodeProcessAdapter(
                 "--input-format", "stream-json",
                 "--output-format", "stream-json",
                 "--verbose",
-                // Disable the built-in tools that the model would otherwise reach for during
-                // a normal Claude Code session. In MaxVibes mode the plugin is the sole I/O
-                // channel: files arrive via `freshFiles` in the user payload, modifications
-                // go out via the `modifications` array in the JSON response.
-                //
-                // Empirically without this restriction the model wastes 30-180s per turn on
-                // bounced tool calls (Glob → "no files", PowerShell → "blocked",
-                // Read → "file does not exist"), each costing a full API round-trip.
-                //
-                // Note: we tried `--allowed-tools ""` (empty allowlist) earlier; on Windows
-                // GeneralCommandLine renders the empty arg in a way that claude-code rejects
-                // at argv parsing, killing the process with exit 1 before stdout opens.
-                // Listing the disallowed tools explicitly avoids that quoting problem.
+                // Partial-message deltas drive the live narration (content_block_delta).
+                // Verified present on 2.1.138; if a future CLI drops it, the adapter
+                // degrades to authoritative full messages per turn - still functional.
+                "--include-partial-messages",
+                // In MaxVibes mode the plugin is the sole I/O channel: files arrive via
+                // freshFiles in the payload, modifications go out via the JSON protocol.
+                // Without this restriction the model wastes 30-180s/turn on bounced tools.
+                // Note: an empty --allowed-tools arg breaks argv quoting on Windows,
+                // hence the explicit disallow list.
                 "--disallowed-tools",
                 "Read,Write,Edit,MultiEdit,NotebookEdit,Bash,Glob,Grep,WebFetch,WebSearch,PowerShell,Task"
             )
-            // System prompt is passed via a temp file + CLI flag (Strategy B, file variant):
-            // keeps the JSON user-event payload free of large prompt-like text that would
-            // otherwise trigger Claude Code's prompt-injection classifier, AND avoids the
-            // Windows ARG_MAX / CreateProcess argv-length limit that an inline prompt arg
-            // would hit for a multi-KB system prompt.
+            // System prompt via temp file + flag: keeps prompt-looking text out of the
+            // user payload (prompt-injection classifier) and dodges Windows argv limits.
             val hasSystemPrompt = !systemPrompt.isNullOrBlank()
             var promptFilePath: String? = null
             if (!systemPrompt.isNullOrBlank()) {
                 val promptFile = java.nio.file.Files.createTempFile("maxvibes-sysprompt-", ".md")
                 java.nio.file.Files.writeString(promptFile, systemPrompt, Charsets.UTF_8)
                 promptFile.toFile().deleteOnExit()
-                val path = promptFile.toAbsolutePath().toString()
-                promptFilePath = path
+                promptFilePath = promptFile.toAbsolutePath().toString()
                 baseArgs += "--append-system-prompt-file"
-                baseArgs += path
+                baseArgs += promptFilePath
             }
             if (resumeSessionId != null) {
                 baseArgs += "--resume"
                 baseArgs += resumeSessionId
             }
-            val extraArgs = settings.claudeCodeExtraArgs
-                .split(' ')
-                .filter { it.isNotBlank() }
+            val extraArgs = settings.claudeCodeExtraArgs.split(' ').filter { it.isNotBlank() }
             val allArgs = baseArgs + extraArgs
 
-            // Resolve working directory. Only set it on the command line if the
-            // configured path is non-blank and points to an existing directory —
-            // otherwise let the OS pick the default (parent process CWD), since
-            // GeneralCommandLine.withWorkDirectory throws on a missing dir.
             val resolvedWorkDir: File? = workingDirectory
                 ?.takeIf { it.isNotBlank() }
                 ?.let { File(it) }
@@ -255,103 +230,60 @@ class ClaudeCodeProcessAdapter(
             val cmd = GeneralCommandLine(settings.claudeCodePath).apply {
                 charset = StandardCharsets.UTF_8
                 addParameters(*allArgs.toTypedArray())
-                if (resolvedWorkDir != null) {
-                    withWorkDirectory(resolvedWorkDir)
-                }
+                if (resolvedWorkDir != null) withWorkDirectory(resolvedWorkDir)
             }
 
-            // System prompt no longer travels inline in argv (it's a temp file now),
-            // so there is nothing large to redact — args are safe to log verbatim.
-            val argsForLog = allArgs
-            MaxVibesLogger.info(
-                TAG, "ensureStarted: spawning",
+            MaxVibesLogger.info(TAG, "ensureStarted: spawning",
                 mapOf(
                     "path" to settings.claudeCodePath,
-                    "args" to argsForLog.joinToString(" "),
+                    "args" to allArgs.joinToString(" "),
                     "resume" to (resumeSessionId ?: "null"),
                     "hasSystemPrompt" to hasSystemPrompt,
                     "promptFile" to (promptFilePath ?: "<none>"),
                     "promptLen" to (systemPrompt?.length ?: 0),
                     "workDir" to (resolvedWorkDir?.absolutePath ?: "<inherited>"),
                     "requestedWorkDir" to (workingDirectory ?: "null")
-                )
-            )
-            // The transcript gets the FULL command line on purpose — including the
-            // path to the system-prompt temp file. That is the whole point of the
-            // per-dialog log: everything needed to reproduce the invocation lives
-            // in one file.
-            sessionLog?.event(
-                "spawning",
+                ))
+            // The transcript intentionally gets the FULL command line - it is the
+            // single file needed to reproduce the invocation.
+            sessionLog?.event("spawning",
                 mapOf(
                     "cmd" to settings.claudeCodePath,
                     "args" to allArgs.joinToString(" "),
                     "resume" to (resumeSessionId ?: "null"),
                     "workDir" to (resolvedWorkDir?.absolutePath ?: "<inherited>")
-                )
-            )
+                ))
 
             val proc = try {
                 cmd.createProcess()
             } catch (e: Exception) {
-                MaxVibesLogger.error(
-                    TAG, "ensureStarted: createProcess threw", ex = e,
-                    data = mapOf("path" to settings.claudeCodePath, "args" to argsForLog.joinToString(" "))
-                )
-                sessionLog?.event(
-                    "createProcess threw",
-                    mapOf("ex" to e.javaClass.simpleName, "exMsg" to (e.message ?: ""))
-                )
-                return Result.Failure(
-                    ClaudeCodeError.Crashed("Could not spawn process: ${e.message}")
-                )
+                MaxVibesLogger.error(TAG, "ensureStarted: createProcess threw", ex = e,
+                    data = mapOf("path" to settings.claudeCodePath, "args" to allArgs.joinToString(" ")))
+                sessionLog?.event("createProcess threw",
+                    mapOf("ex" to e.javaClass.simpleName, "exMsg" to (e.message ?: "")))
+                return Result.Failure(ClaudeCodeError.Crashed("Could not spawn process: ${e.message}"))
             }
 
             process = proc
             stdin = proc.outputStream.bufferedWriter(StandardCharsets.UTF_8)
-            stdout = proc.inputStream.bufferedReader(StandardCharsets.UTF_8)
             synchronized(stderrBuffer) { stderrBuffer.setLength(0) }
             lastStderrSnapshot = ""
 
-            stderrCollector = scope.launch(Dispatchers.IO) {
-                try {
-                    proc.errorStream.bufferedReader(StandardCharsets.UTF_8).useLines { lines ->
-                        lines.forEach { line ->
-                            synchronized(stderrBuffer) { stderrBuffer.appendLine(line) }
-                            MaxVibesLogger.warn(
-                                TAG, "stderr",
-                                data = mapOf("line" to line.take(LOG_LINE_PREVIEW_MAX))
-                            )
-                            sessionLog?.stderr(line)
-                        }
-                    }
-                } catch (e: Exception) {
-                    MaxVibesLogger.warn(TAG, "stderr collector threw", ex = e)
-                }
-            }
+            startStderrCollector(proc)
+            startReaderLoop(proc)
 
             delay(SPAWN_GRACE_MS)
 
             if (!proc.isAlive) {
-                val err = synchronized(stderrBuffer) { stderrBuffer.toString() }
+                val err = stderrSnapshot()
                 lastStderrSnapshot = err
                 val exitCode = runCatching { proc.exitValue() }.getOrDefault(-1)
-                MaxVibesLogger.error(
-                    TAG, "ensureStarted: process died during grace period",
-                    data = mapOf(
-                        "exit" to exitCode,
-                        "stderr" to err.take(LOG_LINE_PREVIEW_MAX),
-                        "resume" to (resumeSessionId ?: "null")
-                    )
-                )
-                sessionLog?.event(
-                    "process died during spawn grace",
-                    mapOf(
-                        "exit" to exitCode,
-                        "resume" to (resumeSessionId ?: "null"),
-                        "stderr" to err
-                    )
-                )
-                shutdown(reason = "died during spawn grace")
+                MaxVibesLogger.error(TAG, "ensureStarted: process died during grace period",
+                    data = mapOf("exit" to exitCode, "stderr" to err.take(LOG_LINE_PREVIEW_MAX),
+                        "resume" to (resumeSessionId ?: "null")))
+                sessionLog?.event("process died during spawn grace",
+                    mapOf("exit" to exitCode, "resume" to (resumeSessionId ?: "null"), "stderr" to err))
+                terminate(reason = "died during spawn grace", asAbort = false)
                 return if (resumeSessionId != null) {
                     Result.Failure(ClaudeCodeError.ResumeFailed(resumeSessionId, err))
                 } else {
@@ -359,22 +291,201 @@ class ClaudeCodeProcessAdapter(
                 }
             }
 
-            MaxVibesLogger.info(
-                TAG, "ensureStarted: alive after grace",
-                mapOf(
-                    "pid" to runCatching { proc.pid() }.getOrDefault(-1L),
-                    "resume" to (resumeSessionId ?: "null")
-                )
-            )
-            sessionLog?.event(
-                "alive after grace",
-                mapOf(
-                    "pid" to runCatching { proc.pid() }.getOrDefault(-1L),
-                    "resume" to (resumeSessionId ?: "null")
-                )
-            )
+            MaxVibesLogger.info(TAG, "ensureStarted: alive after grace",
+                mapOf("pid" to runCatching { proc.pid() }.getOrDefault(-1L),
+                    "resume" to (resumeSessionId ?: "null")))
+            sessionLog?.event("alive after grace",
+                mapOf("pid" to runCatching { proc.pid() }.getOrDefault(-1L),
+                    "resume" to (resumeSessionId ?: "null")))
             return Result.Success(Unit)
         }
+
+    override fun shutdown() {
+        terminate(reason = "explicit shutdown", asAbort = false)
+    }
+
+    override fun abort() {
+        terminate(reason = "abort (user Stop)", asAbort = true)
+    }
+
+    /**
+     * Kills the process TREE and completes any in-flight turn. Lock-free by design:
+     * [send] holds [sendMutex] while awaiting the turn, so taking it here would deadlock.
+     */
+    private fun terminate(reason: String, asAbort: Boolean) {
+        val turn = activeTurn
+        if (turn != null && !turn.deferred.isCompleted) {
+            val partial = turn.snapshotText().takeIf { it.isNotBlank() }
+            if (asAbort) {
+                emitEvent(AgentStreamEvent.Failed("aborted by user", partial))
+                turn.deferred.complete(TurnOutcome.Aborted(partial))
+            } else {
+                turn.deferred.complete(TurnOutcome.Died("process shut down ($reason)"))
+            }
+        }
+        val proc = process
+        if (proc != null) {
+            MaxVibesLogger.info(TAG, "terminate",
+                mapOf("reason" to reason, "alive" to proc.isAlive,
+                    "exit" to runCatching { if (!proc.isAlive) proc.exitValue() else null }.getOrNull()))
+            sessionLog?.event("terminate", mapOf("reason" to reason, "alive" to proc.isAlive))
+            // Descendants FIRST, then the root - kills the whole tree, not just the launcher.
+            runCatching { proc.toHandle().descendants().forEach { it.destroyForcibly() } }
+            runCatching { stdin?.close() }
+            runCatching { readerJob?.cancel() }
+            runCatching { stderrCollector?.cancel() }
+            runCatching { proc.destroyForcibly() }
+            runCatching { proc.waitFor(2, TimeUnit.SECONDS) }
+        }
+        process = null
+        stdin = null
+        readerJob = null
+        stderrCollector = null
+    }
+
+    // ==================== Reader loop ====================
+
+    private fun startStderrCollector(proc: Process) {
+        stderrCollector = scope.launch(Dispatchers.IO) {
+            try {
+                proc.errorStream.bufferedReader(StandardCharsets.UTF_8).useLines { lines ->
+                    lines.forEach { line ->
+                        synchronized(stderrBuffer) { stderrBuffer.appendLine(line) }
+                        MaxVibesLogger.warn(TAG, "stderr",
+                            data = mapOf("line" to line.take(LOG_LINE_PREVIEW_MAX)))
+                        sessionLog?.stderr(line)
+                        // Surface stderr as a Notice only mid-turn; spawn-time noise is skipped.
+                        if (activeTurn != null) {
+                            emitEvent(AgentStreamEvent.Notice("stderr: ${line.take(200)}"))
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                MaxVibesLogger.warn(TAG, "stderr collector threw", ex = e)
+            }
+        }
+    }
+
+    /**
+     * Persistent stdout drain: raw line -> transcript (ground truth) -> parser -> events.
+     * A broken line NEVER kills the loop. On EOF, any in-flight turn fails as Died.
+     */
+    private fun startReaderLoop(proc: Process) {
+        readerJob = scope.launch(Dispatchers.IO) {
+            val reader = proc.inputStream.bufferedReader(StandardCharsets.UTF_8)
+            try {
+                while (true) {
+                    val line = reader.readLine() ?: break
+                    try {
+                        handleStdoutLine(line)
+                    } catch (e: Exception) {
+                        MaxVibesLogger.warn(TAG, "stdout line handler threw - line skipped", ex = e,
+                            data = mapOf("preview" to line.take(LOG_LINE_PREVIEW_MAX)))
+                    }
+                }
+            } catch (e: Exception) {
+                MaxVibesLogger.warn(TAG, "stdout reader terminated", ex = e)
+            }
+            val turn = activeTurn
+            if (turn != null && !turn.deferred.isCompleted) {
+                val err = stderrSnapshot()
+                lastStderrSnapshot = err
+                MaxVibesLogger.warn(TAG, "stdout closed mid-turn",
+                    data = mapOf("linesRead" to turn.linesRead, "stderr" to err.take(LOG_LINE_PREVIEW_MAX)))
+                sessionLog?.event("stdout closed mid-turn",
+                    mapOf("linesRead" to turn.linesRead, "stderr" to err))
+                emitEvent(AgentStreamEvent.Failed(
+                    "process stdout closed before turn end",
+                    turn.snapshotText().takeIf { it.isNotBlank() }))
+                turn.deferred.complete(
+                    TurnOutcome.Died("stdout closed before turn end (stderr: ${err.take(200)})"))
+            }
+        }
+    }
+
+    private fun handleStdoutLine(line: String) {
+        sessionLog?.inbound(line)
+        val turn = activeTurn
+        turn?.let { it.linesRead++; it.touch() }
+
+        when (val parsed = parser.parse(line)) {
+            is StreamJsonEventParser.Line.Init -> {
+                lastKnownSessionId = parsed.sessionId ?: lastKnownSessionId
+                turn?.observedSessionId = parsed.sessionId
+                MaxVibesLogger.info(TAG, "session init",
+                    mapOf("sessionId" to (parsed.sessionId ?: "null"), "model" to (parsed.model ?: "null")))
+                sessionLog?.event("claude session_id observed",
+                    mapOf("claudeSessionId" to (parsed.sessionId ?: "null")))
+                emitEvent(AgentStreamEvent.SessionStarted(
+                    sessionId = parsed.sessionId ?: "?",
+                    model = parsed.model ?: "?"))
+            }
+
+            is StreamJsonEventParser.Line.SystemNotice -> {
+                MaxVibesLogger.info(TAG, "notice", mapOf("text" to parsed.text))
+                emitEvent(AgentStreamEvent.Notice(parsed.text))
+            }
+
+            is StreamJsonEventParser.Line.Delta ->
+                emitEvent(AgentStreamEvent.NarrationDelta(parsed.messageId, parsed.text, parsed.thinking))
+
+            is StreamJsonEventParser.Line.Assistant -> {
+                // Authoritative message: accumulate for the final-text fallback and
+                // emit as a buffer-replacing NarrationMessage (one per channel).
+                parsed.text?.let {
+                    turn?.appendText(it)
+                    emitEvent(AgentStreamEvent.NarrationMessage(parsed.messageId, it, thinking = false))
+                }
+                parsed.thinking?.let {
+                    turn?.appendThinking(it)
+                    emitEvent(AgentStreamEvent.NarrationMessage(parsed.messageId, it, thinking = true))
+                }
+                parsed.toolUses.forEach {
+                    emitEvent(AgentStreamEvent.ToolStarted(it.id, it.name, it.summary))
+                }
+            }
+
+            is StreamJsonEventParser.Line.ToolResult ->
+                emitEvent(AgentStreamEvent.ToolFinished(parsed.toolUseId, parsed.ok, parsed.summary))
+
+            is StreamJsonEventParser.Line.TurnEnd -> {
+                val stats = SessionStats(
+                    costUsd = parsed.costUsd,
+                    numTurns = parsed.numTurns,
+                    durationMs = parsed.durationMs,
+                    inputTokens = parsed.inputTokens,
+                    outputTokens = parsed.outputTokens
+                )
+                // Self-healing: blank/missing result text falls back to accumulated
+                // authoritative assistant text - protocol parsing survives schema drift.
+                val finalText = parsed.finalText?.takeIf { it.isNotBlank() }
+                    ?: turn?.snapshotText().orEmpty()
+                MaxVibesLogger.info(TAG, "turn end",
+                    mapOf("isError" to parsed.isError, "finalLen" to finalText.length,
+                        "costUsd" to parsed.costUsd, "numTurns" to parsed.numTurns,
+                        "inTok" to parsed.inputTokens, "outTok" to parsed.outputTokens))
+                if (parsed.isError) {
+                    emitEvent(AgentStreamEvent.Failed(
+                        finalText.ifBlank { "turn ended with error" },
+                        turn?.snapshotText()?.takeIf { it.isNotBlank() }))
+                } else {
+                    emitEvent(AgentStreamEvent.Completed(finalText, stats))
+                }
+                parser.reset()
+                turn?.deferred?.complete(
+                    TurnOutcome.Finished(finalText, parsed.isError, stats))
+            }
+
+            is StreamJsonEventParser.Line.Unknown ->
+                MaxVibesLogger.info(TAG, "unknown stream-json line skipped",
+                    mapOf("type" to (parsed.type ?: "unparseable"),
+                        "preview" to line.take(LOG_LINE_PREVIEW_MAX)))
+
+            StreamJsonEventParser.Line.Ignored -> { /* service envelope - raw already in CC log */ }
+        }
+    }
+
+    // ==================== Send ====================
 
     override suspend fun send(
         request: ClipboardRequest,
@@ -388,339 +499,158 @@ class ClaudeCodeProcessAdapter(
                 return Result.Failure(ClaudeCodeError.Crashed("Process not started"))
             }
             if (!proc.isAlive) {
-                val err = synchronized(stderrBuffer) { stderrBuffer.toString() }
+                val err = stderrSnapshot()
                 lastStderrSnapshot = err
-                MaxVibesLogger.warn(
-                    TAG, "send: process died before write",
-                    data = mapOf(
-                        "exit" to runCatching { proc.exitValue() }.getOrDefault(-1),
-                        "stderr" to err.take(LOG_LINE_PREVIEW_MAX)
-                    )
-                )
-                sessionLog?.event(
-                    "send rejected: process died before write",
-                    mapOf(
-                        "exit" to runCatching { proc.exitValue() }.getOrDefault(-1),
-                        "stderr" to err
-                    )
-                )
+                MaxVibesLogger.warn(TAG, "send: process died before write",
+                    data = mapOf("exit" to runCatching { proc.exitValue() }.getOrDefault(-1),
+                        "stderr" to err.take(LOG_LINE_PREVIEW_MAX)))
+                sessionLog?.event("send rejected: process died before write",
+                    mapOf("exit" to runCatching { proc.exitValue() }.getOrDefault(-1), "stderr" to err))
                 return Result.Failure(ClaudeCodeError.Crashed("Process died"))
             }
 
-            val sendStartedAt = System.currentTimeMillis()
-
-            fun emit(activity: ClaudeCodeActivity) {
-                try {
-                    onActivity(activity)
-                } catch (e: Exception) {
-                    MaxVibesLogger.warn(TAG, "onActivity callback threw — ignoring", ex = e)
-                }
-            }
-
-            // 1. Encode request through the shared codec, then wrap in stream-json.
+            // 1. Encode request; wrap into a stream-json user event.
             val protocolJson = codec.encode(request, omitMetaFields = true)
             val eventJson = buildUserEvent(protocolJson, request.attachedImages)
-
-            MaxVibesLogger.info(
-                TAG, "send: encoded",
-                mapOf(
-                    "requestJsonLen" to protocolJson.length,
-                    "streamLineLen" to eventJson.length,
+            MaxVibesLogger.info(TAG, "send: encoded",
+                mapOf("requestJsonLen" to protocolJson.length, "streamLineLen" to eventJson.length,
                     "requestPreview" to protocolJson.take(LOG_REQUEST_PREVIEW_MAX),
-                    "images" to request.attachedImages.size
-                )
-            )
-            // Full outbound line goes into the transcript BEFORE the write attempt,
-            // so a failed write still leaves the exact payload visible.
-            //
-            // Important: image requests contain base64 data in eventJson. Do not mirror
-            // that into logs; keep transcript output text-only and log only image count.
+                    "images" to request.attachedImages.size))
+            // Outbound line into the transcript BEFORE the write attempt. Image payloads
+            // (base64) are never mirrored - text-only variant plus a count event instead.
             if (request.attachedImages.isEmpty()) {
                 sessionLog?.outbound(eventJson)
             } else {
                 sessionLog?.outbound(buildUserEvent(protocolJson, emptyList()))
-                sessionLog?.event("outbound images omitted from transcript", mapOf("images" to request.attachedImages.size))
+                sessionLog?.event("outbound images omitted from transcript",
+                    mapOf("images" to request.attachedImages.size))
             }
 
-            // 2. Write to stdin.
+            // 2. Register the turn BEFORE writing stdin so the reader attributes
+            //    every response line to it (no early-line race).
+            val turn = TurnState(System.currentTimeMillis())
+            parser.reset()
+            activeTurn = turn
             try {
-                withContext(Dispatchers.IO) {
-                    val w = stdin ?: error("stdin not initialized")
-                    w.write(eventJson)
-                    w.newLine()
-                    w.flush()
+                try {
+                    withContext(Dispatchers.IO) {
+                        val w = stdin ?: error("stdin not initialized")
+                        w.write(eventJson)
+                        w.newLine()
+                        w.flush()
+                    }
+                    MaxVibesLogger.info(TAG, "send: stdin flushed")
+                    sessionLog?.event("stdin flushed")
+                } catch (e: Exception) {
+                    MaxVibesLogger.error(TAG, "send: stdin write failed", ex = e)
+                    sessionLog?.event("stdin write failed",
+                        mapOf("ex" to e.javaClass.simpleName, "exMsg" to (e.message ?: "")))
+                    return Result.Failure(ClaudeCodeError.Crashed("stdin write failed: ${e.message}"))
                 }
-                MaxVibesLogger.info(TAG, "send: stdin flushed")
-                sessionLog?.event("stdin flushed")
-            } catch (e: Exception) {
-                MaxVibesLogger.error(TAG, "send: stdin write failed", ex = e)
-                sessionLog?.event(
-                    "stdin write failed",
-                    mapOf("ex" to e.javaClass.simpleName, "exMsg" to (e.message ?: ""))
-                )
-                return Result.Failure(
-                    ClaudeCodeError.Crashed("stdin write failed: ${e.message}")
-                )
-            }
 
-            // 3. Read stdout until isTurnEnd.
-            val timeoutMs = settings.claudeCodeReadTimeoutSec.toLong() * 1000
-            val accumulated = StringBuilder()
-            // Full extended-thinking text accumulated over the turn (ThinkingBubble).
-            // Separate from the truncated live-activity previews emitted below.
-            val thinkingAccumulated = StringBuilder()
-            var observedSessionId: String? = null
-            var linesRead = 0
-            var sawTurnEnd = false
-
-            val readResult = withTimeoutOrNull(timeoutMs) {
-                runInterruptible(Dispatchers.IO) {
-                    val r = stdout ?: error("stdout not initialized")
-                    while (true) {
-                        val line = r.readLine() ?: break
-                        linesRead++
-
-                        // Full raw line — before any parsing — into the transcript.
-                        sessionLog?.inbound(line)
-
-                        val type = peekType(line)
-                        MaxVibesLogger.debug(
-                            TAG, "stdout line",
-                            mapOf(
-                                "n" to linesRead,
-                                "type" to (type ?: "unknown"),
-                                "len" to line.length,
-                                "preview" to line.take(LOG_LINE_PREVIEW_MAX)
-                            )
-                        )
-
-                        StreamJsonProtocol.extractSessionId(line)?.let {
-                            observedSessionId = it
-                            MaxVibesLogger.info(TAG, "session id observed", mapOf("sessionId" to it))
-                            sessionLog?.event("claude session_id observed", mapOf("claudeSessionId" to it))
-                            emit(ClaudeCodeActivity.Started(sendStartedAt, it))
-                        }
-                        StreamJsonProtocol.extractThinkingPreview(line)?.let { thought ->
-                            MaxVibesLogger.debug(
-                                TAG, "thinking preview",
-                                mapOf("len" to thought.length, "preview" to thought.take(LOG_LINE_PREVIEW_MAX))
-                            )
-                            emit(ClaudeCodeActivity.Thinking(sendStartedAt, "\uD83D\uDCAD $thought"))
-                        }
-                        StreamJsonProtocol.extractThinkingFull(line)?.let { full ->
-                            if (thinkingAccumulated.isNotEmpty()) thinkingAccumulated.append("\n\n")
-                            thinkingAccumulated.append(full)
-                        }
-                        StreamJsonProtocol.extractToolUseName(line)?.let { toolName ->
-                            MaxVibesLogger.debug(TAG, "tool_use observed", mapOf("name" to toolName))
-                            emit(ClaudeCodeActivity.Thinking(sendStartedAt, "\uD83D\uDD27 using $toolName"))
-                        }
-                        StreamJsonProtocol.extractAssistantText(line)?.let { txt ->
-                            accumulated.append(txt)
-                            MaxVibesLogger.debug(
-                                TAG, "assistant chunk",
-                                mapOf("chunkLen" to txt.length, "totalLen" to accumulated.length)
-                            )
-                            emit(ClaudeCodeActivity.Thinking(sendStartedAt, txt))
-                        }
-                        StreamJsonProtocol.extractRateLimitInfo(line)?.let { info ->
-                            MaxVibesLogger.info(TAG, "rate limit", mapOf("info" to info))
-                            emit(ClaudeCodeActivity.RateLimit(sendStartedAt, info))
-                        }
-                        if (StreamJsonProtocol.isTurnEnd(line)) {
-                            sawTurnEnd = true
-                            MaxVibesLogger.info(
-                                TAG, "turn end",
-                                mapOf("linesRead" to linesRead, "assistantLen" to accumulated.length)
-                            )
-                            break
+                // 3. Await the outcome with an INACTIVITY watchdog: the timeout counts
+                //    silence since the last stdout line, not total turn duration.
+                val inactivityLimitMs = settings.claudeCodeReadTimeoutSec.toLong() * 1000
+                var outcome: TurnOutcome? = null
+                while (outcome == null) {
+                    outcome = withTimeoutOrNull(WATCHDOG_TICK_MS) { turn.deferred.await() }
+                    if (outcome == null) {
+                        val silentMs = System.currentTimeMillis() - turn.lastActivityAtMs
+                        if (silentMs > inactivityLimitMs) {
+                            val err = stderrSnapshot()
+                            MaxVibesLogger.warn(TAG, "send: inactivity timeout - killing process tree",
+                                data = mapOf("silentMs" to silentMs, "linesRead" to turn.linesRead,
+                                    "stderr" to err.take(LOG_LINE_PREVIEW_MAX)))
+                            sessionLog?.event("inactivity timeout",
+                                mapOf("silentMs" to silentMs, "linesRead" to turn.linesRead, "stderr" to err))
+                            emitEvent(AgentStreamEvent.Failed(
+                                "no output for ${silentMs / 1000}s - process killed",
+                                turn.snapshotText().takeIf { it.isNotBlank() }))
+                            turn.deferred.complete(TurnOutcome.Died("inactivity timeout"))
+                            terminate(reason = "inactivity timeout", asAbort = false)
+                            return Result.Failure(ClaudeCodeError.Timeout)
                         }
                     }
                 }
-            }
 
-            val elapsedMs = System.currentTimeMillis() - sendStartedAt
+                val elapsedMs = System.currentTimeMillis() - turn.startedAtMs
 
-            if (readResult == null) {
-                val err = synchronized(stderrBuffer) { stderrBuffer.toString() }
-                MaxVibesLogger.warn(
-                    TAG, "send: read timeout",
-                    data = mapOf(
-                        "timeoutMs" to timeoutMs,
-                        "linesRead" to linesRead,
-                        "sawTurnEnd" to sawTurnEnd,
-                        "assistantLen" to accumulated.length,
-                        "alive" to proc.isAlive,
-                        "stderr" to err.take(LOG_LINE_PREVIEW_MAX)
-                    )
-                )
-                sessionLog?.event(
-                    "read timeout",
-                    mapOf(
-                        "timeoutMs" to timeoutMs,
-                        "linesRead" to linesRead,
-                        "sawTurnEnd" to sawTurnEnd,
-                        "assistantLen" to accumulated.length,
-                        "alive" to proc.isAlive,
-                        "stderr" to err
-                    )
-                )
-                return Result.Failure(ClaudeCodeError.Timeout)
-            }
+                return when (outcome) {
+                    is TurnOutcome.Aborted ->
+                        Result.Failure(ClaudeCodeError.Aborted(outcome.partialText))
 
-            if (!sawTurnEnd) {
-                val err = synchronized(stderrBuffer) { stderrBuffer.toString() }
-                lastStderrSnapshot = err
-                MaxVibesLogger.warn(
-                    TAG, "send: stdout closed without turn end",
-                    data = mapOf(
-                        "linesRead" to linesRead,
-                        "assistantLen" to accumulated.length,
-                        "alive" to proc.isAlive,
-                        "exit" to runCatching { proc.exitValue() }.getOrDefault(-1),
-                        "stderr" to err.take(LOG_LINE_PREVIEW_MAX),
-                        "elapsedMs" to elapsedMs
-                    )
-                )
-                sessionLog?.event(
-                    "stdout closed without turn end",
-                    mapOf(
-                        "linesRead" to linesRead,
-                        "assistantLen" to accumulated.length,
-                        "alive" to proc.isAlive,
-                        "exit" to runCatching { proc.exitValue() }.getOrDefault(-1),
-                        "elapsedMs" to elapsedMs,
-                        "stderr" to err
-                    )
-                )
-                return Result.Failure(
-                    ClaudeCodeError.Crashed("stdout closed before turn end (stderr: ${err.take(200)})")
-                )
-            }
+                    is TurnOutcome.Died -> {
+                        lastStderrSnapshot = stderrSnapshot()
+                        Result.Failure(ClaudeCodeError.Crashed(outcome.message))
+                    }
 
-            // 4. Decode the accumulated assistant text into an InteractionResponse.
-            val responseText = accumulated.toString()
-            MaxVibesLogger.info(
-                TAG, "send: decoding response",
-                mapOf(
-                    "assistantLen" to responseText.length,
-                    "preview" to responseText.take(LOG_REQUEST_PREVIEW_MAX),
-                    "elapsedMs" to elapsedMs
-                )
-            )
-            val response = codec.decode(responseText)
-                ?: run {
-                    if (responseText.isNotBlank()) {
-                        MaxVibesLogger.warn(
-                            TAG, "send: codec.decode returned null — falling back to plain message",
-                            data = mapOf(
-                                "assistantLen" to responseText.length,
-                                "preview" to responseText.take(LOG_LINE_PREVIEW_MAX)
-                            )
-                        )
-                        sessionLog?.event(
-                            "decode failed — falling back to plain message",
-                            mapOf("assistantLen" to responseText.length)
-                        )
-                        InteractionResponse(message = responseText)
-                    } else {
-                        MaxVibesLogger.warn(
-                            TAG, "send: codec.decode returned null and accumulated text is blank",
-                            data = mapOf("assistantLen" to responseText.length)
-                        )
-                        sessionLog?.event("decode failed — no usable content")
-                        return Result.Failure(
-                            ClaudeCodeError.ParseFailed(
-                                "Claude Code returned no usable content (assistantLen=${responseText.length})"
-                            )
-                        )
+                    is TurnOutcome.Finished -> {
+                        if (outcome.isError) {
+                            sessionLog?.event("result is_error",
+                                mapOf("preview" to (outcome.finalText ?: "").take(LOG_LINE_PREVIEW_MAX)))
+                            return Result.Failure(ClaudeCodeError.Crashed(
+                                "claude reported error result: ${(outcome.finalText ?: "").take(200)}"))
+                        }
+                        val text = outcome.finalText?.takeIf { it.isNotBlank() } ?: turn.snapshotText()
+                        MaxVibesLogger.info(TAG, "send: decoding response",
+                            mapOf("assistantLen" to text.length,
+                                "preview" to text.take(LOG_REQUEST_PREVIEW_MAX), "elapsedMs" to elapsedMs))
+                        val response = codec.decode(text)
+                            ?: if (text.isNotBlank()) {
+                                MaxVibesLogger.warn(TAG,
+                                    "send: codec.decode returned null - falling back to plain message",
+                                    data = mapOf("assistantLen" to text.length,
+                                        "preview" to text.take(LOG_LINE_PREVIEW_MAX)))
+                                sessionLog?.event("decode failed - falling back to plain message",
+                                    mapOf("assistantLen" to text.length))
+                                InteractionResponse(message = text)
+                            } else {
+                                MaxVibesLogger.warn(TAG, "send: no usable content")
+                                sessionLog?.event("decode failed - no usable content")
+                                return Result.Failure(ClaudeCodeError.ParseFailed(
+                                    "Claude Code returned no usable content (assistantLen=${text.length})"))
+                            }
+                        val thinkingText = turn.snapshotThinking().takeIf { it.isNotBlank() }
+                        MaxVibesLogger.info(TAG, "send: done",
+                            mapOf("elapsedMs" to elapsedMs, "linesRead" to turn.linesRead,
+                                "assistantLen" to text.length,
+                                "thinkingLen" to (thinkingText?.length ?: 0),
+                                "sessionId" to (turn.observedSessionId ?: lastKnownSessionId ?: "null"),
+                                "costUsd" to outcome.stats.costUsd))
+                        sessionLog?.event("turn done",
+                            mapOf("elapsedMs" to elapsedMs, "linesRead" to turn.linesRead,
+                                "assistantLen" to text.length,
+                                "thinkingLen" to (thinkingText?.length ?: 0),
+                                "claudeSessionId" to (turn.observedSessionId ?: lastKnownSessionId ?: "null")))
+                        Result.Success(ClaudeCodeSendResult(
+                            response = response,
+                            observedSessionId = turn.observedSessionId ?: lastKnownSessionId,
+                            thinkingText = thinkingText,
+                            stats = outcome.stats
+                        ))
                     }
                 }
-
-            // Full chain-of-thought for the turn; null when no thinking blocks arrived.
-            val thinkingText = thinkingAccumulated.toString().takeIf { it.isNotBlank() }
-
-            MaxVibesLogger.info(
-                TAG, "send: done",
-                mapOf(
-                    "elapsedMs" to elapsedMs,
-                    "linesRead" to linesRead,
-                    "assistantLen" to responseText.length,
-                    "thinkingLen" to (thinkingText?.length ?: 0),
-                    "sessionId" to (observedSessionId ?: "null")
-                )
-            )
-            sessionLog?.event(
-                "turn done",
-                mapOf(
-                    "elapsedMs" to elapsedMs,
-                    "linesRead" to linesRead,
-                    "assistantLen" to responseText.length,
-                    "thinkingLen" to (thinkingText?.length ?: 0),
-                    "claudeSessionId" to (observedSessionId ?: "null")
-                )
-            )
-            return Result.Success(ClaudeCodeSendResult(response, observedSessionId, thinkingText))
+            } finally {
+                activeTurn = null
+            }
         }
 
-    override fun shutdown() {
-        shutdown(reason = "explicit")
-    }
+    // ==================== Helpers ====================
 
-    private fun shutdown(reason: String) {
-        val proc = process
-        if (proc != null) {
-            MaxVibesLogger.info(
-                TAG, "shutdown",
-                mapOf(
-                    "reason" to reason,
-                    "alive" to proc.isAlive,
-                    "exit" to runCatching { if (!proc.isAlive) proc.exitValue() else null }.getOrNull()
-                )
-            )
-            sessionLog?.event(
-                "shutdown",
-                mapOf(
-                    "reason" to reason,
-                    "alive" to proc.isAlive,
-                    "exit" to runCatching { if (!proc.isAlive) proc.exitValue() else null }.getOrNull()
-                )
-            )
-            runCatching { stdin?.close() }
-            runCatching { stdout?.close() }
-            runCatching { stderrCollector?.cancel() }
-            runCatching { proc.destroyForcibly() }
-            runCatching { proc.waitFor(2, TimeUnit.SECONDS) }
+    private fun emitEvent(event: AgentStreamEvent) {
+        try {
+            streamSink?.emit(event)
+        } catch (e: Exception) {
+            MaxVibesLogger.warn(TAG, "streamSink.emit threw - ignoring", ex = e)
         }
-        process = null
-        stdin = null
-        stdout = null
-        stderrCollector = null
     }
 
-
-
-    /**
-     * Extracts the `type` field of a stream-json line without full parsing.
-     * Used only for logging — never for control flow. Returns null on parse error.
-     */
-    private fun peekType(line: String): String? {
-        val idx = line.indexOf("type")
-        if (idx < 0) return null
-        val colon = line.indexOf(':', startIndex = idx)
-        if (colon < 0) return null
-        val firstQuote = line.indexOf('"', startIndex = colon + 1)
-        if (firstQuote < 0) return null
-        val secondQuote = line.indexOf('"', startIndex = firstQuote + 1)
-        if (secondQuote < 0) return null
-        return line.substring(firstQuote + 1, secondQuote)
-    }
+    private fun stderrSnapshot(): String = synchronized(stderrBuffer) { stderrBuffer.toString() }
 
     /**
-     * Builds the stream-json user event for stdin. Without images the content stays
-     * a plain string — byte-identical to the previous format (prompt-cache friendly).
-     * With images it becomes a content-block array: one text block with the protocol
-     * JSON, then one image block per attachment (Anthropic Messages format).
+     * Builds the stream-json user event for stdin. Without images the content stays a
+     * plain string (byte-identical to the legacy format, prompt-cache friendly); with
+     * images it becomes a content-block array (Anthropic Messages format).
      */
     private fun buildUserEvent(protocolJson: String, images: List<AttachedImage>): String {
         val message = buildJsonObject {

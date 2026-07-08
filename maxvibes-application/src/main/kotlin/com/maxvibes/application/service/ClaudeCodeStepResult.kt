@@ -38,7 +38,9 @@ sealed class ClaudeCodeStepResult {
         val outputTokens: Int = 0,
         val llmReasoning: String? = null,
         val durationMs: Long = 0L,
-        val skippedCommands: Int = 0
+        val skippedCommands: Int = 0,
+        val costUsd: Double? = null,
+        val numTurns: Int? = null
     ) : ClaudeCodeStepResult()
 
     /**
@@ -56,7 +58,9 @@ sealed class ClaudeCodeStepResult {
         val inputTokens: Int = 0,
         val outputTokens: Int = 0,
         val llmReasoning: String? = null,
-        val durationMs: Long = 0L
+        val durationMs: Long = 0L,
+        val costUsd: Double? = null,
+        val numTurns: Int? = null
     ) : ClaudeCodeStepResult()
 
     /**
@@ -82,7 +86,9 @@ sealed class ClaudeCodeStepResult {
         val llmReasoning: String? = null,
         val commitMessage: String? = null,
         val durationMs: Long = 0L,
-        val commands: List<CommandRequest> = emptyList()
+        val commands: List<CommandRequest> = emptyList(),
+        val costUsd: Double? = null,
+        val numTurns: Int? = null
     ) : ClaudeCodeStepResult()
 
     /**

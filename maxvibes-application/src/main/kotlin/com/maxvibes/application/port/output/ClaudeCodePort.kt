@@ -76,4 +76,14 @@ interface ClaudeCodePort {
      * Safe to call multiple times.
      */
     fun shutdown()
+
+    /**
+     * Forcefully terminates the process TREE (root + all descendants) mid-turn.
+     * The in-flight [send] completes with [ClaudeCodeError.Aborted] carrying any
+     * partial narration text. Default delegates to [shutdown] so fakes/tests
+     * without tree-kill support keep compiling.
+     */
+    fun abort() {
+        shutdown()
+    }
 }

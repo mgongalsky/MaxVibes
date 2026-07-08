@@ -21,5 +21,7 @@ import com.maxvibes.domain.model.interaction.InteractionResponse
 data class ClaudeCodeSendResult(
     val response: InteractionResponse,
     val observedSessionId: String?,
-    val thinkingText: String? = null
+    val thinkingText: String? = null,
+    /** Per-turn stats from the CLI result event; null when the result carried none. */
+    val stats: SessionStats? = null
 )
