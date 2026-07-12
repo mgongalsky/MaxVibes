@@ -210,6 +210,61 @@ class ChatPanel(
     }
 
     /**
+     * Claude Code CLI model selector. Writes to settings.claudeCodeModel; the
+     * adapter's SpawnConfig snapshot check picks the change up on the next send
+     * and respawns the process. Visible only in CLAUDE_CODE mode.
+     */
+    private val claudeModelCombo = ComboBox<String>().apply {
+        isEditable = true
+        addItem("Auto")
+        addItem("haiku")
+        addItem("sonnet")
+        addItem("opus")
+        preferredSize = Dimension(120, 22)
+        font = font.deriveFont(11f)
+        toolTipText =
+            "Claude Code CLI model. Auto = CLI default; type a full model name for anything else. Applies on next send."
+        isVisible = false
+
+        addActionListener { commitModelComboToSettings() }
+        editor.editorComponent.addFocusListener(object : java.awt.event.FocusAdapter() {
+            override fun focusLost(e: java.awt.event.FocusEvent?) = commitModelComboToSettings()
+        })
+        addPopupMenuListener(object : javax.swing.event.PopupMenuListener {
+            override fun popupMenuWillBecomeVisible(e: javax.swing.event.PopupMenuEvent?) = syncModelComboFromSettings()
+            override fun popupMenuWillBecomeInvisible(e: javax.swing.event.PopupMenuEvent?) {}
+            override fun popupMenuCanceled(e: javax.swing.event.PopupMenuEvent?) {}
+        })
+    }
+
+    /** Guards claudeModelCombo listeners during programmatic sync. */
+    private var suppressModelCombo = false
+
+    /** Re-reads settings.claudeCodeModel into the combo without firing commit. */
+    private fun syncModelComboFromSettings() {
+        suppressModelCombo = true
+        try {
+            val value = settings.claudeCodeModel.trim()
+            claudeModelCombo.selectedItem = if (value.isEmpty()) "Auto" else value
+        } finally {
+            suppressModelCombo = false
+        }
+    }
+
+    /** Commits the combo editor value into settings.claudeCodeModel (Auto becomes blank). */
+    private fun commitModelComboToSettings() {
+        if (suppressModelCombo) return
+        val raw = (claudeModelCombo.editor.item ?: claudeModelCombo.selectedItem)
+            ?.toString()
+            ?.trim()
+            ?: return
+        val value = if (raw.isEmpty() || raw.equals("Auto", ignoreCase = true)) "" else raw
+        if (settings.claudeCodeModel == value) return
+        settings.claudeCodeModel = value
+        statusLabel.text = "CLI model: ${value.ifEmpty { "Auto" }} — applies on next send"
+    }
+
+    /**
      * Live in-progress block for the current Claude Code turn: header with elapsed
      * time and last-event age, streaming narration, tool feed, notices, Stop.
      * Event-driven via [streamListener]; hides itself on Completed and flushes the
@@ -227,6 +282,9 @@ class ChatPanel(
     private val chatTreeService get() = service.chatTreeService
     private val promptService: PromptService by lazy { PromptService.getInstance(project) }
     private val settings: MaxVibesSettings by lazy { MaxVibesSettings.getInstance() }
+    private val initialModelComboSync: Unit = run {
+        syncModelComboFromSettings()
+    }
 
     /**
      * Routes AgentStreamHub events for the ACTIVE session into [liveTurnPanel].
@@ -345,6 +403,7 @@ class ChatPanel(
         clearErrorsButton.isEnabled = enabled
         promptsButton.isEnabled = enabled
         modeComboBox.isEnabled = enabled
+        claudeModelCombo.isEnabled = enabled
         sessionsButton.isEnabled = enabled
         branchButton.isEnabled = enabled
         newChatButton.isEnabled = enabled
@@ -1081,16 +1140,17 @@ class ChatPanel(
     fun render(state: ChatPanelState) {
         updateBreadcrumb()
         updateModeUI(state)
+        claudeModelCombo.isVisible = state.mode == InteractionMode.CLAUDE_CODE
         updateIndicators()
         updateTokenDisplay()
         updateContextIndicator()
         updateToolWindowIcons()
         val displayName = state.selectedSpecificPromptName ?: "Just Code"
-        promptSelectButton.text = "$displayName \u25BE"
+        promptSelectButton.text = "$displayName ▾"
         promptSelectButton.toolTipText = if (state.selectedSpecificPromptName != null)
-            "Active prompt: $displayName \u2014 click to change"
+            "Active prompt: $displayName — click to change"
         else
-            "No specific prompt active \u2014 click to select"
+            "No specific prompt active — click to select"
         val hasPrompt = state.selectedSpecificPromptName != null
         editPromptButton.isEnabled = hasPrompt
         deletePromptButton.isEnabled = hasPrompt
@@ -1101,7 +1161,7 @@ class ChatPanel(
 
         // While the Claude Code session is awaiting approve, the only meaningful action
         // is to press Approve (or create a new chat). Disabling Send here gives the user
-        // a clear visual signal rather than the silent "session is awaiting approve"
+        // a clear visual signal rather than the silent session-is-awaiting-approve
         // rejection they would otherwise hit.
         if (state.claudeCodeApproveVisible) {
             sendButton.isEnabled = false
@@ -1115,6 +1175,7 @@ class ChatPanel(
     private fun buildPromptPanel(): JPanel {
         return JPanel(FlowLayout(FlowLayout.RIGHT, 4, 2)).apply {
             background = JBColor.background()
+            add(claudeModelCombo)
             add(newPromptButton)
             add(editPromptButton)
             add(deletePromptButton)
