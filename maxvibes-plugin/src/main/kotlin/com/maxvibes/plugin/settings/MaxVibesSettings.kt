@@ -45,6 +45,7 @@ class MaxVibesSettings : PersistentStateComponent<MaxVibesSettings.State> {
         var claudeCodePath: String = "claude",
         var claudeCodeExtraArgs: String = "",
         var claudeCodeModel: String = "",
+        var claudeCodeEffortLevel: String = "",
         var claudeCodeMaxOutputTokens: Int = 64000,
         var claudeCodeThinkingBudget: Int = 0,
         var claudeCodeReadTimeoutSec: Int = 120,
@@ -156,6 +157,13 @@ class MaxVibesSettings : PersistentStateComponent<MaxVibesSettings.State> {
         get() = myState.claudeCodeModel
         set(value) {
             myState.claudeCodeModel = value
+        }
+
+    /** Reasoning effort for the Claude Code CLI, exported as CLAUDE_CODE_EFFORT_LEVEL. Blank = Auto (model default). */
+    var claudeCodeEffortLevel: String
+        get() = myState.claudeCodeEffortLevel
+        set(value) {
+            myState.claudeCodeEffortLevel = value
         }
 
     /** Per-response output cap, exported as CLAUDE_CODE_MAX_OUTPUT_TOKENS on the child process. 0 = CLI default. */

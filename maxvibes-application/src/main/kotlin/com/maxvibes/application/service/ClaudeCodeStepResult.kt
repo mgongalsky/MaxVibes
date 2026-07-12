@@ -4,6 +4,7 @@ import com.maxvibes.domain.model.code.RequestedViewInfo
 import com.maxvibes.domain.model.command.CommandRequest
 import com.maxvibes.domain.model.interaction.InteractionModification
 import com.maxvibes.domain.model.modification.ModificationResult
+import com.maxvibes.domain.model.interaction.InteractionQuestion
 
 /**
  * Outcome of a single step in the Claude Code interaction flow.
@@ -55,6 +56,23 @@ sealed class ClaudeCodeStepResult {
         val heldCommands: Int = 0,
         /** File requests dropped because the response mixed them with modifications. */
         val skippedViews: Int = 0,
+        val inputTokens: Int = 0,
+        val outputTokens: Int = 0,
+        val llmReasoning: String? = null,
+        val durationMs: Long = 0L,
+        val costUsd: Double? = null,
+        val numTurns: Int? = null
+    ) : ClaudeCodeStepResult()
+
+    /**
+     * The LLM ended the turn with structured [questions] for the user. No Approve
+     * gate is involved: the session stays active and the user's answer arrives as
+     * the next regular message (same semantics as rejecting held modifications by
+     * typing). Nothing is held service-side.
+     */
+    data class AwaitingQuestions(
+        val assistantMessage: String,
+        val questions: List<InteractionQuestion>,
         val inputTokens: Int = 0,
         val outputTokens: Int = 0,
         val llmReasoning: String? = null,

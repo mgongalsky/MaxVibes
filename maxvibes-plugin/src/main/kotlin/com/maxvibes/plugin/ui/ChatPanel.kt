@@ -265,6 +265,47 @@ class ChatPanel(
     }
 
     /**
+     * Claude Code reasoning-effort selector (CLAUDE_CODE_EFFORT_LEVEL). Same
+     * lifecycle as the model selector: writes to settings, adapter respawns on
+     * next send. Unsupported levels clamp down; pre-4.6 models ignore effort.
+     */
+    private val claudeEffortCombo = ComboBox(arrayOf("Auto", "low", "medium", "high", "xhigh", "max")).apply {
+        preferredSize = Dimension(90, 22)
+        font = font.deriveFont(11f)
+        toolTipText = "Reasoning effort (Claude Code). Auto = model default. Applies on next send."
+        isVisible = false
+
+        addActionListener { commitEffortComboToSettings() }
+        addPopupMenuListener(object : javax.swing.event.PopupMenuListener {
+            override fun popupMenuWillBecomeVisible(e: javax.swing.event.PopupMenuEvent?) =
+                syncEffortComboFromSettings()
+
+            override fun popupMenuWillBecomeInvisible(e: javax.swing.event.PopupMenuEvent?) {}
+            override fun popupMenuCanceled(e: javax.swing.event.PopupMenuEvent?) {}
+        })
+    }
+
+    /** Guards claudeEffortCombo listener during programmatic sync. */
+    private var suppressEffortCombo = false
+    private fun syncEffortComboFromSettings() {
+        suppressEffortCombo = true
+        try {
+            claudeEffortCombo.selectedItem = settings.claudeCodeEffortLevel.ifBlank { "Auto" }
+        } finally {
+            suppressEffortCombo = false
+        }
+    }
+
+    private fun commitEffortComboToSettings() {
+        if (suppressEffortCombo) return
+        val raw = claudeEffortCombo.selectedItem as? String ?: return
+        val value = if (raw == "Auto") "" else raw
+        if (settings.claudeCodeEffortLevel == value) return
+        settings.claudeCodeEffortLevel = value
+        statusLabel.text = "CLI effort: ${value.ifEmpty { "Auto" }} — applies on next send"
+    }
+
+    /**
      * Live in-progress block for the current Claude Code turn: header with elapsed
      * time and last-event age, streaming narration, tool feed, notices, Stop.
      * Event-driven via [streamListener]; hides itself on Completed and flushes the
@@ -284,6 +325,7 @@ class ChatPanel(
     private val settings: MaxVibesSettings by lazy { MaxVibesSettings.getInstance() }
     private val initialModelComboSync: Unit = run {
         syncModelComboFromSettings()
+        syncEffortComboFromSettings()
     }
 
     /**
@@ -377,6 +419,17 @@ class ChatPanel(
         onRun: () -> Unit, onDecline: (String?) -> Unit
     ): CommandBlockView = conversationPanel.addCommandBubble(command, reason, warnings, onRun, onDecline)
 
+    override fun addQuestionBubble(
+        question: String,
+        options: List<String>,
+        onAnswer: (String) -> Unit
+    ): QuestionBlockView = conversationPanel.addQuestionBubble(question, options, onAnswer)
+
+    override fun sendUserMessage(text: String) {
+        inputArea.text = text
+        sendMessage()
+    }
+
     override fun addCommandBatchBar(count: Int, onRunAll: () -> Unit, onDeclineAll: () -> Unit): CommandBatchBarView =
         conversationPanel.addCommandBatchBar(count, onRunAll, onDeclineAll)
 
@@ -404,6 +457,7 @@ class ChatPanel(
         promptsButton.isEnabled = enabled
         modeComboBox.isEnabled = enabled
         claudeModelCombo.isEnabled = enabled
+        claudeEffortCombo.isEnabled = enabled
         sessionsButton.isEnabled = enabled
         branchButton.isEnabled = enabled
         newChatButton.isEnabled = enabled
@@ -1141,6 +1195,7 @@ class ChatPanel(
         updateBreadcrumb()
         updateModeUI(state)
         claudeModelCombo.isVisible = state.mode == InteractionMode.CLAUDE_CODE
+        claudeEffortCombo.isVisible = state.mode == InteractionMode.CLAUDE_CODE
         updateIndicators()
         updateTokenDisplay()
         updateContextIndicator()
@@ -1155,27 +1210,21 @@ class ChatPanel(
         editPromptButton.isEnabled = hasPrompt
         deletePromptButton.isEnabled = hasPrompt
 
-        // Approve button is purely state-driven: visible iff the panel state says so.
-        // Its enabled-ness is governed by setInputEnabled(...) like every other control.
         approveButton.isVisible = state.claudeCodeApproveVisible
 
-        // While the Claude Code session is awaiting approve, the only meaningful action
-        // is to press Approve (or create a new chat). Disabling Send here gives the user
-        // a clear visual signal rather than the silent session-is-awaiting-approve
-        // rejection they would otherwise hit.
         if (state.claudeCodeApproveVisible) {
             sendButton.isEnabled = false
             sendButton.toolTipText = "Press Approve to continue, or start a new chat (+ New)"
         } else {
             sendButton.toolTipText = "Send message (Ctrl+Enter)"
         }
-        // Live turn block is fully event-driven via AgentStreamHub; no state plumbing here.
     }
 
     private fun buildPromptPanel(): JPanel {
         return JPanel(FlowLayout(FlowLayout.RIGHT, 4, 2)).apply {
             background = JBColor.background()
             add(claudeModelCombo)
+            add(claudeEffortCombo)
             add(newPromptButton)
             add(editPromptButton)
             add(deletePromptButton)

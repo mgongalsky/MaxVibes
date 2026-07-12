@@ -88,6 +88,9 @@ object InteractionRequestSchema {
     /** Shell commands the LLM asks the IDE to run (last resort). */
     const val RESP_COMMANDS = "commands"
 
+    /** Questions the LLM asks the user before proceeding (structured channel). */
+    const val RESP_QUESTIONS = "questions"
+
     // ── Command entry fields ───────────────────────────────────────────
 
     /** Shell command line to execute from the project root. */
@@ -101,6 +104,15 @@ object InteractionRequestSchema {
 
     /** Field for command results sent back to the LLM in the next request. */
     const val FIELD_COMMAND_RESULTS = "commandResults"
+
+    /** Stable identifier of a question entry (echoed back in the user's answer). */
+    const val Q_ID = "id"
+
+    /** Human-readable question text shown to the user. */
+    const val Q_QUESTION = "question"
+
+    /** Short answer options rendered as tappable choices (2-4 per protocol). */
+    const val Q_OPTIONS = "options"
 
     // ── Modification entry fields ──────────────────────────────────────
 

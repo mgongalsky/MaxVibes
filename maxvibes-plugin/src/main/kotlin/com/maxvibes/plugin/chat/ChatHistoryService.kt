@@ -252,6 +252,20 @@ class XmlChatSession {
     @Attribute("selectedSpecificPromptName")
     var selectedSpecificPromptName: String = ""
 
+    /**
+     * Claude Code CLI session id used for --resume. Null for sessions that never ran
+     * CLI mode and for XML files written before this field existed.
+     */
+    @Attribute("claudeCodeSessionId")
+    var claudeCodeSessionId: String? = null
+
+    /**
+     * Whether the next CLI send must include full context. Default true is the safe
+     * fallback for legacy XML files without this attribute.
+     */
+    @Attribute("claudeCodeNeedsFullContext")
+    var claudeCodeNeedsFullContext: Boolean = true
+
     constructor()
 
     fun toTokenUsage(): TokenUsage = TokenUsage(
@@ -261,11 +275,6 @@ class XmlChatSession {
         chatOutput = chatOutputTokens
     )
 
-    /**
-     * Converts this XML DTO to the domain [ChatSession].
-     * [clipboardStatus] is deserialized with a protective fallback to IDLE in case an
-     * unknown/stale value appears in old XML files.
-     */
     fun toDomain(): ChatSession = ChatSession(
         id = id,
         title = title,
@@ -280,11 +289,12 @@ class XmlChatSession {
         } catch (_: IllegalArgumentException) {
             ClipboardSessionStatus.IDLE
         },
-        selectedSpecificPromptName = selectedSpecificPromptName.takeIf { it.isNotEmpty() }
+        selectedSpecificPromptName = selectedSpecificPromptName.takeIf { it.isNotEmpty() },
+        claudeCodeSessionId = claudeCodeSessionId,
+        claudeCodeNeedsFullContext = claudeCodeNeedsFullContext
     )
 
     companion object {
-        /** Creates an XML DTO from a domain [ChatSession] for serialization. */
         fun fromDomain(session: ChatSession): XmlChatSession {
             val xml = XmlChatSession()
             xml.id = session.id
@@ -300,6 +310,8 @@ class XmlChatSession {
             xml.updatedAt = session.updatedAt
             xml.clipboardStatus = session.clipboardStatus.name
             xml.selectedSpecificPromptName = session.selectedSpecificPromptName ?: ""
+            xml.claudeCodeSessionId = session.claudeCodeSessionId
+            xml.claudeCodeNeedsFullContext = session.claudeCodeNeedsFullContext
             return xml
         }
     }

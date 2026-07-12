@@ -52,6 +52,11 @@ class MaxVibesSettingsPanel {
         columns = 8
         toolTipText = "Max reasoning tokens per turn via MAX_THINKING_TOKENS. 0 uses the CLI default."
     }
+    private val claudeCodeEffortCombo: ComboBox<String> =
+        ComboBox(arrayOf("Auto", "low", "medium", "high", "xhigh", "max")).apply {
+            toolTipText =
+                "Reasoning effort via CLAUDE_CODE_EFFORT_LEVEL. Auto = model default. Unsupported levels fall back; pre-4.6 models ignore it."
+        }
     private val claudeCodeReadTimeoutField: JBTextField
     private val claudeCodeStartTimeoutField: JBTextField
 
@@ -233,6 +238,7 @@ class MaxVibesSettingsPanel {
             .addLabeledComponent(JBLabel("Model:"), claudeCodeModelField)
             .addLabeledComponent(JBLabel("Max output tokens:"), claudeCodeMaxOutputTokensField)
             .addLabeledComponent(JBLabel("Thinking budget:"), claudeCodeThinkingBudgetField)
+            .addLabeledComponent(JBLabel("Effort:"), claudeCodeEffortCombo)
             .addLabeledComponent(JBLabel("Read timeout (sec):"), claudeCodeReadTimeoutField)
             .addLabeledComponent(JBLabel("Start timeout (sec):"), claudeCodeStartTimeoutField)
             .addSeparator()
@@ -417,6 +423,7 @@ class MaxVibesSettingsPanel {
         claudeCodeModelField.text = settings.claudeCodeModel
         claudeCodeMaxOutputTokensField.text = settings.claudeCodeMaxOutputTokens.toString()
         claudeCodeThinkingBudgetField.text = settings.claudeCodeThinkingBudget.toString()
+        claudeCodeEffortCombo.selectedItem = settings.claudeCodeEffortLevel.ifBlank { "Auto" }
         claudeCodeReadTimeoutField.text = settings.claudeCodeReadTimeoutSec.toString()
         claudeCodeStartTimeoutField.text = settings.claudeCodeStartTimeoutSec.toString()
 
@@ -442,6 +449,8 @@ class MaxVibesSettingsPanel {
         settings.claudeCodeThinkingBudget =
             claudeCodeThinkingBudgetField.text.trim().toIntOrNull()?.coerceIn(0, 200_000)
                 ?: settings.claudeCodeThinkingBudget
+        settings.claudeCodeEffortLevel =
+            (claudeCodeEffortCombo.selectedItem as? String)?.takeUnless { it == "Auto" } ?: ""
         settings.claudeCodeReadTimeoutSec =
             claudeCodeReadTimeoutField.text.trim().toIntOrNull()?.coerceAtLeast(1)
                 ?: settings.claudeCodeReadTimeoutSec
@@ -458,6 +467,9 @@ class MaxVibesSettingsPanel {
             settings.claudeCodeMaxOutputTokens.toString() != claudeCodeMaxOutputTokensField.text.trim()
         val thinkingBudgetChanged =
             settings.claudeCodeThinkingBudget.toString() != claudeCodeThinkingBudgetField.text.trim()
+        val effortChanged =
+            settings.claudeCodeEffortLevel.ifBlank { "Auto" } !=
+                    (claudeCodeEffortCombo.selectedItem as? String ?: "Auto")
         val readTimeoutChanged =
             settings.claudeCodeReadTimeoutSec.toString() != claudeCodeReadTimeoutField.text.trim()
         val startTimeoutChanged =
@@ -475,6 +487,7 @@ class MaxVibesSettingsPanel {
                 claudeModelChanged ||
                 maxOutputChanged ||
                 thinkingBudgetChanged ||
+                effortChanged ||
                 readTimeoutChanged ||
                 startTimeoutChanged
     }

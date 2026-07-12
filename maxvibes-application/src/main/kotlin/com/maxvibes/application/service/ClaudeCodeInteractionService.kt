@@ -589,24 +589,6 @@ class ClaudeCodeInteractionService(
         }
     }
 
-    /**
-     * Post-processes a successful response:
-     *  - persists requestedViews into the last assistant message of the domain session,
-     *  - drives the session-status state machine via [ClipboardEvent.ResponseReceived],
-     *  - holds modifications for user approval (Approve applies them) when not plan-only,
-     *  - converts LLM-requested shell commands into domain [CommandRequest]s for the UI,
-     *  - decides between [ClaudeCodeStepResult.WaitingForApprove], [ClaudeCodeStepResult.AwaitingModApprove]
-     *    and [ClaudeCodeStepResult.Completed].
-     *
-     * Protocol rules: `modifications` beat `requestedViews` (views skipped); `requestedViews`
-     * beat `commands` (commands skipped). Commands that arrive with modifications are held and
-     * released after the modifications are approved and applied.
-     *
-     * @param thinkingText full extended-thinking text accumulated by the transport over this
-     *        turn (see [ClaudeCodeSendResult.thinkingText]); merged with the JSON `reasoning`
-     *        field into the step result's `llmReasoning`. Null when no thinking arrived.
-     * @param durationMs wall-clock duration of the send call, propagated to the UI via the result.
-     */
     private suspend fun processResponse(
         sessionId: String,
         response: InteractionResponse,
@@ -621,9 +603,10 @@ class ClaudeCodeInteractionService(
 
         val hasViews = response.codeViewRequests.isNotEmpty()
         val hasMods = response.modifications.isNotEmpty()
+        val hasQuestions = response.questions.isNotEmpty()
         val commands: List<CommandRequest> = response.commands.mapNotNull { convertCommand(it) }
         log(
-            "Processing response: hasViews=$hasViews, hasMods=$hasMods, " +
+            "Processing response: hasViews=$hasViews, hasMods=$hasMods, hasQuestions=$hasQuestions, " +
                     "commands=${commands.size}, msg=${response.message.take(60)}"
         )
         sessionLog?.event(
@@ -631,38 +614,28 @@ class ClaudeCodeInteractionService(
             mapOf(
                 "hasViews" to hasViews,
                 "hasMods" to hasMods,
+                "questions" to response.questions.size,
                 "commands" to commands.size,
                 "msgLen" to response.message.length,
                 "thinkingLen" to (thinkingText?.length ?: 0)
             )
         )
 
-        // ThinkingBubble: CLI thinking goes first (it chronologically precedes the answer),
-        // then the JSON `reasoning` field if the model filled it. Presentation-only —
-        // never fed back into the model's context.
         val combinedReasoning = listOfNotNull(
             thinkingText?.takeIf { it.isNotBlank() },
             response.reasoning?.takeIf { it.isNotBlank() }
         ).joinToString("\n\n").takeIf { it.isNotBlank() }
 
-        // Append the assistant message to the dialog history (mirrors clipboard flow).
         if (response.message.isNotBlank()) {
             addToHistory(ChatRole.ASSISTANT, response.message)
         }
 
-        // Hold modifications for user approval instead of applying immediately.
-        // planOnly responses are not held — they are skipped further down, as before.
         val holdMods = hasMods && !state.planOnly
 
-        // Persist requestedViews only when views will actually drive the flow. When the
-        // response mixes views with modifications, modifications win and views are dropped.
         if (hasViews && !holdMods) {
             persistRequestedViewsIntoDomain(sessionId, response.codeViewRequests)
         }
 
-        // Drive the state machine. The event flag is named hasRequestedViews for legacy
-        // reasons; semantically it now means "this response needs the Approve gate":
-        // either file gathering or held modifications.
         sessionManager.transition(
             sessionId,
             ClipboardEvent.ResponseReceived(hasRequestedViews = hasViews || holdMods)
@@ -724,7 +697,25 @@ class ClaudeCodeInteractionService(
             )
         }
 
-        // No modifications to hold and no views: either plan-only (mods skipped) or text-only.
+        if (hasQuestions) {
+            if (commands.isNotEmpty()) {
+                log("WARN: response mixed questions with ${commands.size} command(s) - commands skipped per protocol")
+                sessionLog?.event("commands skipped (mixed with questions)", mapOf("count" to commands.size))
+            }
+            log("LLM asked ${response.questions.size} question(s) - awaiting user answer")
+            sessionLog?.event("questions received", mapOf("count" to response.questions.size))
+            return ClaudeCodeStepResult.AwaitingQuestions(
+                assistantMessage = response.message,
+                questions = response.questions,
+                inputTokens = inputTokens,
+                outputTokens = outputTokens,
+                llmReasoning = combinedReasoning,
+                durationMs = durationMs,
+                costUsd = costUsd,
+                numTurns = numTurns
+            )
+        }
+
         val modResults: List<ModificationResult> = if (hasMods && state.planOnly) {
             log("plan-only mode: skipping ${response.modifications.size} modifications")
             emptyList()

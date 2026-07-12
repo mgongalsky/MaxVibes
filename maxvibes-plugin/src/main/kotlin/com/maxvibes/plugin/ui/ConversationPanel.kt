@@ -41,6 +41,15 @@ interface CommandBlockView {
     fun setDeclined(comment: String?)
 }
 
+/**
+ * Mutable view handle for an interactive question block: the controller freezes it
+ * once answered (chosen option shown) or dismissed (the user typed a reply instead).
+ */
+interface QuestionBlockView {
+    fun setAnswered(answer: String)
+    fun setDismissed()
+}
+
 /** View handle for the Run all / Decline all bar above a command batch. */
 interface CommandBatchBarView {
     fun dismiss()
@@ -523,6 +532,135 @@ class ConversationPanel(
                 statusRow.removeAll()
                 val text = "\u2716 Declined" + (comment?.let { " \u2014 $it" } ?: "")
                 statusRow.add(statusLabel(text, JBColor(Color(0x922B21), Color(0xD98880))))
+                refresh()
+            }
+        }
+    }
+
+    /**
+     * Renders an interactive question block: bold question text, one button per option
+     * (vertical stack) and a free-form answer field with its own send button. Any choice
+     * locks the block and reports the answer via [onAnswer]; the returned handle lets
+     * the controller freeze it externally ([QuestionBlockView.setDismissed]).
+     */
+    fun addQuestionBubble(
+        question: String,
+        options: List<String>,
+        onAnswer: (String) -> Unit
+    ): QuestionBlockView {
+        val bg = JBColor(Color(0xEAF2F8), Color(0x16222E))
+        val accent = JBColor(Color(0x2E86C1), Color(0x5DADE2))
+
+        val body = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            background = bg
+            alignmentX = Component.LEFT_ALIGNMENT
+        }
+        body.add(JBTextArea(question).apply {
+            isEditable = false
+            lineWrap = true
+            wrapStyleWord = true
+            font = JBFont.label().deriveFont(Font.BOLD)
+            background = bg
+            border = JBUI.Borders.empty(2, 0, 6, 0)
+            alignmentX = Component.LEFT_ALIGNMENT
+        })
+
+        val optionButtons = mutableListOf<JButton>()
+        val customField = com.intellij.ui.components.JBTextField()
+        val customSend = JButton("\u21A9 Answer")
+
+        fun lockAll() {
+            optionButtons.forEach { it.isEnabled = false }
+            customField.isEnabled = false
+            customSend.isEnabled = false
+        }
+
+        val controls = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            background = bg
+            alignmentX = Component.LEFT_ALIGNMENT
+        }
+        options.forEach { option ->
+            val button = JButton(option).apply {
+                alignmentX = Component.LEFT_ALIGNMENT
+            }
+            button.addActionListener {
+                lockAll()
+                onAnswer(option)
+            }
+            optionButtons.add(button)
+            controls.add(button)
+            controls.add(javax.swing.Box.createVerticalStrut(4))
+        }
+
+        val submitCustom = {
+            val text = customField.text.trim()
+            if (text.isNotBlank()) {
+                lockAll()
+                onAnswer(text)
+            }
+        }
+        customSend.addActionListener { submitCustom() }
+        customField.addActionListener { submitCustom() }
+
+        val customRow = JPanel(BorderLayout(6, 0)).apply {
+            background = bg
+            alignmentX = Component.LEFT_ALIGNMENT
+            border = JBUI.Borders.empty(4, 0, 0, 0)
+            add(customField, BorderLayout.CENTER)
+            add(customSend, BorderLayout.EAST)
+        }
+        customRow.maximumSize = java.awt.Dimension(Int.MAX_VALUE, customRow.preferredSize.height)
+
+        val statusRow = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            background = bg
+            alignmentX = Component.LEFT_ALIGNMENT
+        }
+
+        addComp(bubble(bg, accent).also { panel ->
+            panel.add(roleLabel("\u2753 Question", accent), BorderLayout.NORTH)
+            panel.add(body, BorderLayout.CENTER)
+            panel.add(JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                background = bg
+                add(controls)
+                add(customRow)
+                add(statusRow)
+            }, BorderLayout.SOUTH)
+        })
+
+        fun refresh() {
+            messagesPanel.revalidate()
+            messagesPanel.repaint()
+        }
+
+        fun statusLabel(text: String, color: Color) = JBLabel(text).apply {
+            font = font.deriveFont(Font.BOLD, 11f)
+            foreground = color
+            alignmentX = Component.LEFT_ALIGNMENT
+            border = JBUI.Borders.empty(3, 0, 2, 0)
+        }
+
+        return object : QuestionBlockView {
+            override fun setAnswered(answer: String) = SwingUtilities.invokeLater {
+                controls.isVisible = false
+                customRow.isVisible = false
+                statusRow.removeAll()
+                statusRow.add(
+                    statusLabel("\u2713 $answer", JBColor(Color(0x1E8449), Color(0x58D68D)))
+                )
+                refresh()
+            }
+
+            override fun setDismissed() = SwingUtilities.invokeLater {
+                controls.isVisible = false
+                customRow.isVisible = false
+                statusRow.removeAll()
+                statusRow.add(
+                    statusLabel("\u2013 answered in chat", JBColor(Color(0x707B7C), Color(0x99A3A4)))
+                )
                 refresh()
             }
         }

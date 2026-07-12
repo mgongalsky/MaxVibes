@@ -175,17 +175,6 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
 
     // ── Private helpers ───────────────────────────────────────────────
 
-    /**
-     * Parses a JSON string into a [InteractionResponse] using lenient mode.
-     *
-     * Handles both the legacy `requestedFiles` array and the new `requestedViews`
-     * array. The two sources are merged into [InteractionResponse.codeViewRequests]:
-     * entries from `requestedViews` take precedence over entries from `requestedFiles`
-     * when paths collide. Legacy [InteractionResponse.requestedFiles] is preserved
-     * unchanged for backward compatibility with existing service call-sites.
-     *
-     * @throws kotlinx.serialization.SerializationException if [jsonText] is not valid JSON
-     */
     private fun parseUnifiedResponse(jsonText: String): InteractionResponse {
         val obj = lenientJson.parseToJsonElement(jsonText).jsonObject
 
@@ -213,7 +202,10 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
             modifications = obj[InteractionRequestSchema.RESP_MODIFICATIONS]?.jsonArray
                 ?.mapNotNull { parseModification(it.jsonObject) } ?: emptyList(),
             commitMessage = obj[InteractionRequestSchema.RESP_COMMIT_MESSAGE]?.jsonPrimitive?.contentOrNull,
-            commands = obj[InteractionRequestSchema.RESP_COMMANDS]?.jsonArray?.mapNotNull { parseCommand(it.jsonObject) } ?: emptyList()
+            commands = obj[InteractionRequestSchema.RESP_COMMANDS]?.jsonArray
+                ?.mapNotNull { parseCommand(it.jsonObject) } ?: emptyList(),
+            questions = obj[InteractionRequestSchema.RESP_QUESTIONS]?.jsonArray
+                ?.mapNotNull { parseQuestion(it.jsonObject) } ?: emptyList()
         )
     }
 
@@ -253,20 +245,30 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
     }
 
     /**
-     * Scans [text] for a JSON object that contains at least one known response field
-     * (`"message"`, `"requestedFiles"`, or `"modifications"`) and extracts the
-     * complete object by counting brace depth.
-     *
-     * Marked `internal` for unit-test access.
-     *
-     * @return the extracted JSON substring, or `null` if none is found
+     * Parses a single `questions[]` entry.
+     * Returns `null` (skips the entry) if the mandatory `question` field is absent or blank.
+     * A missing `id` falls back to a hash-derived value so the entry survives when the
+     * model forgets the field. Parsing is deliberately lenient: the 1-4 questions /
+     * 2-4 options limits are enforced prompt-side, not here.
      */
+    private fun parseQuestion(obj: JsonObject): InteractionQuestion? {
+        val question = obj[InteractionRequestSchema.Q_QUESTION]?.jsonPrimitive?.contentOrNull
+            ?.takeIf { it.isNotBlank() } ?: return null
+        val id = obj[InteractionRequestSchema.Q_ID]?.jsonPrimitive?.contentOrNull
+            ?.takeIf { it.isNotBlank() } ?: ("q" + question.hashCode().toString(16))
+        val options = obj[InteractionRequestSchema.Q_OPTIONS]?.jsonArray
+            ?.mapNotNull { it.jsonPrimitive.contentOrNull?.takeIf(String::isNotBlank) }
+            ?: emptyList()
+        return InteractionQuestion(id = id, question = question, options = options)
+    }
+
     internal fun findEmbeddedJson(text: String): String? {
         // Look for the leftmost occurrence of any known indicator key
         val indicators = listOf(
             "\"${InteractionRequestSchema.RESP_REQUESTED_FILES}\"",
             "\"${InteractionRequestSchema.RESP_MODIFICATIONS}\"",
-            "\"${InteractionRequestSchema.RESP_MESSAGE}\""
+            "\"${InteractionRequestSchema.RESP_MESSAGE}\"",
+            "\"${InteractionRequestSchema.RESP_QUESTIONS}\""
         )
         val startIndex = indicators
             .mapNotNull { indicator ->
@@ -281,24 +283,28 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
             .minOrNull() ?: return null
 
         // Walk forward to find the matching closing '}'
-        var depth = 0;
-        var inString = false;
+        var depth = 0
+        var inString = false
         var escape = false
         for (i in startIndex until text.length) {
             val c = text[i]
             if (escape) {
-                escape = false; continue
+                escape = false
+                continue
             }
             if (c == '\\') {
-                escape = true; continue
+                escape = true
+                continue
             }
             if (c == '"') {
-                inString = !inString; continue
+                inString = !inString
+                continue
             }
             if (inString) continue
             if (c == '{') depth++
             if (c == '}') {
-                depth--; if (depth == 0) return text.substring(startIndex, i + 1)
+                depth--
+                if (depth == 0) return text.substring(startIndex, i + 1)
             }
         }
         return null

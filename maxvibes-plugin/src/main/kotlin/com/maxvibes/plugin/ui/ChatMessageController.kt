@@ -55,6 +55,17 @@ interface ChatPanelCallbacks {
 
     /** Renders a post-apply errors block with Send to model / Dismiss buttons. */
     fun addPostApplyErrorsBubble(summary: String, details: String, onSend: () -> Unit, onDismiss: () -> Unit): PostApplyErrorsView
+
+    /** Renders an interactive question block; returns a handle for freeze/status updates. */
+    fun addQuestionBubble(
+        question: String,
+        options: List<String>,
+        onAnswer: (String) -> Unit
+    ): QuestionBlockView
+
+    /** Submits text through the exact same path as the main input's Send button. */
+    fun sendUserMessage(text: String)
+
     fun appendIconToLastBubble(icon: String)
     fun clearChatDisplay()
     fun setPlanOnlyMode(enabled: Boolean)
@@ -304,6 +315,21 @@ class ChatMessageController(
 
     // ==================== Command Flow ====================
 
+    /** One question awaiting the user's choice, with its rendered block handle. */
+    private class QuestionItem(
+        val question: com.maxvibes.domain.model.interaction.InteractionQuestion
+    ) {
+        var view: QuestionBlockView? = null
+        var answer: String? = null
+    }
+
+    /** In-flight questions turn. Null when no questions are pending. */
+    private class QuestionTurn {
+        val items = mutableListOf<QuestionItem>()
+    }
+
+    private var questionTurn: QuestionTurn? = null
+
     /** One command of the current batch with its UI handle and resolution state. */
     private class CommandItem(
         val request: CommandRequest,
@@ -323,6 +349,59 @@ class ChatMessageController(
     )
 
     private var commandTurn: CommandTurn? = null
+
+    /**
+     * Renders interactive question blocks (option buttons + a free-form field). The main
+     * input stays enabled: typing a message instead is a valid answer and supersedes the
+     * blocks via [dismissQuestionTurn]. Once every block is answered, the composed answer
+     * is submitted through the panel's regular send path.
+     */
+    private fun presentQuestions(
+        questions: List<com.maxvibes.domain.model.interaction.InteractionQuestion>
+    ) {
+        if (questions.isEmpty()) return
+        MaxVibesLogger.info("Controller", "presentQuestions", mapOf("count" to questions.size))
+        val turn = QuestionTurn()
+        questionTurn = turn
+        questions.forEach { question ->
+            val item = QuestionItem(question)
+            turn.items.add(item)
+            item.view = callbacks.addQuestionBubble(question.question, question.options) { answer ->
+                answerQuestion(item, answer)
+            }
+        }
+    }
+
+    private fun answerQuestion(item: QuestionItem, answer: String) {
+        val turn = questionTurn ?: return
+        if (item.answer != null) return
+        item.answer = answer
+        item.view?.setAnswered(answer)
+        val remaining = turn.items.count { it.answer == null }
+        if (remaining > 0) {
+            callbacks.setStatus("\u2753 $remaining question(s) left")
+            return
+        }
+
+        questionTurn = null
+        val responseText = if (turn.items.size == 1) {
+            turn.items.first().answer.orEmpty()
+        } else {
+            turn.items.joinToString("\n") { questionItem ->
+                "${questionItem.question.id}: ${questionItem.answer}"
+            }
+        }
+        callbacks.sendUserMessage(responseText)
+    }
+
+    /** Freezes pending question blocks when the user answers by typing in the main input. */
+    private fun dismissQuestionTurn() {
+        val turn = questionTurn ?: return
+        questionTurn = null
+        turn.items
+            .filter { it.answer == null }
+            .forEach { it.view?.setDismissed() }
+    }
 
     /**
      * Renders command blocks (plus a Run all / Decline all bar for batches) and keeps
@@ -654,7 +733,7 @@ class ChatMessageController(
         }
         callbacks.updateBreadcrumb()
     }
-
+l
     private fun handleClipboardResult(result: ClipboardStepResult, session: ChatSession) {
         when (result) {
             is ClipboardStepResult.WaitingForResponse -> {
@@ -834,15 +913,6 @@ class ChatMessageController(
         }
     }
 
-    /**
-     * Renders a [ClaudeCodeStepResult] to the chat. Mirrors [handleClipboardResult]
-     * but uses the Claude Code result type.
-     *
-     * Persistence: writes the assistant message to [chatTreeService] in the
-     * `WaitingForApprove`, `AwaitingModApprove` and `Completed` branches so that the
-     * domain session has an ASSISTANT entry the service can later attach requestedViews
-     * to and that approve() can look up.
-     */
     private fun handleClaudeCodeResult(result: ClaudeCodeStepResult, session: ChatSession) {
         when (result) {
             is ClaudeCodeStepResult.WaitingForApprove -> {
@@ -855,7 +925,6 @@ class ChatMessageController(
                     )
                 )
                 chatTreeService.addChatTokens(session.id, result.inputTokens, result.outputTokens)
-
                 val tokenInfo = buildTokenInfoForClaudeCode(
                     inTok = result.inputTokens,
                     outTok = result.outputTokens,
@@ -863,16 +932,13 @@ class ChatMessageController(
                     costUsd = result.costUsd,
                     numTurns = result.numTurns
                 )
-
                 chatTreeService.addMessage(
                     session.id, MessageRole.ASSISTANT, result.assistantMessage,
                     tokenInfo = tokenInfo,
                     reasoning = result.llmReasoning,
                     requestedViews = result.requestedViews
                 )
-
                 callbacks.updateTokenDisplay()
-
                 callbacks.addAssistantMessageBubble(
                     text = callbacks.formatMarkdown(result.assistantMessage),
                     tokenInfo = tokenInfo,
@@ -882,16 +948,14 @@ class ChatMessageController(
                     requestedViews = result.requestedViews,
                     appliedModifications = emptyList()
                 )
-
                 if (result.skippedCommands > 0) {
                     callbacks.appendToChat(
-                        "\u26A0\uFE0F ${result.skippedCommands} command(s) skipped \u2014 response mixed them with requestedViews"
+                        "⚠️ ${result.skippedCommands} command(s) skipped — response mixed them with requestedViews"
                     )
                 }
-
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
-                callbacks.setStatus("\uD83E\uDD16 Awaiting approval \u2014 click Approve to gather files and continue")
+                callbacks.setStatus("🤖 Awaiting approval — click Approve to gather files and continue")
             }
 
             is ClaudeCodeStepResult.AwaitingModApprove -> {
@@ -906,10 +970,12 @@ class ChatMessageController(
                 )
                 chatTreeService.addChatTokens(session.id, result.inputTokens, result.outputTokens)
                 val tokenInfo = buildTokenInfoForClaudeCode(
-                    result.inputTokens, result.outputTokens, result.durationMs,
-                    result.costUsd, result.numTurns
+                    result.inputTokens,
+                    result.outputTokens,
+                    result.durationMs,
+                    result.costUsd,
+                    result.numTurns
                 )
-
                 chatTreeService.addMessage(
                     session.id, MessageRole.ASSISTANT, result.assistantMessage,
                     tokenInfo = tokenInfo,
@@ -925,22 +991,91 @@ class ChatMessageController(
                     requestedViews = emptyList(),
                     appliedModifications = emptyList()
                 )
-
-                val proposal = result.proposedModifications.joinToString("\n") { "  \u2022 ${it.type}  ${it.path}" }
+                val proposal = result.proposedModifications.joinToString("\n") {
+                    "  • ${it.type}  ${it.path}"
+                }
                 callbacks.appendToChat(
-                    "\uD83D\uDCDD Proposed ${result.proposedModifications.size} modification(s):\n$proposal"
+                    "📝 Proposed ${result.proposedModifications.size} modification(s):\n$proposal"
                 )
                 if (result.heldCommands > 0) {
-                    callbacks.appendToChat("\u26A1 ${result.heldCommands} command(s) held \u2014 they run after the modifications are applied")
+                    callbacks.appendToChat(
+                        "⚡ ${result.heldCommands} command(s) held — they run after the modifications are applied"
+                    )
                 }
                 if (result.skippedViews > 0) {
-                    callbacks.appendToChat("\u26A0\uFE0F ${result.skippedViews} file request(s) skipped \u2014 response mixed them with modifications")
+                    callbacks.appendToChat(
+                        "⚠️ ${result.skippedViews} file request(s) skipped — response mixed them with modifications"
+                    )
                 }
+                callbacks.setInputEnabled(true)
+                callbacks.updateModeIndicator()
+                callbacks.setStatus(
+                    "🤖 ${result.proposedModifications.size} modification(s) awaiting approval — Approve to apply, or type to reject"
+                )
+            }
+
+            is ClaudeCodeStepResult.AwaitingQuestions -> {
+                MaxVibesLogger.info(
+                    "Controller", "claudeCode awaiting answers", mapOf(
+                        "questions" to result.questions.size,
+                        "in" to result.inputTokens,
+                        "out" to result.outputTokens,
+                        "durationMs" to result.durationMs
+                    )
+                )
+                chatTreeService.addChatTokens(session.id, result.inputTokens, result.outputTokens)
+                val tokenInfo = buildTokenInfoForClaudeCode(
+                    result.inputTokens,
+                    result.outputTokens,
+                    result.durationMs,
+                    result.costUsd,
+                    result.numTurns
+                )
+
+                val questionsBlock = result.questions.joinToString("\n\n") { question ->
+                    buildString {
+                        append("\u2753 ").append(question.question)
+                        question.options.forEachIndexed { index, option ->
+                            append("\n")
+                                .append(index + 1)
+                                .append(". ")
+                                .append(option)
+                        }
+                    }
+                }
+                val combined = buildString {
+                    val message = result.assistantMessage.trim()
+                    if (message.isNotBlank()) {
+                        append(message)
+                        append("\n\n")
+                    }
+                    append(questionsBlock)
+                }
+
+                chatTreeService.addMessage(
+                    session.id, MessageRole.ASSISTANT, combined,
+                    tokenInfo = tokenInfo,
+                    reasoning = result.llmReasoning
+                )
+                callbacks.updateTokenDisplay()
+
+                if (result.assistantMessage.isNotBlank()) {
+                    callbacks.addAssistantMessageBubble(
+                        text = callbacks.formatMarkdown(result.assistantMessage),
+                        tokenInfo = tokenInfo,
+                        modifications = emptyList(),
+                        metaFiles = emptyList(),
+                        reasoning = result.llmReasoning,
+                        requestedViews = emptyList(),
+                        appliedModifications = emptyList()
+                    )
+                }
+                presentQuestions(result.questions)
 
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
                 callbacks.setStatus(
-                    "\uD83E\uDD16 ${result.proposedModifications.size} modification(s) awaiting approval \u2014 Approve to apply, or type to reject"
+                    "\u2753 ${result.questions.size} question(s) — pick an option or type your answer"
                 )
             }
 
@@ -959,7 +1094,6 @@ class ChatMessageController(
                     )
                 )
                 callbacks.registerElementPaths(result.modifications)
-
                 chatTreeService.addChatTokens(session.id, result.inputTokens, result.outputTokens)
                 val text = result.message.trim().ifBlank { "Done." }
                 val tokenInfo = buildTokenInfoForClaudeCode(
@@ -969,15 +1103,17 @@ class ChatMessageController(
                     costUsd = result.costUsd,
                     numTurns = result.numTurns
                 )
-
                 val appliedPaths = result.modifications
                     .filterIsInstance<ModificationResult.Success>()
                     .map { it.affectedPath.toString() }
-
                 val appliedMods = result.modifications
                     .filterIsInstance<ModificationResult.Success>()
-                    .map { AppliedModInfo(path = it.affectedPath.toString(), category = it.modification.toCategory()) }
-
+                    .map {
+                        AppliedModInfo(
+                            path = it.affectedPath.toString(),
+                            category = it.modification.toCategory()
+                        )
+                    }
                 chatTreeService.addMessage(
                     session.id, MessageRole.ASSISTANT, text,
                     appliedModificationPaths = appliedPaths,
@@ -985,9 +1121,7 @@ class ChatMessageController(
                     reasoning = result.llmReasoning,
                     appliedModifications = appliedMods
                 )
-
                 callbacks.updateTokenDisplay()
-
                 callbacks.addAssistantMessageBubble(
                     text = callbacks.formatMarkdown(text),
                     tokenInfo = tokenInfo,
@@ -997,12 +1131,10 @@ class ChatMessageController(
                     requestedViews = emptyList(),
                     appliedModifications = appliedMods
                 )
-
-                result.commitMessage?.let { msg ->
-                    callbacks.setCommitMessage(msg)
-                    callbacks.appendToChat("\uD83D\uDCAC Commit message set in IDE")
+                result.commitMessage?.let { message ->
+                    callbacks.setCommitMessage(message)
+                    callbacks.appendToChat("💬 Commit message set in IDE")
                 }
-
                 if (result.commands.isNotEmpty()) {
                     if (failures.isEmpty()) {
                         presentCommands(result.commands, session, InteractionMode.CLAUDE_CODE)
@@ -1010,13 +1142,14 @@ class ChatMessageController(
                         callbacks.updateBreadcrumb()
                         return
                     }
-                    callbacks.appendToChat("\u26A0\uFE0F ${result.commands.size} command(s) skipped \u2014 fix failed modifications first")
+                    callbacks.appendToChat(
+                        "⚠️ ${result.commands.size} command(s) skipped — fix failed modifications first"
+                    )
                 }
-
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
                 if (failures.isNotEmpty()) {
-                    callbacks.setStatus("\u26A0\uFE0F ${failures.size} modification(s) failed")
+                    callbacks.setStatus("⚠️ ${failures.size} modification(s) failed")
                 } else {
                     callbacks.setStatus(if (result.success) "Ready" else "Errors")
                 }
@@ -1024,9 +1157,17 @@ class ChatMessageController(
             }
 
             is ClaudeCodeStepResult.Error -> {
-                MaxVibesLogger.warn("Controller", "claudeCode error", data = mapOf("msg" to result.message))
-                chatTreeService.addMessage(session.id, MessageRole.SYSTEM, "Claude Code error: ${result.message}")
-                callbacks.appendToChat("\u274C ${result.message}")
+                MaxVibesLogger.warn(
+                    "Controller",
+                    "claudeCode error",
+                    data = mapOf("msg" to result.message)
+                )
+                chatTreeService.addMessage(
+                    session.id,
+                    MessageRole.SYSTEM,
+                    "Claude Code error: ${result.message}"
+                )
+                callbacks.appendToChat("❌ ${result.message}")
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
                 callbacks.setStatus("Claude Code error")
@@ -1043,11 +1184,11 @@ class ChatMessageController(
                     MessageRole.SYSTEM,
                     "Claude Code transport error: ${result.detail}"
                 )
-                callbacks.appendToChat("\u274C Transport: ${result.detail}")
+                callbacks.appendToChat("❌ Transport: ${result.detail}")
                 callbacks.appendToChat("Check Claude Code settings (binary path, args) and retry.")
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
-                callbacks.setStatus("\u26A0\uFE0F Claude Code transport error")
+                callbacks.setStatus("⚠️ Claude Code transport error")
             }
         }
     }
@@ -1265,6 +1406,7 @@ Check:
         selectedSpecificPromptName: String? = null
     ) {
         saveAllDocuments()
+        dismissQuestionTurn()
         val trace = attachedTrace
         val errs = attachedErrors
         val imgs = attachedImages.toList()
@@ -1295,7 +1437,14 @@ Check:
                 selectedSpecificPromptName
             )
 
-            InteractionMode.CHEAP_API -> dispatchCheapApiMessage(userInput, trace, errs, isPlanOnly, isDryRun)
+            InteractionMode.CHEAP_API -> dispatchCheapApiMessage(
+                userInput,
+                trace,
+                errs,
+                isPlanOnly,
+                isDryRun
+            )
+
             InteractionMode.CLAUDE_CODE -> dispatchClaudeCodeMessage(
                 userInput,
                 trace,

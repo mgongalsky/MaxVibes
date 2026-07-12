@@ -115,13 +115,13 @@ class ClaudeCodeProcessAdapter(
         @Synchronized fun snapshotThinking(): String = thinking.toString()
     }
 
-    /** Settings snapshot taken at spawn; a mismatch on the next send triggers a respawn. */
     private data class SpawnConfig(
         val path: String,
         val extraArgs: String,
         val model: String,
         val maxOutputTokens: Int,
-        val thinkingBudget: Int
+        val thinkingBudget: Int,
+        val effortLevel: String
     )
 
     private fun currentSpawnConfig() = SpawnConfig(
@@ -129,7 +129,8 @@ class ClaudeCodeProcessAdapter(
         extraArgs = settings.claudeCodeExtraArgs,
         model = settings.claudeCodeModel,
         maxOutputTokens = settings.claudeCodeMaxOutputTokens,
-        thinkingBudget = settings.claudeCodeThinkingBudget
+        thinkingBudget = settings.claudeCodeThinkingBudget,
+        effortLevel = settings.claudeCodeEffortLevel
     )
 
     @Volatile
@@ -228,7 +229,10 @@ class ClaudeCodeProcessAdapter(
                 "--verbose",
                 "--include-partial-messages",
                 "--disallowed-tools",
-                "Read,Write,Edit,MultiEdit,NotebookEdit,Bash,Glob,Grep,WebFetch,WebSearch,PowerShell,Task"
+                "Read,Write,Edit,MultiEdit,NotebookEdit,Bash,Glob,Grep,WebFetch,WebSearch,PowerShell,Task,AskUserQuestion",
+                // Strict MCP isolation: without this the CLI attaches the user's claude.ai account
+                // connectors (ClickUp, Gmail, ...) - context bloat + wording collisions with the protocol.
+                "--strict-mcp-config"
             )
 
             val hasSystemPrompt = !systemPrompt.isNullOrBlank()
@@ -279,6 +283,12 @@ class ClaudeCodeProcessAdapter(
                         settings.claudeCodeThinkingBudget.toString()
                     )
                 }
+                if (settings.claudeCodeEffortLevel.isNotBlank()) {
+                    withEnvironment(
+                        "CLAUDE_CODE_EFFORT_LEVEL",
+                        settings.claudeCodeEffortLevel
+                    )
+                }
             }
 
             MaxVibesLogger.info(
@@ -289,6 +299,7 @@ class ClaudeCodeProcessAdapter(
                     "args" to allArgs.joinToString(" "),
                     "envMaxOut" to settings.claudeCodeMaxOutputTokens,
                     "envThink" to settings.claudeCodeThinkingBudget,
+                    "envEffort" to settings.claudeCodeEffortLevel.ifBlank { "auto" },
                     "resume" to (resumeSessionId ?: "null"),
                     "hasSystemPrompt" to hasSystemPrompt,
                     "promptFile" to (promptFilePath ?: "<none>"),
@@ -304,6 +315,7 @@ class ClaudeCodeProcessAdapter(
                     "args" to allArgs.joinToString(" "),
                     "envMaxOut" to settings.claudeCodeMaxOutputTokens,
                     "envThink" to settings.claudeCodeThinkingBudget,
+                    "envEffort" to settings.claudeCodeEffortLevel.ifBlank { "auto" },
                     "resume" to (resumeSessionId ?: "null"),
                     "workDir" to (resolvedWorkDir?.absolutePath ?: "<inherited>")
                 )

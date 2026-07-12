@@ -76,7 +76,14 @@ data class InteractionResponse(
     val commitMessage: String? = null,
 
     /** Shell-команды, запрошенные LLM (last resort). Выполняются после подтверждения пользователем. */
-    val commands: List<InteractionCommand> = emptyList()
+    val commands: List<InteractionCommand> = emptyList(),
+
+    /**
+     * Questions the LLM asks the user before proceeding. When non-empty the turn
+     * ends awaiting the user's answers, which arrive as the next regular message.
+     * Mutually exclusive with [modifications] and [codeViewRequests] per protocol.
+     */
+    val questions: List<InteractionQuestion> = emptyList()
 )
 
 /**
@@ -100,6 +107,18 @@ data class InteractionCommand(
     val command: String,
     val reason: String = "",
     val timeoutSec: Int = 120
+)
+
+/**
+ * A question from the LLM to the user (structured `questions` channel).
+ * Rendered in the chat with tappable options; the chosen answer is sent
+ * back as a regular user message in the next turn.
+ */
+data class InteractionQuestion(
+    val id: String,
+    val question: String,
+    /** 2-4 short answer options. May be empty for a free-form question. */
+    val options: List<String> = emptyList()
 )
 
 /**
