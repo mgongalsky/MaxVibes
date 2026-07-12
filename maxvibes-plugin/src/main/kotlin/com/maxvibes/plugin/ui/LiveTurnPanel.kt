@@ -73,7 +73,7 @@ class LiveTurnPanel(
     private val toolRows = LinkedHashMap<String, ToolRow>()
     private var lastNarr = ""
     private var lastThink = ""
-    private var thinkExpanded = false
+    private var thinkExpanded = true
 
     // ---- components ----
     private val headerLabel = JBLabel("").apply {
@@ -95,9 +95,15 @@ class LiveTurnPanel(
         layout = BoxLayout(this, BoxLayout.Y_AXIS)
         background = JBColor.background()
     }
-    private val feedScroll = JBScrollPane(feedPanel).apply {
+    private val feedScroll = object : JBScrollPane(feedPanel) {
+        // BorderLayout.NORTH honours preferred height: track the feed's actual content
+        // height up to a cap instead of reserving a fixed 84px band for one notice line.
+        override fun getPreferredSize(): Dimension {
+            val content = feedPanel.preferredSize.height + insets.top + insets.bottom
+            return Dimension(10, minOf(content, JBUI.scale(96)))
+        }
+    }.apply {
         border = JBUI.Borders.empty()
-        preferredSize = Dimension(10, 84)
         isVisible = false
     }
     private val narrArea = JBTextArea().apply {
@@ -108,7 +114,13 @@ class LiveTurnPanel(
     }
     private val narrScroll = JBScrollPane(narrArea).apply {
         border = JBUI.Borders.empty()
-        preferredSize = Dimension(10, 150)
+        // Narration is usually a one-line placeholder once the protocol JSON starts
+        // streaming - keep it compact; reasoning gets the free space instead.
+        preferredSize = Dimension(10, 72)
+        maximumSize = Dimension(Int.MAX_VALUE, 72)
+        // Hidden while empty: an empty SOUTH band otherwise reserves 72px for nothing.
+        // Visibility is driven by a document listener registered in init.
+        isVisible = false
     }
     private val thinkArea = JBTextArea().apply {
         isEditable = false; lineWrap = true; wrapStyleWord = true
@@ -119,8 +131,9 @@ class LiveTurnPanel(
     }
     private val thinkScroll = JBScrollPane(thinkArea).apply {
         border = JBUI.Borders.empty()
-        preferredSize = Dimension(10, 110)
-        isVisible = false
+        // No fixed height: mounted as BorderLayout.CENTER it fills whatever the
+        // splitter gives the live panel.
+        isVisible = true
     }
     private val thinkToggle = JButton().apply {
         font = font.deriveFont(Font.PLAIN, 11f)
@@ -152,14 +165,34 @@ class LiveTurnPanel(
             }, BorderLayout.WEST)
             add(stopButton, BorderLayout.EAST)
         }
-        val body = JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+        // Layout: feed pinned on top (capped), reasoning fills the middle (the only
+        // stream worth watching live), narration pinned at the bottom (capped - it
+        // collapses to a placeholder once protocol JSON starts).
+        val body = JPanel(BorderLayout()).apply {
             background = JBColor.background()
-            add(feedScroll.also { it.alignmentX = Component.LEFT_ALIGNMENT })
-            add(narrScroll.also { it.alignmentX = Component.LEFT_ALIGNMENT })
-            add(thinkToggle.also { it.alignmentX = Component.LEFT_ALIGNMENT })
-            add(thinkScroll.also { it.alignmentX = Component.LEFT_ALIGNMENT })
+            add(feedScroll, BorderLayout.NORTH)
+            add(JPanel(BorderLayout()).apply {
+                background = JBColor.background()
+                add(thinkToggle, BorderLayout.NORTH)
+                add(thinkScroll, BorderLayout.CENTER)
+            }, BorderLayout.CENTER)
+            add(narrScroll, BorderLayout.SOUTH)
         }
+
+        // Narration band exists only while there is narration to show (including the
+        // "assembling structured response" placeholder) and vanishes when cleared.
+        narrArea.document.addDocumentListener(object : javax.swing.event.DocumentListener {
+            private fun sync() {
+                val hasText = narrArea.text.isNotBlank()
+                if (narrScroll.isVisible != hasText) {
+                    narrScroll.isVisible = hasText
+                    revalidate(); repaint()
+                }
+            }
+            override fun insertUpdate(e: javax.swing.event.DocumentEvent) = sync()
+            override fun removeUpdate(e: javax.swing.event.DocumentEvent) = sync()
+            override fun changedUpdate(e: javax.swing.event.DocumentEvent) = sync()
+        })
         add(headerRow, BorderLayout.NORTH)
         add(body, BorderLayout.CENTER)
         stopButton.addActionListener {
@@ -255,7 +288,7 @@ class LiveTurnPanel(
         lastNarr = ""; lastThink = ""
         narrArea.text = ""; thinkArea.text = ""
         feedPanel.removeAll(); feedScroll.isVisible = false
-        thinkExpanded = false; thinkScroll.isVisible = false; thinkToggle.isVisible = false
+        thinkExpanded = true; thinkScroll.isVisible = true; thinkToggle.isVisible = false
         stalledLabel.isVisible = false
         isVisible = false
         drainTimer.stop()

@@ -637,18 +637,26 @@ class ChatPanel(
     }
 
     private fun setupUI() {
-        border = JBUI.Borders.empty(); background = JBColor.background()
+        border = JBUI.Borders.empty()
+        background = JBColor.background()
 
         val headerPanel = JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS); background = JBColor.background()
-            border =
-                JBUI.Borders.compound(JBUI.Borders.empty(4, 8), JBUI.Borders.customLine(JBColor.border(), 0, 0, 1, 0))
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            background = JBColor.background()
+            border = JBUI.Borders.compound(
+                JBUI.Borders.empty(4, 8),
+                JBUI.Borders.customLine(JBColor.border(), 0, 0, 1, 0)
+            )
 
             val controlRow = JPanel(BorderLayout()).apply {
-                background = JBColor.background(); maximumSize = Dimension(Int.MAX_VALUE, 30)
+                background = JBColor.background()
+                maximumSize = Dimension(Int.MAX_VALUE, 30)
                 val left = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
                     background = JBColor.background()
-                    add(modeComboBox.apply { preferredSize = Dimension(180, 24); font = font.deriveFont(11f) })
+                    add(modeComboBox.apply {
+                        preferredSize = Dimension(180, 24)
+                        font = font.deriveFont(11f)
+                    })
                     add(modeIndicator)
                     add(ccLogLink)
                 }
@@ -660,17 +668,20 @@ class ChatPanel(
                     add(maximizeButton.apply { preferredSize = Dimension(26, 24) })
                     add(promptsButton.apply { preferredSize = Dimension(26, 24) })
                 }
-                add(left, BorderLayout.WEST); add(right, BorderLayout.EAST)
+                add(left, BorderLayout.WEST)
+                add(right, BorderLayout.EAST)
             }
 
             val navRow = JPanel(BorderLayout(4, 0)).apply {
-                background = JBColor.background(); maximumSize = Dimension(Int.MAX_VALUE, 28)
+                background = JBColor.background()
+                maximumSize = Dimension(Int.MAX_VALUE, 28)
                 border = JBUI.Borders.empty(2, 0, 0, 0)
                 val scroll = JScrollPane(breadcrumbPanel).apply {
                     border = JBUI.Borders.empty()
                     horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
                     verticalScrollBarPolicy = ScrollPaneConstants.VERTICAL_SCROLLBAR_NEVER
-                    background = JBColor.background(); viewport.background = JBColor.background()
+                    background = JBColor.background()
+                    viewport.background = JBColor.background()
                 }
                 val navButtons = JPanel(FlowLayout(FlowLayout.RIGHT, 3, 0)).apply {
                     background = JBColor.background()
@@ -679,25 +690,39 @@ class ChatPanel(
                     add(deleteButton.apply { preferredSize = Dimension(52, 22) })
                     add(sessionsButton.apply { preferredSize = Dimension(86, 22) })
                 }
-                add(scroll, BorderLayout.CENTER); add(navButtons, BorderLayout.EAST)
+                add(scroll, BorderLayout.CENTER)
+                add(navButtons, BorderLayout.EAST)
             }
 
-            add(controlRow); add(navRow)
+            add(controlRow)
+            add(navRow)
         }
 
         val traceBar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
-            background = JBColor.background(); border = JBUI.Borders.empty(2, 8, 0, 8)
-            add(traceIndicator); add(clearTraceButton)
-            add(errorsIndicator); add(clearErrorsButton)
+            background = JBColor.background()
+            border = JBUI.Borders.empty(2, 8, 0, 8)
+            add(traceIndicator)
+            add(clearTraceButton)
+            add(errorsIndicator)
+            add(clearErrorsButton)
             add(attachmentsPanel)
             isVisible = false
         }
 
         val inputPanel = JPanel(BorderLayout(5, 4)).apply {
-            border = JBUI.Borders.empty(4, 8, 8, 8); background = JBColor.background()
+            border = JBUI.Borders.empty(4, 8, 8, 8)
+            background = JBColor.background()
             add(traceBar, BorderLayout.NORTH)
             add(JPanel(BorderLayout()).apply {
-                border = JBUI.Borders.customLine(JBColor.border(), 1); add(inputArea, BorderLayout.CENTER)
+                border = JBUI.Borders.customLine(JBColor.border(), 1)
+                // Viewport wrapper: without it JBTextArea grows unbounded with content,
+                // the SOUTH block clips, and caret navigation above the fold misbehaves.
+                add(com.intellij.ui.components.JBScrollPane(inputArea).apply {
+                    border = JBUI.Borders.empty()
+                    preferredSize = Dimension(10, 96)
+                    verticalScrollBarPolicy = ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED
+                    horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
+                }, BorderLayout.CENTER)
             }, BorderLayout.CENTER)
             add(JPanel(BorderLayout()).apply {
                 background = JBColor.background()
@@ -718,29 +743,35 @@ class ChatPanel(
 
         val statusBar = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            border = JBUI.Borders.empty(2, 10, 2, 10); background = JBColor.background()
+            border = JBUI.Borders.empty(2, 10, 2, 10)
+            background = JBColor.background()
             add(JPanel(BorderLayout()).apply {
-                background = JBColor.background(); add(statusLabel, BorderLayout.WEST)
+                background = JBColor.background()
+                add(statusLabel, BorderLayout.WEST)
             })
             add(JPanel(BorderLayout()).apply {
                 background = JBColor.background()
-                add(tokenLabel.apply { horizontalAlignment = SwingConstants.LEFT }, BorderLayout.WEST)
+                add(tokenLabel.apply {
+                    horizontalAlignment = SwingConstants.LEFT
+                }, BorderLayout.WEST)
             })
         }
 
-        // Conversation + live turn block share one wrapper so the block sits directly
-        // beneath the messages, above the input area. It is invisible until the first
-        // stream event of a turn arrives and hides itself when the turn ends.
-        val conversationWrapper = JPanel(BorderLayout()).apply {
-            background = JBColor.background()
-            add(conversationPanel, BorderLayout.CENTER)
-            add(liveTurnPanel, BorderLayout.SOUTH)
+        // Conversation on top, live turn block below, separated by a draggable one-pixel
+        // splitter. The proportion is persisted via PropertiesComponent, so a size dragged
+        // once survives IDE restarts. While the live panel is invisible between turns,
+        // the conversation takes the full available height.
+        val conversationSplitter = com.intellij.ui.OnePixelSplitter(true, 0.72f).apply {
+            firstComponent = conversationPanel
+            secondComponent = liveTurnPanel
+            setAndLoadSplitterProportionKey("MaxVibes.liveTurnSplitterProportion")
         }
 
         add(headerPanel, BorderLayout.NORTH)
-        add(conversationWrapper, BorderLayout.CENTER)
+        add(conversationSplitter, BorderLayout.CENTER)
         add(JPanel(BorderLayout()).apply {
-            add(inputPanel, BorderLayout.CENTER); add(statusBar, BorderLayout.SOUTH)
+            add(inputPanel, BorderLayout.CENTER)
+            add(statusBar, BorderLayout.SOUTH)
         }, BorderLayout.SOUTH)
     }
 
