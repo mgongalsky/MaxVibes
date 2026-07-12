@@ -733,7 +733,7 @@ class ChatMessageController(
         }
         callbacks.updateBreadcrumb()
     }
-l
+
     private fun handleClipboardResult(result: ClipboardStepResult, session: ChatSession) {
         when (result) {
             is ClipboardStepResult.WaitingForResponse -> {
