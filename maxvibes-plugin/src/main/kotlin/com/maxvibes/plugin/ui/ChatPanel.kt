@@ -63,6 +63,12 @@ class ChatPanel(
     private val approveButton = JButton("\u2705 Approve").apply {
         toolTipText = "Approve & gather requested files (Claude Code)"
         isVisible = false
+        // Amber highlight so the button is unmissable the moment it pops up.
+        // Client properties are the platform way to recolor buttons (Darcula's
+        // ButtonUI ignores plain setBackground); JBColor adapts light/dark.
+        foreground = JBColor(java.awt.Color(0x3E2C00), java.awt.Color(0x241C00))
+        putClientProperty("JButton.backgroundColor", JBColor(java.awt.Color(0xF5C518), java.awt.Color(0xD4AC0D)))
+        putClientProperty("JButton.borderColor", JBColor(java.awt.Color(0xC9A227), java.awt.Color(0x9A7D0A)))
     }
 
     private val modeComboBox = ComboBox<ModeItem>().apply {
