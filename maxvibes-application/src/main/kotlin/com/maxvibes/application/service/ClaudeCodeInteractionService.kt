@@ -20,7 +20,6 @@ import com.maxvibes.domain.model.code.ElementKind
 import com.maxvibes.domain.model.code.ElementPath
 import com.maxvibes.domain.model.code.RequestedViewInfo
 import com.maxvibes.domain.model.command.CommandRequest
-import com.maxvibes.domain.model.interaction.ClaudeCodeActivity
 import com.maxvibes.domain.model.interaction.ClipboardRequest
 import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 import com.maxvibes.domain.model.interaction.InteractionCommand
@@ -83,7 +82,6 @@ import com.maxvibes.domain.model.interaction.AttachedImage
  * @param logger                 optional logger; pass null in unit tests to suppress output.
  * @param sessionManager         clipboard-status state-machine manager (shared with clipboard mode).
  * @param chatSessionRepository  read/write access to persisted chat sessions.
- * @param activityTracker        in-memory store for transient live-activity events surfaced to UI.
  * @param sessionLog             optional per-dialog verbose transcript ([ClaudeCodeSessionLogPort]).
  *                               The service calls begin(sessionId) at every entry point so the
  *                               transport's raw I/O lands in the right dialog file. Null disables.
@@ -98,7 +96,6 @@ class ClaudeCodeInteractionService(
     private val logger: LoggerPort? = null,
     private val sessionManager: ClipboardSessionManager,
     private val chatSessionRepository: ChatSessionRepository,
-    private val activityTracker: ClaudeCodeActivityTracker,
     private val sessionLog: ClaudeCodeSessionLogPort? = null,
     private val specificPromptService: SpecificPromptService? = null,
     private val streamHub: AgentStreamHub? = null
@@ -363,10 +360,6 @@ class ClaudeCodeInteractionService(
         sessionState = null
         sessionStateOwner = null
         clearPending()
-        // Defensive: clear any in-flight live activity for this session. Normally the
-        // finally block in doSend already cleared it, but reset() may race with a hung
-        // send (e.g. user pressed Reset while the transport was waiting on stdout).
-        activityTracker.clear(sessionId)
         sessionManager.transition(sessionId, ClipboardEvent.Reset)
         try {
             claudeCodePort.shutdown()
@@ -555,16 +548,8 @@ class ClaudeCodeInteractionService(
         // internal elapsed timer — that one only covers the send() call's I/O, this one
         // covers the same span but is propagated up to the UI layer via the step result.
         val sendStartedAt = System.currentTimeMillis()
-        // Live activity: forward every transport-emitted event into the tracker so the UI
-        // can render a transient "live bubble". The finally block guarantees the bubble is
-        // cleared regardless of how the send terminates (success, transport error, throw).
-        val sendResult = try {
-            claudeCodePort.send(request) { activity ->
-                activityTracker.update(sessionId, activity)
-            }
-        } finally {
-            activityTracker.clear(sessionId)
-        }
+        // Live progress flows through AgentStreamHub (adapter -> hub -> UI); nothing to plumb here.
+        val sendResult = claudeCodePort.send(request)
         val durationMs = System.currentTimeMillis() - sendStartedAt
 
         return when (sendResult) {

@@ -53,14 +53,14 @@ To request only the part of a file you need, use `requestedViews`:
 
 ```json
 "requestedViews": [
-  { "path": "src/.../Foo.kt", "granularity": "FULL" },
-  { "path": "src/.../Bar.kt", "granularity": "SIGNATURES" },
-  { "path": "src/.../Baz.kt", "granularity": "OUTLINE" },
-  {
-    "path": "src/.../Qux.kt",
-    "granularity": "ELEMENT",
-    "elementPath": "class[Qux]/function[doWork]"
-  }
+{ "path": "src/.../Foo.kt", "granularity": "FULL" },
+{ "path": "src/.../Bar.kt", "granularity": "SIGNATURES" },
+{ "path": "src/.../Baz.kt", "granularity": "OUTLINE" },
+{
+"path": "src/.../Qux.kt",
+"granularity": "ELEMENT",
+"elementPath": "class[Qux]/function[doWork]"
+}
 ]
 ```
 
@@ -116,6 +116,43 @@ property[Name], enum[Name], enum_entry[Name], companion_object, init, constructo
 
 ---
 
+## Escaping inside `content` (CRITICAL — the #1 cause of invalid JSON)
+
+The `content` field holds Kotlin source as a **JSON string**. Every character that is
+special in JSON must be escaped, or the string closes early and the whole response fails
+to parse. Kotlin code is full of double quotes, so this is where responses break most often.
+
+Escape, in every `content` value without exception:
+- `"`  → `\"`   — EVERY double quote from a Kotlin string literal, annotation, or label.
+  This is the one that gets forgotten. `"ANTHROPIC"` → `\"ANTHROPIC\"`,
+  `JBLabel("Model:")` → `JBLabel(\"Model:\")`,
+  `withEnvironment("MAX_THINKING_TOKENS", ...)` → `withEnvironment(\"MAX_THINKING_TOKENS\", ...)`.
+- `\`  → `\\`   — a literal backslash in the code (e.g. Windows paths, regex).
+- newline → `\n`
+- tab → `\t`
+
+Do NOT escape:
+- Single quotes: `split(' ')`, `filter { it.isNotBlank() }` — `'` is not special in JSON.
+- Already-correct `\n` — leave them; do not double to `\\n`.
+
+Self-check before emitting: mentally scan each `content` for any `"` that came from the
+Kotlin source and confirm it is written as `\"`. If a value contains an unescaped `"`, the
+response is invalid.
+
+Correct:
+```json
+"content": "var provider: String = \"ANTHROPIC\",\n"
+```
+Broken (string closes at the first inner quote):
+```json
+"content": "var provider: String = "ANTHROPIC",\n"
+```
+
+If you are unsure whether the block is valid, it must survive `JSON.parse` /
+`json.load` with no errors — that is the acceptance condition for the whole response.
+
+---
+
 ## Key rules
 
 - PREFER REPLACE_ELEMENT/CREATE_ELEMENT over REPLACE_FILE — saves tokens
@@ -123,6 +160,7 @@ property[Name], enum[Name], enum_entry[Name], companion_object, init, constructo
 - For CREATE_ELEMENT: always set elementKind and position
 - For CREATE_ELEMENT AFTER/BEFORE: path points to the SIBLING, not the parent
 - Use ADD_IMPORT/REMOVE_IMPORT — never manually edit import blocks
+- **In every `content`, escape all inner double quotes as `\"` (and `\` as `\\`) — the single most common source of invalid JSON**
 - Write clean, idiomatic Kotlin following existing project patterns
 - If the user just asks a question, respond normally without JSON
 - In plan-only mode, skip the JSON block entirely

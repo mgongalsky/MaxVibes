@@ -18,7 +18,6 @@ import com.intellij.openapi.wm.ToolWindowType
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.*
 import com.intellij.util.ui.JBUI
-import com.maxvibes.application.service.ClaudeCodeActivityTracker
 import com.maxvibes.domain.model.chat.ChatMessage
 import com.maxvibes.domain.model.chat.ChatSession
 import com.maxvibes.domain.model.chat.MessageRole
@@ -27,6 +26,7 @@ import com.maxvibes.domain.model.interaction.AttachedImage
 import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 import com.maxvibes.domain.model.interaction.InteractionMode
 import com.maxvibes.domain.model.modification.Modification
+import com.maxvibes.application.service.AgentStreamHub
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.plugin.service.MaxVibesLogger
 import com.maxvibes.plugin.service.MaxVibesService
@@ -210,11 +210,18 @@ class ChatPanel(
     }
 
     /**
-     * Transient live-activity bubble shown beneath the conversation panel while a
-     * Claude Code send is in flight. Hidden by default; driven by [render] from
-     * [ChatPanelState.liveActivity].
+     * Live in-progress block for the current Claude Code turn: header with elapsed
+     * time and last-event age, streaming narration, tool feed, notices, Stop.
+     * Event-driven via [streamListener]; hides itself on Completed and flushes the
+     * partial narration into the conversation on Failed.
      */
-    private val liveActivityBubble = LiveActivityBubble()
+    private val liveTurnPanel = LiveTurnPanel(
+        onStop = { service.abortClaudeCode() },
+        onPartialFlush = { partial, reason ->
+            conversationPanel.addSystemBubble("\u26A0 Turn ended: $reason")
+            if (partial.isNotBlank()) conversationPanel.addAssistantBubble(partial)
+        }
+    )
 
     private val service: MaxVibesService by lazy { MaxVibesService.getInstance(project) }
     private val chatTreeService get() = service.chatTreeService
@@ -222,30 +229,13 @@ class ChatPanel(
     private val settings: MaxVibesSettings by lazy { MaxVibesSettings.getInstance() }
 
     /**
-     * Lazy reference to the per-project activity tracker. Resolved on first touch
-     * (via [buildState] or the listener) \u2014 not eagerly in init{}, because
-     * [MaxVibesService] initialisation order is sensitive.
+     * Routes AgentStreamHub events for the ACTIVE session into [liveTurnPanel].
+     * Called on the transport reader thread; the panel buffers internally and
+     * drains on its own EDT timer, so no per-event invokeLater happens here.
      */
-    private val activityTracker: ClaudeCodeActivityTracker by lazy { service.claudeCodeActivityTracker }
-
-    /**
-     * Listener attached to [activityTracker] in init{}. Filters events to the
-     * currently active session and schedules a re-render on the EDT.
-     */
-    private val activityListener = ClaudeCodeActivityTracker.Listener { sessionId, _ ->
-        val currentId = chatTreeService.getActiveSession().id
-        if (sessionId != currentId) return@Listener
-        SwingUtilities.invokeLater { render(buildState()) }
+    private val streamListener = AgentStreamHub.Listener { sessionId, event ->
+        if (sessionId == chatTreeService.getActiveSession().id) liveTurnPanel.onEvent(event)
     }
-
-    /**
-     * 200ms poll timer \u2014 re-renders during active activity so the elapsed-time counter
-     * in [liveActivityBubble] ticks even when no fresh events arrive. Started by [render]
-     * when liveActivity transitions to non-null, stopped when it returns to null.
-     */
-    private val activityPollTimer = Timer(200) {
-        render(buildState())
-    }.apply { isRepeats = true }
 
     // Manages interaction mode state (API / Clipboard / CheapAPI / ClaudeCode).
     // Extracted from ChatPanel to separate state logic from UI.
@@ -281,7 +271,7 @@ class ChatPanel(
         loadCurrentSession()
         modeManager.syncFromSettings()
         syncComboBoxToMode()
-        activityTracker.addListener(activityListener)
+        service.agentStreamHub.addListener(streamListener)
         // Tie our teardown to the tool window's lifetime \u2014 when the tool window
         // closes, IntelliJ disposes its children, which triggers our dispose().
         Disposer.register(toolWindow.disposable, this)
@@ -625,13 +615,13 @@ class ChatPanel(
             })
         }
 
-        // Conversation + live bubble live together in a single wrapper so the bubble
-        // sits directly beneath the messages, above the input area. The bubble is
-        // invisible by default; setActivity(...) toggles its visibility.
+        // Conversation + live turn block share one wrapper so the block sits directly
+        // beneath the messages, above the input area. It is invisible until the first
+        // stream event of a turn arrives and hides itself when the turn ends.
         val conversationWrapper = JPanel(BorderLayout()).apply {
             background = JBColor.background()
             add(conversationPanel, BorderLayout.CENTER)
-            add(liveActivityBubble, BorderLayout.SOUTH)
+            add(liveTurnPanel, BorderLayout.SOUTH)
         }
 
         add(headerPanel, BorderLayout.NORTH)
@@ -1119,16 +1109,7 @@ class ChatPanel(
         } else {
             sendButton.toolTipText = "Send message (Ctrl+Enter)"
         }
-
-        // Live activity bubble: drive visibility/content from state, and run the 200ms
-        // poll timer only while activity is in flight so the elapsed-time counter keeps
-        // ticking without burning CPU when idle.
-        liveActivityBubble.setActivity(state.liveActivity)
-        if (state.liveActivity != null) {
-            if (!activityPollTimer.isRunning) activityPollTimer.start()
-        } else {
-            if (activityPollTimer.isRunning) activityPollTimer.stop()
-        }
+        // Live turn block is fully event-driven via AgentStreamHub; no state plumbing here.
     }
 
     private fun buildPromptPanel(): JPanel {
@@ -1246,9 +1227,6 @@ class ChatPanel(
         val mode = modeManager.currentMode
         val approveVisible = mode == InteractionMode.CLAUDE_CODE &&
                 session.clipboardStatus == ClipboardSessionStatus.AWAITING_APPROVE
-        // currentFor returns null in non-Claude-Code modes and when no send is in flight \u2014
-        // the bubble stays hidden automatically in those cases.
-        val liveActivity = activityTracker.currentFor(session.id)
         return ChatPanelState(
             currentSession = session,
             sessionPath = chatTreeService.getSessionPath(session.id),
@@ -1262,8 +1240,7 @@ class ChatPanel(
             selectedSpecificPromptName = service.specificPromptService
                 .validatePromptName(chatTreeService.getActiveSession()?.selectedSpecificPromptName),
             claudeCodeApproveVisible = approveVisible,
-            claudeCodeSending = false,
-            liveActivity = liveActivity
+            claudeCodeSending = false
         )
     }
 
@@ -1348,13 +1325,12 @@ class ChatPanel(
 
     /**
      * Called by IntelliJ via the Disposer chain when [toolWindow] is being closed.
-     * Releases the activity-tracker subscription, stops the poll timer, and tears
-     * down the bubble's internal pulse timer. Safe to call multiple times.
+     * Releases the stream-hub subscription and stops the live panel's drain timer.
+     * Safe to call multiple times.
      */
     override fun dispose() {
-        runCatching { activityTracker.removeListener(activityListener) }
-        runCatching { activityPollTimer.stop() }
-        runCatching { liveActivityBubble.dispose() }
+        runCatching { service.agentStreamHub.removeListener(streamListener) }
+        runCatching { liveTurnPanel.dispose() }
     }
 
     override fun addPostApplyErrorsBubble(

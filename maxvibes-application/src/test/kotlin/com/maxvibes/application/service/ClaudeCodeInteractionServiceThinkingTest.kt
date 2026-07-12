@@ -34,8 +34,7 @@ import org.junit.jupiter.api.Test
  * `llmReasoning` — CLI thinking first, then the JSON `reasoning` field —
  * for both Completed and WaitingForApprove outcomes.
  *
- * Harness: all ports are MockK mocks; [ClaudeCodeActivityTracker] is real
- * (plain in-memory class); [ClipboardSessionManager] is mocked with a
+ * Harness: all ports are MockK mocks; [ClipboardSessionManager] is mocked with a
  * constant IDLE status so every test drives the first-message path.
  * [processResponse] is shared by all paths, so the merge logic is fully
  * covered regardless of entry point.
@@ -80,7 +79,6 @@ class ClaudeCodeInteractionServiceThinkingTest {
             logger = null,
             sessionManager = sessionManager,
             chatSessionRepository = chatSessionRepository,
-            activityTracker = ClaudeCodeActivityTracker(),
             sessionLog = null
         )
     }
@@ -164,7 +162,7 @@ class ClaudeCodeInteractionServiceThinkingTest {
     // ── Helpers ─────────────────────────────────────────────────────────────
 
     private fun stubSend(payload: ClaudeCodeSendResult) {
-        coEvery { claudeCodePort.send(any(), any()) } returns Result.Success(payload)
+        coEvery { claudeCodePort.send(any()) } returns Result.Success(payload)
     }
 
     private fun testProjectContext() = ProjectContext(

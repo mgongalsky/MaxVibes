@@ -2,7 +2,6 @@ package com.maxvibes.application.port.output
 
 import com.maxvibes.domain.model.interaction.ClipboardRequest
 import com.maxvibes.shared.result.Result
-import com.maxvibes.domain.model.interaction.ClaudeCodeActivity
 
 /**
  * Port for the Claude Code interaction mode — communicates with a locally
@@ -67,8 +66,7 @@ interface ClaudeCodePort {
      *        and tests that do not care about live progress.
      */
     suspend fun send(
-        request: ClipboardRequest,
-        onActivity: (ClaudeCodeActivity) -> Unit = {}
+        request: ClipboardRequest
     ): Result<ClaudeCodeSendResult, ClaudeCodeError>
 
     /**

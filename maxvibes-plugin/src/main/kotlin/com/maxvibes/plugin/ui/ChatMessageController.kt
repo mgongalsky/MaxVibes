@@ -241,67 +241,34 @@ class ChatMessageController(
 
     // ==================== Claude Code Mode ====================
 
-    /**
-     * Background-task helper for Claude Code interactions.
-     *
-     * Mirrors [runClipboardBg] but dispatches results through [handleClaudeCodeResult]
-     * and resets the Claude Code session (not the clipboard one) on cancel.
-     *
-     * Spawns a side ticker that updates both the progress indicator text and the
-     * status label once per second so long sends (claude can take 2-3 minutes for
-     * non-trivial refactors) no longer look like the plugin froze. The ticker
-     * lives strictly for the duration of [action] and is cancelled in `finally` —
-     * cancellation propagates through `delay()` as `CancellationException`, which
-     * we swallow silently, so an unconditional loop is equivalent to `while (isActive)`
-     * and avoids depending on the CoroutineScope.isActive extension property.
-     */
     private fun runClaudeCodeBg(
         title: String,
         session: ChatSession,
         action: suspend () -> ClaudeCodeStepResult
     ) {
-        ProgressManager.getInstance().run(object : Task.Backgroundable(project, "MaxVibes: $title", true) {
-            override fun run(indicator: ProgressIndicator) {
-                service.notificationService.setProgressIndicator(indicator)
-                runBlocking {
-                    val startedAt = System.currentTimeMillis()
-                    val tickerScope = kotlinx.coroutines.CoroutineScope(
-                        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO
-                    )
-                    val ticker = tickerScope.launch {
-                        try {
-                            while (true) {
-                                kotlinx.coroutines.delay(1000)
-                                val secs = ((System.currentTimeMillis() - startedAt) / 1000).toInt()
-                                // ProgressIndicator text is safe to set from any thread.
-                                indicator.text = "MaxVibes: $title (${secs}s)"
-                                ApplicationManager.getApplication().invokeLater {
-                                    callbacks.setStatus("Claude Code: $title (${secs}s)")
-                                }
-                            }
-                        } catch (_: kotlinx.coroutines.CancellationException) {
-                            // Expected on completion — no-op.
+        callbacks.setStatus("Claude Code: running")
+        ProgressManager.getInstance().run(
+            object : Task.Backgroundable(project, "MaxVibes: $title", true) {
+                override fun run(indicator: ProgressIndicator) {
+                    service.notificationService.setProgressIndicator(indicator)
+                    runBlocking {
+                        val result = action()
+                        ApplicationManager.getApplication().invokeLater {
+                            handleClaudeCodeResult(result, session)
                         }
                     }
-                    try {
-                        val result = action()
-                        ApplicationManager.getApplication().invokeLater { handleClaudeCodeResult(result, session) }
-                    } finally {
-                        ticker.cancel()
-                        tickerScope.cancel()
+                }
+
+                override fun onCancel() {
+                    ApplicationManager.getApplication().invokeLater {
+                        service.claudeCodeService.reset(session.id)
+                        callbacks.appendToChat("⚠️ Cancelled")
+                        callbacks.setInputEnabled(true)
+                        callbacks.updateModeIndicator()
                     }
                 }
             }
-
-            override fun onCancel() {
-                ApplicationManager.getApplication().invokeLater {
-                    service.claudeCodeService.reset(session.id)
-                    callbacks.appendToChat("\u26A0\uFE0F Cancelled")
-                    callbacks.setInputEnabled(true)
-                    callbacks.updateModeIndicator()
-                }
-            }
-        })
+        )
     }
 
     /**

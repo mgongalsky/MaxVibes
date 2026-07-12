@@ -45,7 +45,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import com.maxvibes.application.service.ClaudeCodeActivityTracker
 import com.maxvibes.application.service.AgentStreamHub
 import com.maxvibes.application.port.input.ExecuteCommandUseCase
 import com.maxvibes.application.port.output.CommandRunnerPort
@@ -277,22 +276,10 @@ class MaxVibesService(private val project: Project) : Disposable {
             logger = MaxVibesLogger,
             sessionManager = clipboardSessionManager,
             chatSessionRepository = chatSessionRepository,
-            activityTracker = claudeCodeActivityTracker,
             sessionLog = claudeCodeSessionLog,
             specificPromptService = specificPromptService,
             streamHub = agentStreamHub
         )
-    }
-
-    /**
-     * In-memory store + observer hub for transient Claude Code live-activity events.
-     *
-     * One instance per project — both the service (writes via doSend) and the UI
-     * (subscribes via addListener / polls via currentFor) share this singleton.
-     * Lifetime is tied to the project; no persistence across IDE restarts by design.
-     */
-    val claudeCodeActivityTracker: ClaudeCodeActivityTracker by lazy {
-        ClaudeCodeActivityTracker()
     }
 
     /**
@@ -303,6 +290,18 @@ class MaxVibesService(private val project: Project) : Disposable {
      */
     val agentStreamHub: AgentStreamHub by lazy {
         AgentStreamHub()
+    }
+
+    /**
+     * Kills the Claude Code process tree mid-turn (Stop button). The in-flight send
+     * completes with ClaudeCodeError.Aborted. No-op when the adapter was never created -
+     * guarded via the lazy delegate so Stop cannot accidentally spawn it.
+     */
+    fun abortClaudeCode() {
+        if (claudeCodeAdapterLazy.isInitialized()) {
+            runCatching { claudeCodeAdapter.abort() }
+                .onFailure { LOG.warn("Claude Code abort failed: ${it.message}", it) }
+        }
     }
 
     // ========== Cheap LLM ==========

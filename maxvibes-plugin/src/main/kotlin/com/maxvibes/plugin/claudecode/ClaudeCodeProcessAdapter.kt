@@ -10,7 +10,6 @@ import com.maxvibes.application.port.output.ClaudeCodeSessionLogPort
 import com.maxvibes.application.port.output.InteractionProtocolCodec
 import com.maxvibes.application.port.output.SessionStats
 import com.maxvibes.domain.model.interaction.AttachedImage
-import com.maxvibes.domain.model.interaction.ClaudeCodeActivity
 import com.maxvibes.domain.model.interaction.ClipboardRequest
 import com.maxvibes.domain.model.interaction.InteractionResponse
 import com.maxvibes.plugin.clipboard.JsonInteractionProtocolCodec
@@ -62,8 +61,7 @@ import java.util.concurrent.TimeUnit
  * terminal event, with a self-healing fallback to the accumulated authoritative
  * assistant text when `result` is blank or missing.
  *
- * The legacy onActivity callback is accepted but never invoked - superseded by
- * [streamSink]; the whole ClaudeCodeActivity contour is removed in Set 2.
+ * Live progress is emitted exclusively through [streamSink].
  *
  * Concurrency: [send]/[ensureStarted] are serialized via [sendMutex]. [abort] and
  * [shutdown] are deliberately lock-free (send holds the mutex while awaiting) and
@@ -117,6 +115,25 @@ class ClaudeCodeProcessAdapter(
         @Synchronized fun snapshotThinking(): String = thinking.toString()
     }
 
+    /** Settings snapshot taken at spawn; a mismatch on the next send triggers a respawn. */
+    private data class SpawnConfig(
+        val path: String,
+        val extraArgs: String,
+        val model: String,
+        val maxOutputTokens: Int,
+        val thinkingBudget: Int
+    )
+
+    private fun currentSpawnConfig() = SpawnConfig(
+        path = settings.claudeCodePath,
+        extraArgs = settings.claudeCodeExtraArgs,
+        model = settings.claudeCodeModel,
+        maxOutputTokens = settings.claudeCodeMaxOutputTokens,
+        thinkingBudget = settings.claudeCodeThinkingBudget
+    )
+
+    @Volatile
+    private var spawnConfig: SpawnConfig? = null
     @Volatile private var process: Process? = null
     @Volatile private var stdin: BufferedWriter? = null
     @Volatile private var readerJob: Job? = null
@@ -170,18 +187,36 @@ class ClaudeCodeProcessAdapter(
         sendMutex.withLock {
             val alive = process
             if (alive?.isAlive == true) {
-                MaxVibesLogger.info(TAG, "ensureStarted: already alive",
-                    mapOf("resume" to (resumeSessionId ?: "null"),
-                        "systemPromptIgnored" to (systemPrompt != null)))
-                sessionLog?.event("ensureStarted: already alive",
-                    mapOf("resume" to (resumeSessionId ?: "null"),
-                        "systemPromptIgnored" to (systemPrompt != null)))
-                return Result.Success(Unit)
+                if (spawnConfig == currentSpawnConfig()) {
+                    MaxVibesLogger.info(
+                        TAG,
+                        "ensureStarted: already alive",
+                        mapOf(
+                            "resume" to (resumeSessionId ?: "null"),
+                            "systemPromptIgnored" to (systemPrompt != null)
+                        )
+                    )
+                    sessionLog?.event(
+                        "ensureStarted: already alive",
+                        mapOf(
+                            "resume" to (resumeSessionId ?: "null"),
+                            "systemPromptIgnored" to (systemPrompt != null)
+                        )
+                    )
+                    return Result.Success(Unit)
+                }
+
+                MaxVibesLogger.info(TAG, "ensureStarted: settings changed - respawning")
+                sessionLog?.event("settings changed - respawning")
+                terminate(reason = "settings changed", asAbort = false)
             }
 
             if (!isAvailable()) {
-                MaxVibesLogger.warn(TAG, "ensureStarted: binary not found",
-                    data = mapOf("path" to settings.claudeCodePath))
+                MaxVibesLogger.warn(
+                    TAG,
+                    "ensureStarted: binary not found",
+                    data = mapOf("path" to settings.claudeCodePath)
+                )
                 sessionLog?.event("binary not found", mapOf("path" to settings.claudeCodePath))
                 return Result.Failure(ClaudeCodeError.BinaryNotFound)
             }
@@ -191,20 +226,11 @@ class ClaudeCodeProcessAdapter(
                 "--input-format", "stream-json",
                 "--output-format", "stream-json",
                 "--verbose",
-                // Partial-message deltas drive the live narration (content_block_delta).
-                // Verified present on 2.1.138; if a future CLI drops it, the adapter
-                // degrades to authoritative full messages per turn - still functional.
                 "--include-partial-messages",
-                // In MaxVibes mode the plugin is the sole I/O channel: files arrive via
-                // freshFiles in the payload, modifications go out via the JSON protocol.
-                // Without this restriction the model wastes 30-180s/turn on bounced tools.
-                // Note: an empty --allowed-tools arg breaks argv quoting on Windows,
-                // hence the explicit disallow list.
                 "--disallowed-tools",
                 "Read,Write,Edit,MultiEdit,NotebookEdit,Bash,Glob,Grep,WebFetch,WebSearch,PowerShell,Task"
             )
-            // System prompt via temp file + flag: keeps prompt-looking text out of the
-            // user payload (prompt-injection classifier) and dodges Windows argv limits.
+
             val hasSystemPrompt = !systemPrompt.isNullOrBlank()
             var promptFilePath: String? = null
             if (!systemPrompt.isNullOrBlank()) {
@@ -215,10 +241,19 @@ class ClaudeCodeProcessAdapter(
                 baseArgs += "--append-system-prompt-file"
                 baseArgs += promptFilePath
             }
+
             if (resumeSessionId != null) {
                 baseArgs += "--resume"
                 baseArgs += resumeSessionId
             }
+
+            val modelFlag = "--model"
+            val model = settings.claudeCodeModel.trim()
+            if (model.isNotEmpty() && !settings.claudeCodeExtraArgs.contains(modelFlag)) {
+                baseArgs += modelFlag
+                baseArgs += model
+            }
+
             val extraArgs = settings.claudeCodeExtraArgs.split(' ').filter { it.isNotBlank() }
             val allArgs = baseArgs + extraArgs
 
@@ -231,42 +266,75 @@ class ClaudeCodeProcessAdapter(
                 charset = StandardCharsets.UTF_8
                 addParameters(*allArgs.toTypedArray())
                 if (resolvedWorkDir != null) withWorkDirectory(resolvedWorkDir)
+
+                if (settings.claudeCodeMaxOutputTokens > 0) {
+                    withEnvironment(
+                        "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+                        settings.claudeCodeMaxOutputTokens.toString()
+                    )
+                }
+                if (settings.claudeCodeThinkingBudget > 0) {
+                    withEnvironment(
+                        "MAX_THINKING_TOKENS",
+                        settings.claudeCodeThinkingBudget.toString()
+                    )
+                }
             }
 
-            MaxVibesLogger.info(TAG, "ensureStarted: spawning",
+            MaxVibesLogger.info(
+                TAG,
+                "ensureStarted: spawning",
                 mapOf(
                     "path" to settings.claudeCodePath,
                     "args" to allArgs.joinToString(" "),
+                    "envMaxOut" to settings.claudeCodeMaxOutputTokens,
+                    "envThink" to settings.claudeCodeThinkingBudget,
                     "resume" to (resumeSessionId ?: "null"),
                     "hasSystemPrompt" to hasSystemPrompt,
                     "promptFile" to (promptFilePath ?: "<none>"),
                     "promptLen" to (systemPrompt?.length ?: 0),
                     "workDir" to (resolvedWorkDir?.absolutePath ?: "<inherited>"),
                     "requestedWorkDir" to (workingDirectory ?: "null")
-                ))
-            // The transcript intentionally gets the FULL command line - it is the
-            // single file needed to reproduce the invocation.
-            sessionLog?.event("spawning",
+                )
+            )
+            sessionLog?.event(
+                "spawning",
                 mapOf(
                     "cmd" to settings.claudeCodePath,
                     "args" to allArgs.joinToString(" "),
+                    "envMaxOut" to settings.claudeCodeMaxOutputTokens,
+                    "envThink" to settings.claudeCodeThinkingBudget,
                     "resume" to (resumeSessionId ?: "null"),
                     "workDir" to (resolvedWorkDir?.absolutePath ?: "<inherited>")
-                ))
+                )
+            )
 
             val proc = try {
                 cmd.createProcess()
             } catch (e: Exception) {
-                MaxVibesLogger.error(TAG, "ensureStarted: createProcess threw", ex = e,
-                    data = mapOf("path" to settings.claudeCodePath, "args" to allArgs.joinToString(" ")))
-                sessionLog?.event("createProcess threw",
-                    mapOf("ex" to e.javaClass.simpleName, "exMsg" to (e.message ?: "")))
-                return Result.Failure(ClaudeCodeError.Crashed("Could not spawn process: ${e.message}"))
+                MaxVibesLogger.error(
+                    TAG,
+                    "ensureStarted: createProcess threw",
+                    ex = e,
+                    data = mapOf(
+                        "path" to settings.claudeCodePath,
+                        "args" to allArgs.joinToString(" ")
+                    )
+                )
+                sessionLog?.event(
+                    "createProcess threw",
+                    mapOf("ex" to e.javaClass.simpleName, "exMsg" to (e.message ?: ""))
+                )
+                return Result.Failure(
+                    ClaudeCodeError.Crashed("Could not spawn process: ${e.message}")
+                )
             }
 
             process = proc
             stdin = proc.outputStream.bufferedWriter(StandardCharsets.UTF_8)
-            synchronized(stderrBuffer) { stderrBuffer.setLength(0) }
+            synchronized(stderrBuffer) {
+                stderrBuffer.setLength(0)
+            }
             lastStderrSnapshot = ""
 
             startStderrCollector(proc)
@@ -278,11 +346,23 @@ class ClaudeCodeProcessAdapter(
                 val err = stderrSnapshot()
                 lastStderrSnapshot = err
                 val exitCode = runCatching { proc.exitValue() }.getOrDefault(-1)
-                MaxVibesLogger.error(TAG, "ensureStarted: process died during grace period",
-                    data = mapOf("exit" to exitCode, "stderr" to err.take(LOG_LINE_PREVIEW_MAX),
-                        "resume" to (resumeSessionId ?: "null")))
-                sessionLog?.event("process died during spawn grace",
-                    mapOf("exit" to exitCode, "resume" to (resumeSessionId ?: "null"), "stderr" to err))
+                MaxVibesLogger.error(
+                    TAG,
+                    "ensureStarted: process died during grace period",
+                    data = mapOf(
+                        "exit" to exitCode,
+                        "stderr" to err.take(LOG_LINE_PREVIEW_MAX),
+                        "resume" to (resumeSessionId ?: "null")
+                    )
+                )
+                sessionLog?.event(
+                    "process died during spawn grace",
+                    mapOf(
+                        "exit" to exitCode,
+                        "resume" to (resumeSessionId ?: "null"),
+                        "stderr" to err
+                    )
+                )
                 terminate(reason = "died during spawn grace", asAbort = false)
                 return if (resumeSessionId != null) {
                     Result.Failure(ClaudeCodeError.ResumeFailed(resumeSessionId, err))
@@ -291,12 +371,22 @@ class ClaudeCodeProcessAdapter(
                 }
             }
 
-            MaxVibesLogger.info(TAG, "ensureStarted: alive after grace",
-                mapOf("pid" to runCatching { proc.pid() }.getOrDefault(-1L),
-                    "resume" to (resumeSessionId ?: "null")))
-            sessionLog?.event("alive after grace",
-                mapOf("pid" to runCatching { proc.pid() }.getOrDefault(-1L),
-                    "resume" to (resumeSessionId ?: "null")))
+            spawnConfig = currentSpawnConfig()
+            MaxVibesLogger.info(
+                TAG,
+                "ensureStarted: alive after grace",
+                mapOf(
+                    "pid" to runCatching { proc.pid() }.getOrDefault(-1L),
+                    "resume" to (resumeSessionId ?: "null")
+                )
+            )
+            sessionLog?.event(
+                "alive after grace",
+                mapOf(
+                    "pid" to runCatching { proc.pid() }.getOrDefault(-1L),
+                    "resume" to (resumeSessionId ?: "null")
+                )
+            )
             return Result.Success(Unit)
         }
 
@@ -488,8 +578,7 @@ class ClaudeCodeProcessAdapter(
     // ==================== Send ====================
 
     override suspend fun send(
-        request: ClipboardRequest,
-        onActivity: (ClaudeCodeActivity) -> Unit
+        request: ClipboardRequest
     ): Result<ClaudeCodeSendResult, ClaudeCodeError> =
         sendMutex.withLock {
             val proc = process

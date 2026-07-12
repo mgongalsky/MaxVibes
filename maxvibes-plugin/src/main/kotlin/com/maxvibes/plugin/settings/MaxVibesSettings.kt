@@ -32,7 +32,7 @@ class MaxVibesSettings : PersistentStateComponent<MaxVibesSettings.State> {
         var enableMockFallback: Boolean = true,
 
         // ===== Interaction Mode =====
-        var interactionMode: String = "API",  // API, CLIPBOARD, CHEAP_API, CLAUDE_CODE
+        var interactionMode: String = "API",
 
         // ===== Cheap LLM (for CHEAP_API mode) =====
         var cheapProvider: String = "ANTHROPIC",
@@ -42,13 +42,12 @@ class MaxVibesSettings : PersistentStateComponent<MaxVibesSettings.State> {
         var cheapMaxTokens: Int = 16384,
 
         // ===== Claude Code (CLI mode) =====
-        // Path can be a name in PATH ("claude") or an absolute path.
         var claudeCodePath: String = "claude",
-        // Extra CLI args separated by whitespace, e.g. --allowedTools ""
         var claudeCodeExtraArgs: String = "",
-        // Timeout for waiting on a single stream-json response turn.
+        var claudeCodeModel: String = "",
+        var claudeCodeMaxOutputTokens: Int = 64000,
+        var claudeCodeThinkingBudget: Int = 0,
         var claudeCodeReadTimeoutSec: Int = 120,
-        // Timeout for waiting for the process to spawn and emit system/init.
         var claudeCodeStartTimeoutSec: Int = 30
     )
 
@@ -152,6 +151,26 @@ class MaxVibesSettings : PersistentStateComponent<MaxVibesSettings.State> {
             myState.claudeCodeExtraArgs = value
         }
 
+    /** Model for the Claude Code CLI. Blank = Auto (CLI default). Aliases sonnet/opus/haiku or a full model name. */
+    var claudeCodeModel: String
+        get() = myState.claudeCodeModel
+        set(value) {
+            myState.claudeCodeModel = value
+        }
+
+    /** Per-response output cap, exported as CLAUDE_CODE_MAX_OUTPUT_TOKENS on the child process. 0 = CLI default. */
+    var claudeCodeMaxOutputTokens: Int
+        get() = myState.claudeCodeMaxOutputTokens
+        set(value) {
+            myState.claudeCodeMaxOutputTokens = value
+        }
+
+    /** Reasoning budget per turn, exported as MAX_THINKING_TOKENS on the child process. 0 = CLI default. */
+    var claudeCodeThinkingBudget: Int
+        get() = myState.claudeCodeThinkingBudget
+        set(value) {
+            myState.claudeCodeThinkingBudget = value
+        }
     var claudeCodeReadTimeoutSec: Int
         get() = myState.claudeCodeReadTimeoutSec
         set(value) {
