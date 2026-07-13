@@ -147,6 +147,53 @@ class ChatPanel(
         isVisible = false
     }
 
+    /**
+     * Subscription usage row (Set 9): 5h and 7d bars mounted under the send-button row.
+     * Fed from [streamListener] via [updateLimitsChip]; hidden until the first
+     * rate_limit_event. All rendering, colors and thresholds live in [LimitsBarPanel].
+     */
+    private val limitsBar = LimitsBarPanel()
+
+    /**
+     * OAuth usage poller (Set 9): every 60s reads the Claude CLI's own token from
+     * ~/.claude/.credentials.json and asks api.anthropic.com/api/oauth/usage for
+     * exact five_hour / seven_day utilization, feeding [limitsBar]. Unofficial
+     * endpoint - fails soft; bars then live on CLI rate_limit_events alone.
+     * The token never leaves the machine except to api.anthropic.com and is never
+     * logged. Stopped in [dispose].
+     */
+    private val usagePoller = com.maxvibes.plugin.claudecode.SubscriptionUsagePoller(
+        port = com.maxvibes.plugin.claudecode.ClaudeOAuthUsageAdapter(),
+        onUsage = { usage -> limitsBar.onUsage(usage) }
+    ).also { it.start() }
+
+    private val rateLimits =
+        java.util.concurrent.ConcurrentHashMap<String, com.maxvibes.application.port.output.AgentStreamEvent.RateLimitUpdate>()
+
+    private fun updateLimitsChip(e: com.maxvibes.application.port.output.AgentStreamEvent.RateLimitUpdate) {
+        MaxVibesLogger.info(
+            "ChatPanel",
+            "limits event",
+            mapOf("kind" to e.kind, "pct" to (e.utilizationPct ?: -1), "status" to e.status)
+        )
+        limitsBar.onRateLimit(e)
+    }
+
+    private fun fmtReset(epochSec: Long?): String? = epochSec?.let {
+        val t = java.time.Instant.ofEpochSecond(it).atZone(java.time.ZoneId.systemDefault())
+        val pattern = if (t.toLocalDate() == java.time.LocalDate.now()) "HH:mm" else "EEE HH:mm"
+        t.format(java.time.format.DateTimeFormatter.ofPattern(pattern))
+    }
+
+    private fun limitsColor(worstPct: Int, worstStatus: String): JBColor? = when {
+        worstStatus == "rejected" || worstStatus == "exceeded" || worstPct >= 95 ->
+            JBColor(java.awt.Color(0xC0392B), java.awt.Color(0xE74C3C))
+        worstStatus == "allowed_warning" || worstPct >= 80 ->
+            JBColor(java.awt.Color(0xCA6F1E), java.awt.Color(0xE67E22))
+        worstPct >= 60 -> JBColor(java.awt.Color(0xB7950B), java.awt.Color(0xF1C40F))
+        else -> null // theme default
+    }
+
     private val breadcrumbPanel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply { background = JBColor.background() }
 
     private val sessionsButton =
@@ -341,6 +388,7 @@ class ChatPanel(
      */
     private val streamListener = AgentStreamHub.Listener { sessionId, event ->
         if (sessionId == chatTreeService.getActiveSession().id) liveTurnPanel.onEvent(event)
+        if (event is com.maxvibes.application.port.output.AgentStreamEvent.RateLimitUpdate) updateLimitsChip(event)
     }
 
     // Manages interaction mode state (API / Clipboard / CheapAPI / ClaudeCode).
@@ -744,6 +792,8 @@ class ChatPanel(
                     add(approveButton)
                     add(sendButton)
                 }, BorderLayout.CENTER)
+                // Set 9: subscription usage row (5h / 7d bars) - full-width line under the buttons.
+                add(limitsBar, BorderLayout.SOUTH)
             }, BorderLayout.SOUTH)
         }
 
@@ -1472,12 +1522,13 @@ class ChatPanel(
 
     /**
      * Called by IntelliJ via the Disposer chain when [toolWindow] is being closed.
-     * Releases the stream-hub subscription and stops the live panel's drain timer.
-     * Safe to call multiple times.
+     * Releases the stream-hub subscription, stops the live panel's drain timer and
+     * the OAuth usage poller. Safe to call multiple times.
      */
     override fun dispose() {
         runCatching { service.agentStreamHub.removeListener(streamListener) }
         runCatching { liveTurnPanel.dispose() }
+        runCatching { usagePoller.stop() }
     }
 
     override fun addPostApplyErrorsBubble(

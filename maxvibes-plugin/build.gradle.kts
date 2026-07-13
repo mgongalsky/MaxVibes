@@ -10,7 +10,6 @@ dependencies {
     implementation(project(":maxvibes-adapter-psi-python"))
     implementation(project(":maxvibes-shared"))
 
-
     implementation("org.commonmark:commonmark:0.29.0")
     implementation("org.commonmark:commonmark-ext-gfm-tables:0.29.0") // LLM любят таблицы
 
@@ -32,6 +31,22 @@ intellij {
 tasks {
     test {
         useJUnitPlatform()
+
+        // The IDE-bundled coroutines-javaagent is built against kotlinx-coroutines 1.6.4
+        // (platform 2023.1), while the test classpath carries 1.7+ (mockk, app modules).
+        // The agent crashes with NoSuchMethodError in AgentPremain before any test runs.
+        // Tests don't need the coroutine debug agent, so strip it from jvmArgs and from
+        // argument providers while keeping all other provider-supplied args intact.
+        doFirst {
+            jvmArgs = jvmArgs.orEmpty().filterNot { it.contains("coroutines-javaagent") }
+            val keptProviderArgs = jvmArgumentProviders
+                .flatMap { it.asArguments() }
+                .filterNot { it.contains("coroutines-javaagent") }
+            jvmArgumentProviders.clear()
+            jvmArgumentProviders.add(
+                org.gradle.process.CommandLineArgumentProvider { keptProviderArgs }
+            )
+        }
     }
 
     buildSearchableOptions {

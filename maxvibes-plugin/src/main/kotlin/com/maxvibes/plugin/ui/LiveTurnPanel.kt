@@ -251,6 +251,7 @@ class LiveTurnPanel(
                 toolRows[event.toolUseId] = ToolRow(System.currentTimeMillis(), label, base)
                 addFeedComponent(label)
             }
+            is AgentStreamEvent.RateLimitUpdate -> Unit
             is AgentStreamEvent.ToolFinished -> {
                 val row = toolRows.remove(event.toolUseId)
                 val dur = row?.let {

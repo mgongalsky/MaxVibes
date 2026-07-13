@@ -1,15 +1,7 @@
 package com.maxvibes.plugin.claudecode
 
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.booleanOrNull
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.doubleOrNull
-import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.longOrNull
+import com.maxvibes.application.port.output.AgentStreamEvent
+import kotlinx.serialization.json.*
 
 /**
  * Stateful line parser for the Claude Code stream-json NDJSON output.
@@ -29,6 +21,14 @@ internal class StreamJsonEventParser {
     /** Parsed meaning of one stdout line. */
     sealed interface Line {
         data class Init(val sessionId: String?, val model: String?) : Line
+
+        /** rate_limit_event: subscription window telemetry (five_hour / seven_day). */
+        data class RateLimit(
+            val kind: String,
+            val status: String,
+            val utilizationPct: Int?,
+            val resetsAtEpochSec: Long?
+        ) : Line
 
         /** system/api_retry and other informational system subtypes. */
         data class SystemNotice(val text: String) : Line
@@ -110,22 +110,31 @@ internal class StreamJsonEventParser {
     }
 
     /**
-     * Verified 2.1.138 schema: {"type":"rate_limit_event","rate_limit_info":{"status":"allowed",
-     * "resetsAt":<unix-sec>,"rateLimitType":"five_hour",...}}. status "allowed" is a routine
-     * per-turn ping - ignored, or every turn block would show a scary rate-limit Notice.
-     * Anything else surfaces with type and reset ETA.
+     * Verified 2.1.138 schema:
+     * {"type":"rate_limit_event","rate_limit_info":{"status":"allowed",
+     *  "rateLimitType":"five_hour","utilization":34,"resetsAt":1783899600}}
+     * One event per window ("five_hour" / "seven_day"), both fire on every turn.
+     * Forwarded for the limits indicator; never rendered as a feed notice (Set 3
+     * learning, refined in Set 9). `utilization` arrives as whole percent on
+     * 2.1.138; sub-1.0 values are treated as fractions defensively.
+     */
+    /**
+     * rate_limit_event, 2.1.138 schema:
+     * {"type":"rate_limit_event","rate_limit_info":{"status":"allowed",
+     *  "rateLimitType":"five_hour","utilization":34,"resetsAt":1783899600}}
+     * One event per window ("five_hour"/"seven_day"), both fire every turn.
+     * utilization is whole percent on 2.1.138; sub-1.0 treated as fraction defensively.
      */
     private fun parseRateLimit(obj: JsonObject): Line {
-        val info = obj.obj("rate_limit_info")
-            ?: return Line.SystemNotice(obj.str("message") ?: "rate limit notice") // pre-2.1 fallback
-        val status = info.str("status") ?: return Line.Ignored
-        if (status.equals("allowed", ignoreCase = true)) return Line.Ignored
-        val type = info.str("rateLimitType")?.let { " ($it)" } ?: ""
-        val eta = info.long("resetsAt")?.let {
-            val min = ((it * 1000 - System.currentTimeMillis()) / 60000).coerceAtLeast(0)
-            ", resets in ${min}min"
-        } ?: ""
-        return Line.SystemNotice("rate limit: $status$type$eta")
+        val info = obj["rate_limit_info"]?.jsonObject ?: return Line.Unknown("rate_limit_event")
+        val status = info["status"]?.jsonPrimitive?.contentOrNull ?: return Line.Unknown("rate_limit_event")
+        val raw = info["utilization"]?.jsonPrimitive?.doubleOrNull
+        return Line.RateLimit(
+            kind = info["rateLimitType"]?.jsonPrimitive?.contentOrNull ?: "unknown",
+            status = status,
+            utilizationPct = raw?.let { if (it < 1.0) (it * 100).toInt() else it.toInt() },
+            resetsAtEpochSec = info["resetsAt"]?.jsonPrimitive?.longOrNull
+        )
     }
 
     private fun parseAssistant(obj: JsonObject): Line {

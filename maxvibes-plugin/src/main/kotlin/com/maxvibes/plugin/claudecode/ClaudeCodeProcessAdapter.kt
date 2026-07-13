@@ -511,6 +511,9 @@ class ClaudeCodeProcessAdapter(
         turn?.let { it.linesRead++; it.touch() }
 
         when (val parsed = parser.parse(line)) {
+            is StreamJsonEventParser.Line.RateLimit ->
+                emitEvent(AgentStreamEvent.RateLimitUpdate(
+                    parsed.kind, parsed.status, parsed.utilizationPct, parsed.resetsAtEpochSec))
             is StreamJsonEventParser.Line.Init -> {
                 lastKnownSessionId = parsed.sessionId ?: lastKnownSessionId
                 turn?.observedSessionId = parsed.sessionId
