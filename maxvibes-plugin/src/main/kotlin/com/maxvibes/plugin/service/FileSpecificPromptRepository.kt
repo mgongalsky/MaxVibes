@@ -4,6 +4,7 @@ import com.maxvibes.application.port.output.SpecificPromptRepository
 import com.maxvibes.domain.model.interaction.PromptSource
 import com.maxvibes.domain.model.interaction.SpecificPrompt
 import java.io.File
+import com.maxvibes.application.service.SkillMdParser
 
 class FileSpecificPromptRepository(
 private val projectSkillsDir: File,
@@ -72,31 +73,17 @@ source = PromptSource.LEGACY
 null
 }
 
-private fun parseSkillMd(file: File, source: PromptSource, fallbackName: String): SpecificPrompt? = try {
-val text = file.readText(Charsets.UTF_8)
-var name = fallbackName
-var description = ""
-var body = text
-if (text.startsWith("---")) {
-val end = text.indexOf("\n---", startIndex = 3)
-if (end > 0) {
-val frontmatter = text.substring(3, end)
-body = text.substring(end + 4).trimStart('\n', '\r')
-frontmatter.lines().forEach { line ->
-val idx = line.indexOf(':')
-if (idx > 0) {
-val key = line.substring(0, idx).trim()
-val value = line.substring(idx + 1).trim().trim('"', '\'')
-when (key) {
-"name" -> if (value.isNotBlank()) name = value
-"description" -> description = value
-}
-}
-}
-}
-}
-SpecificPrompt(name, body, description, file.absolutePath, source)
-} catch (e: Exception) {
-null
-}
+    private fun parseSkillMd(file: File, source: PromptSource, fallbackName: String): SpecificPrompt? = try {
+        val parsed = SkillMdParser.parse(file.readText(Charsets.UTF_8))
+        SpecificPrompt(
+            name = parsed.name ?: fallbackName,
+            content = parsed.body,
+            description = parsed.description,
+            filePath = file.absolutePath,
+            source = source,
+            editorSpec = parsed.editorSpec
+        )
+    } catch (e: Exception) {
+        null
+    }
 }

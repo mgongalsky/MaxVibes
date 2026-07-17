@@ -72,4 +72,28 @@ class SpecificPromptService(private val repository: SpecificPromptRepository) {
         if (name == null) return null
         return if (repository.loadByName(name) != null) name else null
     }
+
+    /** Skills visible in the editor menu for an element of [kind]; empty when kind is null. */
+    fun editorSkillsFor(kind: String?): List<SpecificPrompt> {
+        if (kind == null) return emptyList()
+        return repository.loadAll().filter { p ->
+            val spec = p.editorSpec ?: return@filter false
+            "any" in spec.appliesTo || kind in spec.appliesTo
+        }
+    }
+
+    /** Renders the prefill text for an editor-skill invocation. */
+    fun renderEditorTemplate(
+        prompt: SpecificPrompt,
+        elementPath: String,
+        elementName: String,
+        filePath: String
+    ): String {
+        val template = prompt.editorSpec?.template
+            ?: "Apply the '${prompt.name}' skill to {{elementPath}}."
+        return template
+            .replace("{{elementPath}}", elementPath)
+            .replace("{{elementName}}", elementName)
+            .replace("{{filePath}}", filePath)
+    }
 }
