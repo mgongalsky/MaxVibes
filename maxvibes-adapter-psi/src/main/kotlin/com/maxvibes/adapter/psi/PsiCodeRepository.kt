@@ -12,6 +12,7 @@ import com.maxvibes.adapter.psi.mapper.PsiToDomainMapper
 import com.maxvibes.adapter.psi.operation.PsiCallHierarchyFinder
 import com.maxvibes.adapter.psi.operation.PsiModifier
 import com.maxvibes.adapter.psi.operation.PsiNavigator
+import com.maxvibes.adapter.psi.operation.PsiRefactoringExecutor
 import com.maxvibes.adapter.psi.renderer.PsiCodeViewRenderer
 import com.maxvibes.application.port.output.CodeRepository
 import com.maxvibes.application.port.output.CodeRepositoryError
@@ -34,7 +35,8 @@ import org.jetbrains.kotlin.psi.KtNamedFunction
  * Implementation of [CodeRepository] backed by the IntelliJ PSI API.
  *
  * Handles file/element reads, structural modifications (create / replace / delete),
- * and granularity-aware code view rendering via [PsiCodeViewRenderer].
+ * IDE refactorings (rename / safe delete / move), and granularity-aware code view
+ * rendering via [PsiCodeViewRenderer].
  */
 class PsiCodeRepository(private val project: Project) : CodeRepository {
 
@@ -44,6 +46,7 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
     private val modifier = PsiModifier(project, elementFactory)
     private val usagesFinder = PsiUsagesFinder(project)
     private val callHierarchyFinder = PsiCallHierarchyFinder(project)
+    private val refactoringExecutor = PsiRefactoringExecutor(project)
 
     /** Renders PSI elements into prompt-ready text at the requested granularity level. */
     private val renderer = PsiCodeViewRenderer()
@@ -108,6 +111,9 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
             is Modification.DeleteElement -> deleteElement(modification)
             is Modification.AddImport -> addImport(modification)
             is Modification.RemoveImport -> removeImport(modification)
+            is Modification.RenameElement -> renameElement(modification)
+            is Modification.SafeDelete -> safeDeleteElement(modification)
+            is Modification.MoveElement -> moveElement(modification)
         }
     }
 
@@ -470,6 +476,104 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
                 error = ModificationError.IOError(e.message ?: "Failed to remove import")
             )
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Private implementation - IDE refactorings (Rename / Safe Delete / Move)
+    // ═══════════════════════════════════════════════════════════════
+
+    private fun renameElement(mod: Modification.RenameElement): ModificationResult {
+        val target = runReadAction {
+            if (mod.targetPath.isFile) navigator.findFile(mod.targetPath) else navigator.findElement(mod.targetPath)
+        } ?: return ModificationResult.Failure(
+            modification = mod,
+            error = ModificationError.ElementNotFound(mod.targetPath)
+        )
+        return when (val result = refactoringExecutor.rename(target, mod.newName)) {
+            is Result.Success -> ModificationResult.Success(
+                modification = mod,
+                affectedPath = mod.targetPath,
+                resultContent = mod.newName
+            )
+
+            is Result.Failure -> ModificationResult.Failure(
+                modification = mod,
+                error = ModificationError.InvalidOperation(result.error)
+            )
+        }
+    }
+
+    private fun safeDeleteElement(mod: Modification.SafeDelete): ModificationResult {
+        val target = runReadAction {
+            if (mod.targetPath.isFile) navigator.findFile(mod.targetPath) else navigator.findElement(mod.targetPath)
+        } ?: return ModificationResult.Failure(
+            modification = mod,
+            error = ModificationError.ElementNotFound(mod.targetPath)
+        )
+        return when (val result = refactoringExecutor.safeDelete(target)) {
+            is Result.Success -> ModificationResult.Success(
+                modification = mod,
+                affectedPath = mod.targetPath,
+                resultContent = null
+            )
+
+            is Result.Failure -> ModificationResult.Failure(
+                modification = mod,
+                error = ModificationError.InvalidOperation(result.error)
+            )
+        }
+    }
+
+    private fun moveElement(mod: Modification.MoveElement): ModificationResult {
+        val psiFile = runReadAction { navigator.findFile(mod.targetPath) }
+            ?: return ModificationResult.Failure(
+                modification = mod,
+                error = ModificationError.InvalidOperation(
+                    "MOVE_ELEMENT v1 moves whole files: '${mod.targetPath.value}' does not resolve to a file"
+                )
+            )
+        val targetDir = resolveOrCreateDirectory(mod.destination)
+            ?: return ModificationResult.Failure(
+                modification = mod,
+                error = ModificationError.IOError("Cannot resolve or create destination directory: ${mod.destination}")
+            )
+        return when (val result = refactoringExecutor.moveFile(psiFile, targetDir)) {
+            is Result.Success -> ModificationResult.Success(
+                modification = mod,
+                affectedPath = mod.targetPath,
+                resultContent = mod.destination
+            )
+
+            is Result.Failure -> ModificationResult.Failure(
+                modification = mod,
+                error = ModificationError.InvalidOperation(result.error)
+            )
+        }
+    }
+
+    /** Resolves a project-relative directory, creating missing segments in a write command. */
+    private fun resolveOrCreateDirectory(relativeDirPath: String): PsiDirectory? {
+        val projectBasePath = project.basePath ?: return null
+        val normalized = relativeDirPath.replace('\\', '/').trim('/')
+        if (normalized.isBlank()) return null
+        val psiManager = PsiManager.getInstance(project)
+
+        val existing = VfsUtil.findFileByIoFile(File("$projectBasePath/$normalized"), true)
+        if (existing != null && existing.isDirectory) {
+            return runReadAction { psiManager.findDirectory(existing) }
+        }
+
+        var created: PsiDirectory? = null
+        val app = ApplicationManager.getApplication()
+        val action = {
+            WriteCommandAction.runWriteCommandAction(project) {
+                val baseVf = VfsUtil.findFileByIoFile(File(projectBasePath), true) ?: return@runWriteCommandAction
+                val baseDir = psiManager.findDirectory(baseVf) ?: return@runWriteCommandAction
+                created = createDirectoryPath(baseDir, normalized)
+            }
+        }
+        if (app.isDispatchThread) action() else app.invokeAndWait(action)
+        return created
     }
 
     // ═══════════════════════════════════════════════════════════════

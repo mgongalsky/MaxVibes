@@ -121,16 +121,21 @@ class ClaudeCodeProcessAdapter(
         val model: String,
         val maxOutputTokens: Int,
         val thinkingBudget: Int,
-        val effortLevel: String
+        val effortLevel: String,
+        /** Hash of the --append-system-prompt-file content the process was spawned with (0 = none). */
+        val systemPromptHash: Int = 0
     )
 
-    private fun currentSpawnConfig() = SpawnConfig(
+    private fun currentSpawnConfig(systemPrompt: String?) = SpawnConfig(
         path = settings.claudeCodePath,
         extraArgs = settings.claudeCodeExtraArgs,
         model = settings.claudeCodeModel,
         maxOutputTokens = settings.claudeCodeMaxOutputTokens,
         thinkingBudget = settings.claudeCodeThinkingBudget,
-        effortLevel = settings.claudeCodeEffortLevel
+        effortLevel = settings.claudeCodeEffortLevel,
+        // null systemPrompt = the caller has no prompt for this call; inherit the live
+        // process's hash so a null neither forces nor masks a respawn on its own.
+        systemPromptHash = systemPrompt?.hashCode() ?: spawnConfig?.systemPromptHash ?: 0
     )
 
     @Volatile
@@ -186,30 +191,31 @@ class ClaudeCodeProcessAdapter(
         systemPrompt: String?
     ): Result<Unit, ClaudeCodeError> =
         sendMutex.withLock {
+            val desired = currentSpawnConfig(systemPrompt)
             val alive = process
             if (alive?.isAlive == true) {
-                if (spawnConfig == currentSpawnConfig()) {
+                if (spawnConfig == desired) {
                     MaxVibesLogger.info(
                         TAG,
                         "ensureStarted: already alive",
                         mapOf(
                             "resume" to (resumeSessionId ?: "null"),
-                            "systemPromptIgnored" to (systemPrompt != null)
+                            "promptHash" to desired.systemPromptHash
                         )
                     )
                     sessionLog?.event(
                         "ensureStarted: already alive",
                         mapOf(
                             "resume" to (resumeSessionId ?: "null"),
-                            "systemPromptIgnored" to (systemPrompt != null)
+                            "promptHash" to desired.systemPromptHash
                         )
                     )
                     return Result.Success(Unit)
                 }
 
-                MaxVibesLogger.info(TAG, "ensureStarted: settings changed - respawning")
-                sessionLog?.event("settings changed - respawning")
-                terminate(reason = "settings changed", asAbort = false)
+                MaxVibesLogger.info(TAG, "ensureStarted: config changed (settings or system prompt) - respawning")
+                sessionLog?.event("config changed - respawning")
+                terminate(reason = "config changed", asAbort = false)
             }
 
             if (!isAvailable()) {
@@ -383,7 +389,10 @@ class ClaudeCodeProcessAdapter(
                 }
             }
 
-            spawnConfig = currentSpawnConfig()
+            // Record what this process was ACTUALLY spawned with: a null systemPrompt spawns
+            // without --append-system-prompt-file, so store hash 0 here (not the inherited
+            // comparison hash) and let the next prompt-carrying call trigger a corrective respawn.
+            spawnConfig = desired.copy(systemPromptHash = systemPrompt?.hashCode() ?: 0)
             MaxVibesLogger.info(
                 TAG,
                 "ensureStarted: alive after grace",

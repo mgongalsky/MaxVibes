@@ -61,6 +61,21 @@ The "reasoning" field is displayed as plain text — do NOT use Markdown there.
 Element path format: file:src/main/kotlin/com/example/User.kt/class[User]/function[validate]
 Segments: class[Name], interface[Name], object[Name], function[Name], property[Name], companion_object, init, constructor[primary], enum_entry[Name]
 
+
+Tier 1 — native IDE refactorings(STRONGLY PREFERRED when applicable)
+These invoke IntelliJ's own refactoring engine. The IDE updates the declaration, ALL usages, imports, and(for a top -level class) the file name across the whole project.
+
+| Type | What it does | Required fields | |----------------|------------------------------------------------------------------------ - |------------------ - | | RENAME_ELEMENT | Renames element +every usage; renames the file for a top -level class | path, newName | | SAFE_DELETE | Deletes element; returns explicit Failure listing usages if any remain | path | | MOVE_ELEMENT | Moves element to a new location, rewriting imports and references | path, destination |
+
+Example — rename a class(this also renames TanksGame. kt and fixes every reference in other files):
+
+{
+"type": "RENAME_ELEMENT",
+"path": "file:src/main/kotlin/TanksGame.kt/class[TanksGame]",
+"newName": "ScorchedEarthGame"
+}
+Rules: -ANY rename = one RENAME_ELEMENT.NEVER emulate a rename with CREATE_FILE +delete, REPLACE_FILE, or shell commands. -Renames need NO file content — do not request FULL or SIGNATURES views just to rename; the element path is enough. -RENAME_ELEMENT does not touch string literals or UI labels; fix those with a separate small REPLACE_ELEMENT afterwards. -Element deletion = SAFE_DELETE, never shell rm / Remove-Item.
+
 CREATE_ELEMENT positioning rules:
 
 To add to end/start of a class — path points to the CLASS:

@@ -34,6 +34,8 @@ import java.io.File
  * Python counterpart of `PsiCodeRepository` from maxvibes-adapter-psi. Read paths
  * mirror the Kotlin adapter; structural writes are delegated to [PyPsiModifier];
  * file-level create/delete are handled here (the modifier has no file-level API).
+ * IDE refactorings (rename / safe delete / move) go through [PyRefactoringExecutor],
+ * which uses platform-only processors — they work in PyCharm out of the box.
  */
 class PyCodeRepository(private val project: Project) : CodeRepository {
 
@@ -41,6 +43,7 @@ class PyCodeRepository(private val project: Project) : CodeRepository {
     private val navigator = PyPsiNavigator(project)
     private val elementFactory = PythonElementFactory(project)
     private val modifier = PyPsiModifier(project, navigator, elementFactory)
+    private val refactoringExecutor = PyRefactoringExecutor(project)
 
     /** Renders PSI elements into prompt-ready text at the requested granularity level. */
     private val renderer = PyPsiCodeViewRenderer()
@@ -116,6 +119,10 @@ class PyCodeRepository(private val project: Project) : CodeRepository {
             is Modification.RemoveImport ->
                 modifier.removeImport(modification.targetPath, modification.importPath)
                     .toModificationResult(modification)
+
+            is Modification.RenameElement -> renameElement(modification)
+            is Modification.SafeDelete -> safeDeleteElement(modification)
+            is Modification.MoveElement -> moveElement(modification)
         }
     }
 
@@ -274,6 +281,104 @@ class PyCodeRepository(private val project: Project) : CodeRepository {
                 error = ModificationError.IOError(e.message ?: "Failed to delete file")
             )
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Private implementation — IDE refactorings (Rename / Safe Delete / Move)
+    // ═══════════════════════════════════════════════════════════════
+
+    private fun renameElement(mod: Modification.RenameElement): ModificationResult {
+        val target = runReadAction {
+            if (mod.targetPath.isFile) navigator.findFile(mod.targetPath) else navigator.findElement(mod.targetPath)
+        } ?: return ModificationResult.Failure(
+            modification = mod,
+            error = ModificationError.ElementNotFound(mod.targetPath)
+        )
+        return when (val result = refactoringExecutor.rename(target, mod.newName)) {
+            is Result.Success -> ModificationResult.Success(
+                modification = mod,
+                affectedPath = mod.targetPath,
+                resultContent = mod.newName
+            )
+
+            is Result.Failure -> ModificationResult.Failure(
+                modification = mod,
+                error = ModificationError.InvalidOperation(result.error)
+            )
+        }
+    }
+
+    private fun safeDeleteElement(mod: Modification.SafeDelete): ModificationResult {
+        val target = runReadAction {
+            if (mod.targetPath.isFile) navigator.findFile(mod.targetPath) else navigator.findElement(mod.targetPath)
+        } ?: return ModificationResult.Failure(
+            modification = mod,
+            error = ModificationError.ElementNotFound(mod.targetPath)
+        )
+        return when (val result = refactoringExecutor.safeDelete(target)) {
+            is Result.Success -> ModificationResult.Success(
+                modification = mod,
+                affectedPath = mod.targetPath,
+                resultContent = null
+            )
+
+            is Result.Failure -> ModificationResult.Failure(
+                modification = mod,
+                error = ModificationError.InvalidOperation(result.error)
+            )
+        }
+    }
+
+    private fun moveElement(mod: Modification.MoveElement): ModificationResult {
+        val psiFile = runReadAction { navigator.findFile(mod.targetPath) }
+            ?: return ModificationResult.Failure(
+                modification = mod,
+                error = ModificationError.InvalidOperation(
+                    "MOVE_ELEMENT v1 moves whole files: '${mod.targetPath.value}' does not resolve to a file"
+                )
+            )
+        val targetDir = resolveOrCreateDirectory(mod.destination)
+            ?: return ModificationResult.Failure(
+                modification = mod,
+                error = ModificationError.IOError("Cannot resolve or create destination directory: ${mod.destination}")
+            )
+        return when (val result = refactoringExecutor.moveFile(psiFile, targetDir)) {
+            is Result.Success -> ModificationResult.Success(
+                modification = mod,
+                affectedPath = mod.targetPath,
+                resultContent = mod.destination
+            )
+
+            is Result.Failure -> ModificationResult.Failure(
+                modification = mod,
+                error = ModificationError.InvalidOperation(result.error)
+            )
+        }
+    }
+
+    /** Resolves a project-relative directory, creating missing segments in a write command. */
+    private fun resolveOrCreateDirectory(relativeDirPath: String): PsiDirectory? {
+        val projectBasePath = project.basePath ?: return null
+        val normalized = relativeDirPath.replace('\\', '/').trim('/')
+        if (normalized.isBlank()) return null
+        val psiManager = PsiManager.getInstance(project)
+
+        val existing = VfsUtil.findFileByIoFile(File("$projectBasePath/$normalized"), true)
+        if (existing != null && existing.isDirectory) {
+            return runReadAction { psiManager.findDirectory(existing) }
+        }
+
+        var created: PsiDirectory? = null
+        val app = ApplicationManager.getApplication()
+        val action = {
+            WriteCommandAction.runWriteCommandAction(project) {
+                val baseVf = VfsUtil.findFileByIoFile(File(projectBasePath), true) ?: return@runWriteCommandAction
+                val baseDir = psiManager.findDirectory(baseVf) ?: return@runWriteCommandAction
+                created = createDirectoryPath(baseDir, normalized)
+            }
+        }
+        if (app.isDispatchThread) action() else app.invokeAndWait(action)
+        return created
     }
 
     /**

@@ -90,13 +90,17 @@ data class InteractionResponse(
  * Модификация в clipboard-формате.
  */
 data class InteractionModification(
-    val type: String,       // CREATE_FILE, REPLACE_FILE, REPLACE_ELEMENT, CREATE_ELEMENT, DELETE_ELEMENT, ADD_IMPORT, REMOVE_IMPORT
+    val type: String,       // CREATE_FILE, REPLACE_FILE, REPLACE_ELEMENT, CREATE_ELEMENT, DELETE_ELEMENT, ADD_IMPORT, REMOVE_IMPORT, RENAME_ELEMENT, SAFE_DELETE, MOVE_ELEMENT
     val path: String,
     val content: String = "",
     val elementKind: String = "FILE",
     val position: String = "LAST_CHILD",
     /** For ADD_IMPORT/REMOVE_IMPORT: fully qualified import path, e.g. "com.example.dto.UserDTO" */
-    val importPath: String = ""
+    val importPath: String = "",
+    /** For RENAME_ELEMENT: the new element name. */
+    val newName: String = "",
+    /** For MOVE_ELEMENT: project-relative destination directory, e.g. "src/main/kotlin/com/example/util". */
+    val destination: String = ""
 )
 
 /**

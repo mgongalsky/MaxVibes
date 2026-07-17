@@ -23,10 +23,12 @@ data class AppliedModInfo(
 
 /** Derives the [ModificationCategory] from a [Modification] instance. */
 fun Modification.toCategory(): ModificationCategory = when (this) {
-    is Modification.CreateFile, is Modification.ReplaceFile, is Modification.DeleteFile ->
+    is Modification.CreateFile, is Modification.ReplaceFile, is Modification.DeleteFile,
+    is Modification.MoveElement ->
         ModificationCategory.FILE_LEVEL
 
-    is Modification.CreateElement, is Modification.ReplaceElement, is Modification.DeleteElement ->
+    is Modification.CreateElement, is Modification.ReplaceElement, is Modification.DeleteElement,
+    is Modification.RenameElement, is Modification.SafeDelete ->
         ModificationCategory.ELEMENT_LEVEL
 
     is Modification.AddImport, is Modification.RemoveImport ->

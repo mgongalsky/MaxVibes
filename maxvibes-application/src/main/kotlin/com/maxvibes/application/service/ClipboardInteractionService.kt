@@ -830,6 +830,20 @@ class ClipboardInteractionService(
                 if (fqn.isBlank()) null else Modification.RemoveImport(targetPath = elementPath, importPath = fqn)
             }
 
+            "RENAME_ELEMENT" -> {
+                val newName = mod.newName.trim()
+                if (newName.isBlank()) null
+                else Modification.RenameElement(targetPath = elementPath, newName = newName)
+            }
+
+            "SAFE_DELETE" -> Modification.SafeDelete(targetPath = elementPath)
+
+            "MOVE_ELEMENT" -> {
+                val destination = mod.destination.trim()
+                if (destination.isBlank()) null
+                else Modification.MoveElement(targetPath = elementPath, destination = destination)
+            }
+
             else -> null
         }
     }

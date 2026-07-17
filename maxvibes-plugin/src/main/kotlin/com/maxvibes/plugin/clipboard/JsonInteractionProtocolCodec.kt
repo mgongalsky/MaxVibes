@@ -226,7 +226,9 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
                 ?: InteractionRequestSchema.DEFAULT_ELEMENT_KIND,
             position = obj[InteractionRequestSchema.MOD_POSITION]?.jsonPrimitive?.contentOrNull
                 ?: InteractionRequestSchema.DEFAULT_POSITION,
-            importPath = obj[InteractionRequestSchema.MOD_IMPORT_PATH]?.jsonPrimitive?.contentOrNull ?: ""
+            importPath = obj[InteractionRequestSchema.MOD_IMPORT_PATH]?.jsonPrimitive?.contentOrNull ?: "",
+            newName = obj[InteractionRequestSchema.MOD_NEW_NAME]?.jsonPrimitive?.contentOrNull ?: "",
+            destination = obj[InteractionRequestSchema.MOD_DESTINATION]?.jsonPrimitive?.contentOrNull ?: ""
         )
     }
 

@@ -133,6 +133,8 @@ object InteractionRequestSchema {
 
     /** Fully-qualified import path for ADD_IMPORT / REMOVE_IMPORT. */
     const val MOD_IMPORT_PATH = "importPath"
+    const val MOD_NEW_NAME = "newName"
+    const val MOD_DESTINATION = "destination"
 
     // ── Fallback defaults ──────────────────────────────────────────────
 
