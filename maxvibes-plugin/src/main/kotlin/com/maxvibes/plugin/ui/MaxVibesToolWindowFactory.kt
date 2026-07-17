@@ -52,6 +52,22 @@ class MaxVibesToolPanel(private val project: Project, private val toolWindow: To
 
         showChat()
 
+        // Editor actions (Vibe: On Element) deliver prefills through the project bus.
+        // The connection is tied to chatPanel's lifetime (ChatPanel is a Disposable
+        // registered on the tool window), so no leak on content re-creation.
+        project.messageBus.connect(chatPanel).subscribe(
+            ChatInputListener.TOPIC,
+            object : ChatInputListener {
+                override fun onPrefill(prefill: EditorPrefill) {
+                    // showChat() posts its card switch via invokeLater; posting acceptPrefill
+                    // as a SECOND invokeLater guarantees it runs after the switch, so the
+                    // focus request lands on a visible input area.
+                    showChat()
+                    SwingUtilities.invokeLater { chatPanel.acceptPrefill(prefill) }
+                }
+            }
+        )
+
         MaxVibesLogger.info("ToolWindow", "init", mapOf("project" to project.name))
         com.intellij.openapi.util.Disposer.register(project, com.intellij.openapi.Disposable {
             MaxVibesLogger.shutdown()
@@ -64,7 +80,7 @@ class MaxVibesToolPanel(private val project: Project, private val toolWindow: To
      * Wrapped in [SwingUtilities.invokeLater] to defer [CardLayout.show] past the current
      * event-dispatch cycle. This prevents a re-entrant layout pass that occurs when
      * [EditorTextField] lazily initialises its inner editor inside [BoxLayout.preferredLayoutSize],
-     * which would trigger a second layout pass before the first one completes → NPE on `xTotal`.
+     * which would trigger a second layout pass before the first one completes \u2192 NPE on `xTotal`.
      */
     private fun showChat() {
         SwingUtilities.invokeLater {
@@ -76,7 +92,7 @@ class MaxVibesToolPanel(private val project: Project, private val toolWindow: To
     /**
      * Shows the session-tree card.
      *
-     * Same [SwingUtilities.invokeLater] guard as [showChat] — ensures the card switch
+     * Same [SwingUtilities.invokeLater] guard as [showChat] \u2014 ensures the card switch
      * happens outside any in-progress layout pass.
      */
     private fun showSessions() {

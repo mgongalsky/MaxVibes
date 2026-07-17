@@ -102,6 +102,9 @@ interface ChatPanelCallbacks {
 
     /** Rebuilds the attached-images preview strip (empty list hides it). */
     fun onImagesChanged(images: List<AttachedImage>)
+
+    /** Shows/hides the one-shot editor-skill chip; null label hides it. */
+    fun onOneShotChanged(label: String?)
 }
 
 /**
@@ -1613,5 +1616,23 @@ Check:
                 attachedImages = images
             )
         }
+    }
+
+    /** One-shot editor-skill invocation armed by ChatPanel.acceptPrefill; consumed and cleared by the next send. */
+    private class PendingOneShot(val skillName: String?, val elementContext: String?, val label: String)
+
+    /** Armed one-shot editor skill/context; null when nothing is pending. */
+    private var pendingOneShot: PendingOneShot? = null
+
+    /** Arms a one-shot editor skill and/or element context for the next send (editor actions). */
+    fun armOneShot(skillName: String?, elementContext: String?, label: String) {
+        pendingOneShot = PendingOneShot(skillName, elementContext, label)
+        callbacks.onOneShotChanged(label)
+    }
+
+    /** Cancels the armed one-shot skill (chip close button). */
+    fun clearOneShot() {
+        pendingOneShot = null
+        callbacks.onOneShotChanged(null)
     }
 }

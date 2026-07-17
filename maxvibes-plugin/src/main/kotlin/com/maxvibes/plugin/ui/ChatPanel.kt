@@ -1534,4 +1534,66 @@ class ChatPanel(
     override fun addPostApplyErrorsBubble(
         summary: String, details: String, onSend: () -> Unit, onDismiss: () -> Unit
     ): PostApplyErrorsView = conversationPanel.addPostApplyErrorsBubble(summary, details, onSend, onDismiss)
+
+    /** One-shot editor-skill chip; lazily added to [attachmentsPanel] on first use. */
+    private val oneShotChip = JBLabel("").apply {
+        foreground = JBColor(Color(0x7B1FA2), Color(0xBA68C8))
+        font = font.deriveFont(Font.BOLD, 11f)
+        isVisible = false
+    }
+
+    /** Cancels the armed one-shot skill. */
+    private val clearOneShotButton = JButton("\u2715").apply {
+        toolTipText = "Cancel one-shot skill"
+        font = font.deriveFont(9f)
+        preferredSize = Dimension(20, 20)
+        isVisible = false
+        addActionListener { messageController.clearOneShot() }
+    }
+
+    /**
+     * Accepts a prefill from an editor action: fills or appends the input and arms
+     * a one-shot skill/context when present. Does NOT send — the user reviews and
+     * presses Send. EDT only (invoked from the message-bus subscriber).
+     */
+    fun acceptPrefill(prefill: EditorPrefill) {
+        if (prefill.append && inputArea.text.isNotBlank()) {
+            inputArea.text = inputArea.text.trimEnd() + " " + prefill.text
+        } else if (prefill.text.isNotBlank()) {
+            inputArea.text = prefill.text
+        }
+        inputArea.caretPosition = inputArea.text.length
+        inputArea.requestFocusInWindow()
+        if (prefill.oneShotSkillName != null || prefill.elementContext != null) {
+            messageController.armOneShot(
+                prefill.oneShotSkillName,
+                prefill.elementContext,
+                prefill.elementLabel ?: "element"
+            )
+        }
+    }
+
+    /**
+     * Shows/hides the one-shot skill chip. Chip components are lazily added to
+     * [attachmentsPanel] on first call so the existing setupUI stays untouched.
+     * Known cosmetic limitation: an unrelated render() while armed may re-hide the
+     * attachments panel; the armed state lives in the controller, so Send still works.
+     */
+    override fun onOneShotChanged(label: String?) {
+        if (oneShotChip.parent == null) {
+            attachmentsPanel.add(oneShotChip)
+            attachmentsPanel.add(clearOneShotButton)
+        }
+        val armed = label != null
+        oneShotChip.text = if (armed) "\u26A1 " + label + " (1\u00D7)" else ""
+        oneShotChip.isVisible = armed
+        clearOneShotButton.isVisible = armed
+        if (armed) {
+            attachmentsPanel.isVisible = true
+            attachmentsPanel.revalidate()
+            attachmentsPanel.repaint()
+        } else {
+            render(buildState())
+        }
+    }
 }

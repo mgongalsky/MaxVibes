@@ -25,6 +25,9 @@ internal object InteractionRequestBuilder {
      *        Claude Code transport, which delivers the system instruction through
      *        the CLI's `--append-system-prompt` flag rather than embedding it in
      *        every user-event JSON payload.
+     * @param attachedContext one-shot per-message context (pasted trace or an editor
+     *        element attachment). Always forwarded when provided, like [ideErrors] and
+     *        [commandResults] — never stored in state.
      * @param commandResults formatted outcomes of the previous turn's shell commands
      *        (execution output or user declines). One-shot per-message context like
      *        [ideErrors] — always forwarded when provided, never stored in state.
@@ -90,8 +93,11 @@ internal object InteractionRequestBuilder {
                     content = msg.content
                 )
             },
-            // attachedContext: one-shot per-message context — NOT stored in session state.
-            attachedContext = if (isMinimal) null else attachedContext,
+            // attachedContext: one-shot per-message context — ALWAYS forwarded when provided,
+            // like ideErrors and commandResults. The previous minimal-mode nulling silently
+            // dropped traces (and would have dropped editor element attachments) added
+            // mid-session in Claude Code / Clipboard dialogs.
+            attachedContext = attachedContext,
             // ideErrors: one-shot per-message diagnostics — always forwarded when provided.
             ideErrors = ideErrors,
             // commandResults: one-shot outcomes of the previous turn's commands —
