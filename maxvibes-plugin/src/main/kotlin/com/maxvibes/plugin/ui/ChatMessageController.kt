@@ -111,7 +111,8 @@ interface ChatPanelCallbacks {
         mods: List<PendingModRowUi>,
         onApply: (Set<Int>) -> Unit,
         onReject: () -> Unit,
-        onDiff: ((Int) -> Unit)? = null
+        onDiff: ((Int) -> Unit)? = null,
+        onDiffAll: (() -> Unit)? = null
     ): PendingModsBlockView
 }
 
@@ -1038,7 +1039,8 @@ class ChatMessageController(
                     mods = rows,
                     onApply = { indices -> approve(indices) },
                     onReject = { approve(emptySet()) },
-                    onDiff = { index -> ModificationDiffHelper.show(project, rows[index]) }
+                    onDiff = { index -> ModificationDiffHelper.show(project, rows[index]) },
+                    onDiffAll = { ModificationDiffHelper.showAll(project, rows) }
                 )
                 if (result.heldCommands > 0) {
                     callbacks.appendToChat(

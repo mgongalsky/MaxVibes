@@ -555,15 +555,17 @@ class ConversationPanel(
 
     /**
      * Renders the pending-modifications approval card: one row per proposed change
-     * (checkbox, type icon, clickable element path, optional explanation, optional Diff
-     * button) plus Apply selected / Apply all / Reject all controls. Returns a
+     * (checkbox, type icon, clickable compact element path with the full path in the
+     * tooltip, optional explanation, per-row Diff button pinned to the right edge)
+     * plus Diff all / Apply selected / Apply all / Reject all controls. Returns a
      * [PendingModsBlockView] handle the controller uses to freeze the card.
      */
     fun addPendingModsBubble(
         mods: List<PendingModRowUi>,
         onApply: (Set<Int>) -> Unit,
         onReject: () -> Unit,
-        onDiff: ((Int) -> Unit)? = null
+        onDiff: ((Int) -> Unit)? = null,
+        onDiffAll: (() -> Unit)? = null
     ): PendingModsBlockView {
         val bg = JBColor(Color(0xE8F0FE), Color(0x1E2A38))
         val accent = JBColor(Color(0x2E86C1), Color(0x5DADE2))
@@ -591,7 +593,7 @@ class ConversationPanel(
         }
 
         mods.forEachIndexed { index, mod ->
-            val row = JPanel(BorderLayout()).apply {
+            val row = JPanel(BorderLayout(6, 0)).apply {
                 background = bg
                 alignmentX = Component.LEFT_ALIGNMENT
                 border = JBUI.Borders.empty(3, 0)
@@ -618,20 +620,12 @@ class ConversationPanel(
             })
             headLine.add(
                 clickableLabel(
-                    text = mod.path,
+                    text = ChatNavigationHelper.formatElementPath(mod.path),
                     normalColor = JBColor(Color(0x1A5276), Color(0x85C1E9)),
                     hoverColor = accent,
                     onClick = { onNavigateToPath(mod.path) }
-                )
+                ).also { it.toolTipText = mod.path }
             )
-            if (onDiff != null && mod.content.isNotBlank()) {
-                headLine.add(JButton("Diff").apply {
-                    font = font.deriveFont(10f)
-                    isFocusPainted = false
-                    margin = JBUI.insets(0, 4)
-                    addActionListener { onDiff(index) }
-                })
-            }
             info.add(headLine)
             if (mod.explanation.isNotBlank()) {
                 info.add(JBTextArea(mod.explanation).apply {
@@ -644,6 +638,18 @@ class ConversationPanel(
                 })
             }
             row.add(info, BorderLayout.CENTER)
+
+            if (onDiff != null && mod.content.isNotBlank()) {
+                row.add(JPanel(FlowLayout(FlowLayout.RIGHT, 0, 0)).apply {
+                    background = bg
+                    add(JButton("Diff").apply {
+                        font = font.deriveFont(10f)
+                        isFocusPainted = false
+                        margin = JBUI.insets(0, 4)
+                        addActionListener { onDiff(index) }
+                    })
+                }, BorderLayout.EAST)
+            }
             body.add(row)
         }
 
@@ -653,6 +659,13 @@ class ConversationPanel(
         val statusRow = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             background = bg; alignmentX = Component.LEFT_ALIGNMENT
+        }
+        if (onDiffAll != null && mods.any { it.content.isNotBlank() }) {
+            controls.add(JButton("\uD83D\uDD0D Diff all").apply {
+                isFocusPainted = false
+                toolTipText = "Open one diff window and page through all changes (Alt+\u2190 / Alt+\u2192)"
+                addActionListener { onDiffAll() }
+            })
         }
         controls.add(applySelectedBtn); controls.add(applyAllBtn); controls.add(rejectBtn)
 

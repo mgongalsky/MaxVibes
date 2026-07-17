@@ -1,7 +1,9 @@
 package com.maxvibes.plugin.ui
 
 import com.intellij.diff.DiffContentFactory
+import com.intellij.diff.DiffDialogHints
 import com.intellij.diff.DiffManager
+import com.intellij.diff.chains.SimpleDiffRequestChain
 import com.intellij.diff.requests.SimpleDiffRequest
 import com.intellij.openapi.application.runReadAction
 import com.intellij.openapi.fileEditor.FileDocumentManager
@@ -13,7 +15,7 @@ import com.maxvibes.adapter.psi.operation.PsiNavigator
 import com.maxvibes.domain.model.code.ElementPath
 
 /**
- * Opens the standard IntelliJ diff window for one pending modification
+ * Opens the standard IntelliJ diff window for pending modifications
  * (ModApproval feature, Step 4).
  *
  * "Before" side:
@@ -26,30 +28,50 @@ import com.maxvibes.domain.model.code.ElementPath
  *
  * "After" side: the proposed content; empty for DELETE_*.
  *
- * Ops with no meaningful text diff (imports, rename, move) fall back to a plain
- * info dialog — the approval card normally hides the Diff button for those anyway.
+ * [showAll] builds a [SimpleDiffRequestChain] over every diffable row and opens ONE
+ * window — the user pages through the changes with the diff toolbar arrows (Alt+Left /
+ * Alt+Right) or the chain dropdown instead of opening a tab per modification.
  *
- * EDT-only (invoked from the approval card's Diff button).
+ * Ops with no meaningful text diff (imports, rename, move) fall back to a plain
+ * info dialog in [show] and are skipped in [showAll].
+ *
+ * EDT-only (invoked from the approval card's buttons).
  */
 object ModificationDiffHelper {
 
+    /** Shows the diff for a single pending modification. */
     fun show(project: Project, row: PendingModRowUi) {
+        val request = buildRequest(project, row)
+        if (request == null) {
+            // No meaningful diff for this op type (or path failed to parse) — show raw content.
+            Messages.showInfoMessage(project, row.content.take(4000), "Proposed content — ${row.path}")
+            return
+        }
+        DiffManager.getInstance().showDiff(project, request)
+    }
+
+    /** Shows all diffable modifications as one navigable diff chain. */
+    fun showAll(project: Project, rows: List<PendingModRowUi>) {
+        val requests = rows.mapNotNull { buildRequest(project, it) }
+        when {
+            requests.isEmpty() -> return
+            requests.size == 1 -> DiffManager.getInstance().showDiff(project, requests.first())
+            else -> DiffManager.getInstance()
+                .showDiff(project, SimpleDiffRequestChain(requests), DiffDialogHints.DEFAULT)
+        }
+    }
+
+    private fun buildRequest(project: Project, row: PendingModRowUi): SimpleDiffRequest? {
         val type = row.type.uppercase()
-        val before: String? = try {
+        val before: String = try {
             when (type) {
                 "CREATE_FILE", "CREATE_ELEMENT" -> ""
                 "REPLACE_ELEMENT", "DELETE_ELEMENT", "SAFE_DELETE" -> currentElementText(project, row.path) ?: ""
                 "REPLACE_FILE", "DELETE_FILE" -> currentFileText(project, row.path) ?: ""
-                else -> null
+                else -> return null
             }
         } catch (e: Exception) {
-            null
-        }
-
-        if (before == null) {
-            // No meaningful diff for this op type (or path failed to parse) — show raw content.
-            Messages.showInfoMessage(project, row.content.take(4000), "Proposed content — ${row.path}")
-            return
+            return null
         }
 
         val after = when (type) {
@@ -64,14 +86,13 @@ object ModificationDiffHelper {
         }
         val fileType = FileTypeManager.getInstance().getFileTypeByFileName(fileName)
         val factory = DiffContentFactory.getInstance()
-        val request = SimpleDiffRequest(
-            "MaxVibes: ${row.type} — $fileName",
+        return SimpleDiffRequest(
+            "${row.type} — ${ChatNavigationHelper.formatElementPath(row.path)}",
             factory.create(project, before, fileType),
             factory.create(project, after, fileType),
             "Current",
             "Proposed"
         )
-        DiffManager.getInstance().showDiff(project, request)
     }
 
     private fun currentElementText(project: Project, path: String): String? {

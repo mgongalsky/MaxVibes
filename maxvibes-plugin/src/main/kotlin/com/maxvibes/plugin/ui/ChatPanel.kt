@@ -477,8 +477,9 @@ class ChatPanel(
         mods: List<PendingModRowUi>,
         onApply: (Set<Int>) -> Unit,
         onReject: () -> Unit,
-        onDiff: ((Int) -> Unit)?
-    ): PendingModsBlockView = conversationPanel.addPendingModsBubble(mods, onApply, onReject, onDiff)
+        onDiff: ((Int) -> Unit)?,
+        onDiffAll: (() -> Unit)?
+    ): PendingModsBlockView = conversationPanel.addPendingModsBubble(mods, onApply, onReject, onDiff, onDiffAll)
 
     override fun addQuestionBubble(
         question: String,
