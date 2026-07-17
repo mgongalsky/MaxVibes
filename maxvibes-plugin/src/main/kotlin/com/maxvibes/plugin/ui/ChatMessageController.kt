@@ -1038,15 +1038,7 @@ class ChatMessageController(
                     mods = rows,
                     onApply = { indices -> approve(indices) },
                     onReject = { approve(emptySet()) },
-                    onDiff = { index ->
-                        val row = rows[index]
-                        // Placeholder until Step 4 (ModificationDiffHelper): show proposed content.
-                        com.intellij.openapi.ui.Messages.showInfoMessage(
-                            project,
-                            row.content.take(4000),
-                            "Proposed content — ${row.path}"
-                        )
-                    }
+                    onDiff = { index -> ModificationDiffHelper.show(project, rows[index]) }
                 )
                 if (result.heldCommands > 0) {
                     callbacks.appendToChat(
