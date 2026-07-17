@@ -136,6 +136,9 @@ object InteractionRequestSchema {
     const val MOD_NEW_NAME = "newName"
     const val MOD_DESTINATION = "destination"
 
+    /** Optional user-facing 1-2 sentence explanation of why a modification is needed (shown in the approval card). */
+    const val MOD_EXPLANATION = "explanation"
+
     // ── Fallback defaults ──────────────────────────────────────────────
 
     /** Default element kind when the field is absent in a modification entry. */

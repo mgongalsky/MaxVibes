@@ -473,6 +473,13 @@ class ChatPanel(
         onRun: () -> Unit, onDecline: (String?) -> Unit
     ): CommandBlockView = conversationPanel.addCommandBubble(command, reason, warnings, onRun, onDecline)
 
+    override fun addPendingModsBubble(
+        mods: List<PendingModRowUi>,
+        onApply: (Set<Int>) -> Unit,
+        onReject: () -> Unit,
+        onDiff: ((Int) -> Unit)?
+    ): PendingModsBlockView = conversationPanel.addPendingModsBubble(mods, onApply, onReject, onDiff)
+
     override fun addQuestionBubble(
         question: String,
         options: List<String>,

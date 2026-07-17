@@ -105,6 +105,14 @@ interface ChatPanelCallbacks {
 
     /** Shows/hides the one-shot editor-skill chip; null label hides it. */
     fun onOneShotChanged(label: String?)
+
+    /** Renders the pending-modifications approval card; returns a handle to freeze it. */
+    fun addPendingModsBubble(
+        mods: List<PendingModRowUi>,
+        onApply: (Set<Int>) -> Unit,
+        onReject: () -> Unit,
+        onDiff: ((Int) -> Unit)? = null
+    ): PendingModsBlockView
 }
 
 /**
@@ -286,10 +294,12 @@ class ChatMessageController(
     }
 
     /**
-     * Approve the last Claude Code response. Applies pending modifications (if any) or
-     * gathers requested files, then continues. Called from [ChatPanel] on the Approve button.
+     * Approve the last Claude Code response. Applies pending modifications (all when
+     * [selectedIndices] is null, a subset otherwise; empty set = reject all) or gathers
+     * requested files, then continues. Called from [ChatPanel] on the Approve button and
+     * from the pending-modifications card.
      */
-    fun approve() {
+    fun approve(selectedIndices: Set<Int>? = null) {
         saveAllDocuments()
         val session = chatTreeService.getActiveSession()
         val trace = attachedTrace
@@ -305,16 +315,26 @@ class ChatMessageController(
             "Controller", "approve", mapOf(
                 "sessionId" to session.id,
                 "hasTrace" to (trace != null),
-                "hasErrors" to (errs != null)
+                "hasErrors" to (errs != null),
+                "selected" to (selectedIndices?.size ?: -1)
             )
         )
+        pendingModsView?.setResolved(
+            when {
+                selectedIndices == null -> "\u2714 Approved — applying all\u2026"
+                selectedIndices.isEmpty() -> "\u2716 Rejected — nothing applied"
+                else -> "\u2714 Applying ${selectedIndices.size} selected\u2026"
+            }
+        )
+        pendingModsView = null
         callbacks.setInputEnabled(false)
         callbacks.setStatus("Claude Code: approving...")
         runClaudeCodeBg("Claude Code: approving...", session) {
             service.claudeCodeService.approve(
                 sessionId = session.id,
                 attachedContext = trace,
-                ideErrors = errs
+                ideErrors = errs,
+                selectedIndices = selectedIndices
             )
         }
     }
@@ -355,6 +375,15 @@ class ChatMessageController(
     )
 
     private var commandTurn: CommandTurn? = null
+
+    /** Freezes the pending-modifications card, e.g. when the user rejects by typing a new message. */
+    private fun dismissPendingModsCard(text: String) {
+        pendingModsView?.setResolved(text)
+        pendingModsView = null
+    }
+
+    /** View handle of the active pending-modifications card; null when no card is shown. */
+    private var pendingModsView: PendingModsBlockView? = null
 
     /**
      * Renders interactive question blocks (option buttons + a free-form field). The main
@@ -997,11 +1026,27 @@ class ChatMessageController(
                     requestedViews = emptyList(),
                     appliedModifications = emptyList()
                 )
-                val proposal = result.proposedModifications.joinToString("\n") {
-                    "  • ${it.type}  ${it.path}"
+                val rows = result.proposedModifications.map {
+                    PendingModRowUi(
+                        type = it.type,
+                        path = it.path,
+                        explanation = it.explanation,
+                        content = it.content
+                    )
                 }
-                callbacks.appendToChat(
-                    "📝 Proposed ${result.proposedModifications.size} modification(s):\n$proposal"
+                pendingModsView = callbacks.addPendingModsBubble(
+                    mods = rows,
+                    onApply = { indices -> approve(indices) },
+                    onReject = { approve(emptySet()) },
+                    onDiff = { index ->
+                        val row = rows[index]
+                        // Placeholder until Step 4 (ModificationDiffHelper): show proposed content.
+                        com.intellij.openapi.ui.Messages.showInfoMessage(
+                            project,
+                            row.content.take(4000),
+                            "Proposed content — ${row.path}"
+                        )
+                    }
                 )
                 if (result.heldCommands > 0) {
                     callbacks.appendToChat(
@@ -1016,7 +1061,7 @@ class ChatMessageController(
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
                 callbacks.setStatus(
-                    "🤖 ${result.proposedModifications.size} modification(s) awaiting approval — Approve to apply, or type to reject"
+                    "🤖 ${result.proposedModifications.size} modification(s) awaiting approval — use the card, or type to reject"
                 )
             }
 
@@ -1418,6 +1463,7 @@ Check:
     ) {
         saveAllDocuments()
         dismissQuestionTurn()
+        dismissPendingModsCard("\u2716 Rejected — superseded by a new message")
         val trace = attachedTrace
         val errs = attachedErrors
         val imgs = attachedImages.toList()

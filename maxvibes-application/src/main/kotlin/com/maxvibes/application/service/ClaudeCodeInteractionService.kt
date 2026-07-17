@@ -119,6 +119,12 @@ class ClaudeCodeInteractionService(
     /** Session that owns the pending modifications. */
     private var pendingOwner: String? = null
 
+    /** Session that owns [rejectionNote]. */
+    private var rejectionNoteOwner: String? = null
+
+    /** Rejected-modifications summary from a selective approve — prefixed to the NEXT user message of the owning session. */
+    private var rejectionNote: String? = null
+
     // ==================== Public API ====================
 
     /**
@@ -208,22 +214,36 @@ class ClaudeCodeInteractionService(
     /**
      * Confirms an [ClipboardSessionStatus.AWAITING_APPROVE] response.
      *
-     * When pending modifications exist, Approve applies them (and releases any held
-     * commands). Otherwise the legacy requestedViews-gathering flow runs: gathers the
-     * files the LLM requested in its last assistant message, transitions the session
-     * back to [ClipboardSessionStatus.SESSION_ACTIVE], and sends a minimal-context
-     * follow-up to the same Claude Code process.
+     * When pending modifications exist, Approve applies them: all when [selectedIndices]
+     * is null (legacy button), otherwise only the selected subset. Rejected entries are
+     * summarised into [rejectionNote] and prefixed to the NEXT user message — no extra
+     * round-trip. An empty set is a full reject: nothing is applied, held commands are
+     * dropped.
      *
+     * Otherwise the legacy requestedViews-gathering flow runs: gathers the files the LLM
+     * requested in its last assistant message, transitions the session back to
+     * [ClipboardSessionStatus.SESSION_ACTIVE], and sends a minimal-context follow-up to
+     * the same Claude Code process.
+     *
+     * @param selectedIndices indices into the proposed-modifications list to apply;
+     *        null = apply all, empty set = reject all.
      * @return a new [ClaudeCodeStepResult] describing the post-approve state.
      */
     suspend fun approve(
         sessionId: String,
         attachedContext: String? = null,
         ideErrors: String? = null,
-        specificPromptContent: String? = null
+        specificPromptContent: String? = null,
+        selectedIndices: Set<Int>? = null
     ): ClaudeCodeStepResult {
         sessionLog?.begin(sessionId)
-        sessionLog?.event("approve", mapOf("status" to sessionManager.statusFor(sessionId).name))
+        sessionLog?.event(
+            "approve",
+            mapOf(
+                "status" to sessionManager.statusFor(sessionId).name,
+                "selected" to (selectedIndices?.size ?: -1)
+            )
+        )
         if (sessionManager.statusFor(sessionId) != ClipboardSessionStatus.AWAITING_APPROVE) {
             return error("Approve is only valid in AWAITING_APPROVE state")
         }
@@ -232,7 +252,7 @@ class ClaudeCodeInteractionService(
         // workspace restore and requestedViews reading below — pending modifications have no
         // requestedViews, so the legacy path would fail with "No assistant message to approve".
         if (pendingOwner == sessionId && pendingModifications.isNotEmpty()) {
-            return approvePendingModifications(sessionId)
+            return approvePendingModifications(sessionId, selectedIndices)
         }
 
         // Recover workspace if the IDE was restarted between turns.
@@ -350,9 +370,10 @@ class ClaudeCodeInteractionService(
     fun status(sessionId: String): ClipboardSessionStatus = sessionManager.statusFor(sessionId)
 
     /**
-     * Resets the Claude Code session: clears in-memory workspace, transitions session to IDLE,
-     * and asks the transport to release its process. The next call to [handleUserInput] will
-     * start a fresh process and a fresh claude session.
+     * Resets the Claude Code session: clears in-memory workspace (including any pending
+     * modifications and stored rejection note), transitions session to IDLE, and asks the
+     * transport to release its process. The next call to [handleUserInput] will start a
+     * fresh process and a fresh claude session.
      */
     fun reset(sessionId: String) {
         log("Session reset (sessionId=$sessionId)")
@@ -360,6 +381,8 @@ class ClaudeCodeInteractionService(
         sessionState = null
         sessionStateOwner = null
         clearPending()
+        rejectionNote = null
+        rejectionNoteOwner = null
         sessionManager.transition(sessionId, ClipboardEvent.Reset)
         try {
             claudeCodePort.shutdown()
@@ -381,6 +404,16 @@ class ClaudeCodeInteractionService(
         specificPromptContent: String?,
         attachedImages: List<AttachedImage> = emptyList()
     ): ClaudeCodeStepResult {
+        // Consume a stored rejection note (selective approve): prefix it to this message so
+        // the LLM learns which proposals were rejected without an extra round-trip.
+        val note = rejectionNote?.takeIf { rejectionNoteOwner == sessionId }
+        if (note != null) {
+            rejectionNote = null
+            rejectionNoteOwner = null
+            log("Prefixing rejection note to the next user message")
+        }
+        val effectiveInput = if (note == null) userInput else "$note\n\n$userInput"
+
         val isFirst = sessionManager.statusFor(sessionId) == ClipboardSessionStatus.IDLE
 
         if (isFirst) {
@@ -403,7 +436,7 @@ class ClaudeCodeInteractionService(
             )
 
             sessionState = ClipboardSessionState(
-                currentMessage = userInput,
+                currentMessage = effectiveInput,
                 projectContext = projectContext,
                 dialogHistory = history.toMutableList(),
                 prompts = claudePrompts,
@@ -411,7 +444,7 @@ class ClaudeCodeInteractionService(
                 planOnly = planOnly
             )
             sessionStateOwner = sessionId
-            addToHistory(ChatRole.USER, userInput)
+            addToHistory(ChatRole.USER, effectiveInput)
         } else {
             log("Continuing Claude Code session (sessionId=$sessionId)")
             if (sessionState == null || sessionStateOwner != sessionId) {
@@ -422,11 +455,11 @@ class ClaudeCodeInteractionService(
             val state = sessionState ?: return error("No active workspace")
             // Reflect the new user message in workspace state.
             sessionState = state.copy(
-                currentMessage = userInput,
+                currentMessage = effectiveInput,
                 planOnly = planOnly
             )
             sessionStateOwner = sessionId
-            addToHistory(ChatRole.USER, userInput)
+            addToHistory(ChatRole.USER, effectiveInput)
         }
 
         val freshFiles = if (isFirst) {
@@ -744,30 +777,64 @@ class ClaudeCodeInteractionService(
     }
 
     /**
-     * Applies the modifications held for approval, releases the commands held with them,
-     * and returns a [ClaudeCodeStepResult.Completed]. The assistant message was already
-     * rendered at proposal time, so the completed message stays terse.
+     * Applies the selected subset of the held modifications (null = all), releases the
+     * commands held with them, and returns a [ClaudeCodeStepResult.Completed]. Rejected
+     * entries are summarised into [rejectionNote], which is prefixed to the next user
+     * message — no automatic round-trip is spent on the feedback. An empty selection is
+     * a full reject: nothing is applied and held commands are dropped.
      */
-    private suspend fun approvePendingModifications(sessionId: String): ClaudeCodeStepResult {
-        val mods = pendingModifications
+    private suspend fun approvePendingModifications(
+        sessionId: String,
+        selectedIndices: Set<Int>? = null
+    ): ClaudeCodeStepResult {
+        val all = pendingModifications
         val commands = pendingCommands
         val commitMessage = pendingCommitMessage
+        val valid = selectedIndices?.filter { it in all.indices }?.toSet()
+        val selected = if (valid == null) all else all.filterIndexed { i, _ -> i in valid }
+        val rejected = if (valid == null) emptyList() else all.filterIndexed { i, _ -> i !in valid }
         clearPending()
         sessionManager.transition(sessionId, ClipboardEvent.Approved)
-        log("Applying ${mods.size} approved modification(s), ${commands.size} held command(s)")
+
+        if (rejected.isNotEmpty()) {
+            val listing = rejected.joinToString("; ") { "${it.type} ${it.path}" }
+            rejectionNote = "[USER REJECTED ${rejected.size} of ${all.size} proposed modification(s): $listing. " +
+                    "They were NOT applied" +
+                    (if (selected.isEmpty() && commands.isNotEmpty()) "; the ${commands.size} held command(s) were not run" else "") +
+                    ". Do not re-propose them unless asked.]"
+            rejectionNoteOwner = sessionId
+        }
+
+        if (selected.isEmpty()) {
+            log("User rejected all ${all.size} pending modification(s) via the approval card")
+            sessionLog?.event(
+                "pending modifications rejected via card",
+                mapOf("mods" to all.size, "heldCommands" to commands.size)
+            )
+            return ClaudeCodeStepResult.Completed(
+                message = "Rejected ${all.size} proposed modification(s). Nothing was applied.",
+                modifications = emptyList(),
+                success = true
+            )
+        }
+
+        log("Applying ${selected.size} of ${all.size} approved modification(s), ${commands.size} held command(s)")
         sessionLog?.event(
             "pending modifications approved",
-            mapOf("mods" to mods.size, "commands" to commands.size)
+            mapOf("mods" to selected.size, "of" to all.size, "commands" to commands.size)
         )
 
-        val modResults = applyModifications(mods)
+        val modResults = applyModifications(selected)
         val successCount = modResults.count { it is ModificationResult.Success }
         val failCount = modResults.size - successCount
         if (failCount > 0) notificationPort.showWarning("Applied $successCount changes, $failCount failed")
         else if (successCount > 0) notificationPort.showSuccess("Applied $successCount changes")
 
+        val message = if (rejected.isEmpty()) "Applied approved modifications."
+        else "Applied ${selected.size} of ${all.size} modification(s); ${rejected.size} rejected."
+
         return ClaudeCodeStepResult.Completed(
-            message = "Applied approved modifications.",
+            message = message,
             modifications = modResults,
             success = failCount == 0,
             commitMessage = commitMessage,

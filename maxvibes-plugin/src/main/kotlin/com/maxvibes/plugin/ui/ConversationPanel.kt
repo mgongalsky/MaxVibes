@@ -61,6 +61,22 @@ interface PostApplyErrorsView {
     fun setDismissed()
 }
 
+/** One row of the pending-modifications approval card. */
+data class PendingModRowUi(
+    val type: String,
+    val path: String,
+    val explanation: String = "",
+    val content: String = ""
+)
+
+/**
+ * View handle for the pending-modifications approval card. The controller freezes
+ * the card once the user resolves it (apply/reject) or supersedes it by typing.
+ */
+interface PendingModsBlockView {
+    fun setResolved(text: String)
+}
+
 class ConversationPanel(
     private val project: Project,
     private val onNavigateToPath: (String) -> Unit
@@ -535,6 +551,161 @@ class ConversationPanel(
                 refresh()
             }
         }
+    }
+
+    /**
+     * Renders the pending-modifications approval card: one row per proposed change
+     * (checkbox, type icon, clickable element path, optional explanation, optional Diff
+     * button) plus Apply selected / Apply all / Reject all controls. Returns a
+     * [PendingModsBlockView] handle the controller uses to freeze the card.
+     */
+    fun addPendingModsBubble(
+        mods: List<PendingModRowUi>,
+        onApply: (Set<Int>) -> Unit,
+        onReject: () -> Unit,
+        onDiff: ((Int) -> Unit)? = null
+    ): PendingModsBlockView {
+        val bg = JBColor(Color(0xE8F0FE), Color(0x1E2A38))
+        val accent = JBColor(Color(0x2E86C1), Color(0x5DADE2))
+
+        val checks = mutableListOf<JCheckBox>()
+
+        val body = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            background = bg
+            alignmentX = Component.LEFT_ALIGNMENT
+        }
+
+        val applyLabelBase = "\u2714 Apply selected"
+        val applySelectedBtn = JButton("$applyLabelBase (${mods.size})")
+        val applyAllBtn = JButton("Apply all")
+        val rejectBtn = JButton("\u2716 Reject all")
+
+        fun selectedIndices(): Set<Int> =
+            checks.withIndex().filter { it.value.isSelected }.map { it.index }.toSet()
+
+        fun refreshApplyBtn() {
+            val n = selectedIndices().size
+            applySelectedBtn.text = "$applyLabelBase ($n)"
+            applySelectedBtn.isEnabled = n > 0
+        }
+
+        mods.forEachIndexed { index, mod ->
+            val row = JPanel(BorderLayout()).apply {
+                background = bg
+                alignmentX = Component.LEFT_ALIGNMENT
+                border = JBUI.Borders.empty(3, 0)
+            }
+            val check = JCheckBox().apply {
+                isSelected = true
+                background = bg
+                addActionListener { refreshApplyBtn() }
+            }
+            checks.add(check)
+            row.add(check, BorderLayout.WEST)
+
+            val info = JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                background = bg
+            }
+            val headLine = JPanel(FlowLayout(FlowLayout.LEFT, 6, 0)).apply {
+                background = bg
+                alignmentX = Component.LEFT_ALIGNMENT
+            }
+            headLine.add(JBLabel(categoryIconFor(mod.type) + " " + mod.type).apply {
+                font = font.deriveFont(Font.BOLD, 11f)
+                foreground = accent
+            })
+            headLine.add(
+                clickableLabel(
+                    text = mod.path,
+                    normalColor = JBColor(Color(0x1A5276), Color(0x85C1E9)),
+                    hoverColor = accent,
+                    onClick = { onNavigateToPath(mod.path) }
+                )
+            )
+            if (onDiff != null && mod.content.isNotBlank()) {
+                headLine.add(JButton("Diff").apply {
+                    font = font.deriveFont(10f)
+                    isFocusPainted = false
+                    margin = JBUI.insets(0, 4)
+                    addActionListener { onDiff(index) }
+                })
+            }
+            info.add(headLine)
+            if (mod.explanation.isNotBlank()) {
+                info.add(JBTextArea(mod.explanation).apply {
+                    isEditable = false; lineWrap = true; wrapStyleWord = true
+                    font = JBFont.label().deriveFont(Font.ITALIC, 11f)
+                    foreground = JBColor(Color(0x5D6D7E), Color(0xAAB7B8))
+                    background = bg
+                    border = JBUI.Borders.empty(1, 2, 0, 0)
+                    alignmentX = Component.LEFT_ALIGNMENT
+                })
+            }
+            row.add(info, BorderLayout.CENTER)
+            body.add(row)
+        }
+
+        val controls = JPanel(FlowLayout(FlowLayout.LEFT, 6, 0)).apply {
+            background = bg; alignmentX = Component.LEFT_ALIGNMENT
+        }
+        val statusRow = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            background = bg; alignmentX = Component.LEFT_ALIGNMENT
+        }
+        controls.add(applySelectedBtn); controls.add(applyAllBtn); controls.add(rejectBtn)
+
+        fun freezeInputs() {
+            controls.isVisible = false
+            checks.forEach { it.isEnabled = false }
+        }
+
+        applySelectedBtn.addActionListener { freezeInputs(); onApply(selectedIndices()) }
+        applyAllBtn.addActionListener {
+            checks.forEach { it.isSelected = true }
+            freezeInputs()
+            onApply(checks.indices.toSet())
+        }
+        rejectBtn.addActionListener { freezeInputs(); onReject() }
+
+        addComp(bubble(bg, accent).also { p ->
+            p.add(roleLabel("\uD83D\uDCDD Proposed modifications (${mods.size})", accent), BorderLayout.NORTH)
+            p.add(body, BorderLayout.CENTER)
+            p.add(JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.Y_AXIS); background = bg
+                add(controls); add(statusRow)
+            }, BorderLayout.SOUTH)
+        })
+
+        fun refresh() {
+            messagesPanel.revalidate(); messagesPanel.repaint()
+        }
+
+        return object : PendingModsBlockView {
+            override fun setResolved(text: String) = SwingUtilities.invokeLater {
+                freezeInputs()
+                statusRow.removeAll()
+                statusRow.add(JBLabel(text).apply {
+                    font = font.deriveFont(Font.BOLD, 11f)
+                    foreground = accent
+                    alignmentX = Component.LEFT_ALIGNMENT
+                    border = JBUI.Borders.empty(3, 0, 2, 0)
+                })
+                refresh()
+            }
+        }
+    }
+
+    /** Emoji icon for a modification type shown in the approval card. */
+    private fun categoryIconFor(type: String): String = when (type.uppercase()) {
+        "CREATE_FILE", "CREATE_ELEMENT" -> "\u2795"
+        "REPLACE_FILE", "REPLACE_ELEMENT" -> "\u270E"
+        "DELETE_FILE", "DELETE_ELEMENT", "SAFE_DELETE" -> "\uD83D\uDDD1"
+        "ADD_IMPORT", "REMOVE_IMPORT" -> "\uD83D\uDCE6"
+        "RENAME_ELEMENT" -> "\uD83C\uDFF7"
+        "MOVE_ELEMENT" -> "\uD83D\uDE9A"
+        else -> "\u2699"
     }
 
     /**

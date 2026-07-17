@@ -100,7 +100,9 @@ data class InteractionModification(
     /** For RENAME_ELEMENT: the new element name. */
     val newName: String = "",
     /** For MOVE_ELEMENT: project-relative destination directory, e.g. "src/main/kotlin/com/example/util". */
-    val destination: String = ""
+    val destination: String = "",
+    /** Optional 1-2 sentence user-facing explanation of why this change is needed (ModApproval feature). */
+    val explanation: String = ""
 )
 
 /**
