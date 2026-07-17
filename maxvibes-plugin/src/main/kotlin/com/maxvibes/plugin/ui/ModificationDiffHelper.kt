@@ -11,8 +11,20 @@ import com.intellij.openapi.fileTypes.FileTypeManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.ui.JBColor
+import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBTextArea
+import com.intellij.util.ui.JBFont
+import com.intellij.util.ui.JBUI
 import com.maxvibes.adapter.psi.operation.PsiNavigator
 import com.maxvibes.domain.model.code.ElementPath
+import java.awt.BorderLayout
+import java.awt.Color
+import java.awt.Font
+import javax.swing.JComponent
+import javax.swing.JPanel
+import javax.swing.SwingConstants
+import com.intellij.diff.util.DiffUtil
 
 /**
  * Opens the standard IntelliJ diff window for pending modifications
@@ -27,6 +39,11 @@ import com.maxvibes.domain.model.code.ElementPath
  *  - CREATE_* — empty.
  *
  * "After" side: the proposed content; empty for DELETE_*.
+ *
+ * The modification's `explanation` (when present) is attached to the request via
+ * [DiffUserDataKeys.NOTIFICATIONS] and rendered as a banner ABOVE the diff panes —
+ * in a chain every request carries its own banner, so paging with Alt+Left/Right
+ * always shows the reasoning for the change on screen.
  *
  * [showAll] builds a [SimpleDiffRequestChain] over every diffable row and opens ONE
  * window — the user pages through the changes with the diff toolbar arrows (Alt+Left /
@@ -86,13 +103,42 @@ object ModificationDiffHelper {
         }
         val fileType = FileTypeManager.getInstance().getFileTypeByFileName(fileName)
         val factory = DiffContentFactory.getInstance()
-        return SimpleDiffRequest(
+        val request = SimpleDiffRequest(
             "${row.type} — ${ChatNavigationHelper.formatElementPath(row.path)}",
             factory.create(project, before, fileType),
             factory.create(project, after, fileType),
             "Current",
             "Proposed"
         )
+        if (row.explanation.isNotBlank()) {
+            val explanation = row.explanation
+            // Provider-based notification API: the platform renders the component above the diff panes.
+            DiffUtil.addNotification({ _ -> explanationBanner(explanation) }, request)
+        }
+        return request
+    }
+
+    /** Banner with the LLM's explanation, shown above the diff panes. */
+    private fun explanationBanner(text: String): JComponent {
+        val bg = JBColor(Color(0xE8F0FE), Color(0x1E2A38))
+        return JPanel(BorderLayout()).apply {
+            background = bg
+            border = JBUI.Borders.compound(
+                JBUI.Borders.customLine(JBColor(Color(0x2E86C1), Color(0x5DADE2)), 0, 3, 0, 0),
+                JBUI.Borders.empty(6, 10)
+            )
+            add(JBLabel("\uD83D\uDCA1").apply {
+                border = JBUI.Borders.emptyRight(6)
+                verticalAlignment = SwingConstants.TOP
+            }, BorderLayout.WEST)
+            add(JBTextArea(text).apply {
+                isEditable = false
+                lineWrap = true
+                wrapStyleWord = true
+                background = bg
+                font = JBFont.label().deriveFont(Font.ITALIC)
+            }, BorderLayout.CENTER)
+        }
     }
 
     private fun currentElementText(project: Project, path: String): String? {
