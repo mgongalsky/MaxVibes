@@ -297,6 +297,9 @@ class ChatMessageController(
         if (attachedImages.isNotEmpty()) {
             callbacks.appendToChat("⚠️ ${attachedImages.size} attached image(s) dropped — attach them to a regular message, not to Approve")
         }
+        if (pendingOneShot != null) {
+            callbacks.appendToChat("⚠️ One-shot editor skill dropped — invoke it with a regular message, not with Approve")
+        }
         clearAttachmentsAfterSend()
         MaxVibesLogger.info(
             "Controller", "approve", mapOf(
@@ -1355,11 +1358,16 @@ Check:
     }
 
     fun clearAttachmentsAfterSend() {
+        val hadOneShot = pendingOneShot != null
         attachedTrace = null
         attachedErrors = null
         attachedImages.clear()
+        pendingOneShot = null
         callbacks.onAttachmentsChanged(null, null)
         callbacks.onImagesChanged(emptyList())
+        // Only notify when a one-shot was actually armed — onOneShotChanged(null)
+        // triggers a render() in the panel, redundant on every ordinary send.
+        if (hadOneShot) callbacks.onOneShotChanged(null)
     }
 
     fun createNewSession() {
@@ -1413,7 +1421,16 @@ Check:
         val trace = attachedTrace
         val errs = attachedErrors
         val imgs = attachedImages.toList()
+        // Snapshot the one-shot editor skill BEFORE clearing — clearAttachmentsAfterSend nulls it.
+        val oneShot = pendingOneShot
         clearAttachmentsAfterSend()
+        // One-shot overrides the session skill for exactly this send; the element body
+        // rides the attachedContext (trace) channel, already labeled by the action layer.
+        val effectivePromptName = oneShot?.skillName ?: selectedSpecificPromptName
+        val effectiveTrace = listOfNotNull(
+            oneShot?.elementContext,
+            trace
+        ).takeIf { it.isNotEmpty() }?.joinToString("\n\n")
         MaxVibesLogger.info(
             "Controller", "sendMessage", mapOf(
                 "mode" to mode.name,
@@ -1423,26 +1440,34 @@ Check:
                 "hasErrors" to (errs != null),
                 "images" to imgs.size,
                 "addHistory" to addHistory,
-                "specificPrompt" to (selectedSpecificPromptName ?: "null")
+                "specificPrompt" to (effectivePromptName ?: "null"),
+                "oneShot" to (oneShot?.label ?: "null")
             )
         )
         if (imgs.isNotEmpty() && mode != InteractionMode.CLAUDE_CODE) {
             callbacks.appendToChat("⚠️ ${imgs.size} image(s) dropped — images are only sent in Claude Code mode")
         }
+        if (oneShot != null && (mode == InteractionMode.API || mode == InteractionMode.CHEAP_API)) {
+            callbacks.appendToChat(
+                "⚠️ One-shot editor skill fully works only in Clipboard / Claude Code modes — " +
+                        if (mode == InteractionMode.API) "API mode gets the prefill text only"
+                        else "Cheap API gets the element context but not the skill body"
+            )
+        }
         when (mode) {
-            InteractionMode.API -> dispatchApiMessage(userInput, trace, errs, isPlanOnly, isDryRun)
+            InteractionMode.API -> dispatchApiMessage(userInput, effectiveTrace, errs, isPlanOnly, isDryRun)
             InteractionMode.CLIPBOARD -> dispatchClipboardMessage(
                 userInput,
-                trace,
+                effectiveTrace,
                 errs,
                 isPlanOnly,
                 addHistory,
-                selectedSpecificPromptName
+                effectivePromptName
             )
 
             InteractionMode.CHEAP_API -> dispatchCheapApiMessage(
                 userInput,
-                trace,
+                effectiveTrace,
                 errs,
                 isPlanOnly,
                 isDryRun
@@ -1450,10 +1475,10 @@ Check:
 
             InteractionMode.CLAUDE_CODE -> dispatchClaudeCodeMessage(
                 userInput,
-                trace,
+                effectiveTrace,
                 errs,
                 isPlanOnly,
-                selectedSpecificPromptName,
+                effectivePromptName,
                 images = imgs
             )
         }
