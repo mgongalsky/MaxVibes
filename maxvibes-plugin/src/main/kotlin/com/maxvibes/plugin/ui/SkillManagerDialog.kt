@@ -23,8 +23,9 @@ import javax.swing.ListSelectionModel
 
 /**
  * Skill manager: lists all discovered skills (project, legacy, global), creates new
- * ones from a template and opens SKILL.md files in the IDE editor. Editing happens
- * in the editor — this dialog is a launcher, not an editor.
+ * ones from a template, installs the bundled starter set and opens SKILL.md files
+ * in the IDE editor. Editing happens in the editor — this dialog is a launcher,
+ * not an editor.
  */
 class SkillManagerDialog(
     private val project: Project,
@@ -62,6 +63,11 @@ class SkillManagerDialog(
 
         val buttons = JPanel().apply {
             add(JButton("New Skill").apply { addActionListener { createSkill() } })
+            add(JButton("Install Starter Skills").apply {
+                toolTipText =
+                    "Copy the bundled starter skills (Feathers recipes + quick utilities) into .claude/skills/. Existing skills are never overwritten."
+                addActionListener { installStarterSkills() }
+            })
             add(JButton("Open in Editor").apply { addActionListener { openSelected() } })
             add(JButton("Delete").apply { addActionListener { deleteSelected() } })
             add(JButton("Reload").apply { addActionListener { reload() } })
@@ -115,6 +121,44 @@ class SkillManagerDialog(
         openFile(md)
     }
 
+    /**
+     * Copies bundled starter skills (plugin resources under /skills/<id>/SKILL.md)
+     * into the project's .claude/skills/. Skills whose SKILL.md already exists are
+     * skipped — user edits are never overwritten.
+     */
+    private fun installStarterSkills() {
+        val base = project.basePath ?: return
+        val root = File(base, ".claude/skills")
+        var installed = 0
+        var skipped = 0
+        var failed = 0
+        STARTER_SKILLS.forEach { id ->
+            val dir = File(root, id)
+            if (File(dir, "SKILL.md").exists()) {
+                skipped++
+                return@forEach
+            }
+            val res = javaClass.getResourceAsStream("/skills/$id/SKILL.md")
+            if (res == null) {
+                failed++
+                return@forEach
+            }
+            try {
+                dir.mkdirs()
+                res.use { input -> File(dir, "SKILL.md").writeBytes(input.readBytes()) }
+                installed++
+            } catch (e: Exception) {
+                failed++
+            }
+        }
+        reload()
+        val summary = buildString {
+            append("Installed: $installed, already present: $skipped")
+            if (failed > 0) append(", failed or missing resources: $failed")
+        }
+        Messages.showInfoMessage(project, summary, "Starter Skills")
+    }
+
     private fun openSelected() {
         val path = list.selectedValue?.filePath ?: return
         openFile(File(path))
@@ -143,5 +187,19 @@ class SkillManagerDialog(
     private fun openFile(file: File) {
         val vf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(file) ?: return
         FileEditorManager.getInstance(project).openFile(vf, true)
+    }
+
+    companion object {
+        /** Bundled starter skills shipped as plugin resources under /skills/<id>/SKILL.md. */
+        private val STARTER_SKILLS = listOf(
+            "feathers-characterize",
+            "feathers-seam",
+            "feathers-sprout",
+            "feathers-extract-override",
+            "explain-element",
+            "find-smells",
+            "write-kdoc",
+            "write-unittest"
+        )
     }
 }
