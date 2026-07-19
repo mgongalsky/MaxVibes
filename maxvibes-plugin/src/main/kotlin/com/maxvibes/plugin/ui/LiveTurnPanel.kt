@@ -366,12 +366,30 @@ class LiveTurnPanel(
     private fun narrationDisplay(): String {
         var text = joined("#n")
         val cut = protocolMarkerIndex(text)
-        if (cut == 0) text = PLACEHOLDER
-        else if (cut > 0) text = text.take(cut).trimEnd() + "\n\n" + PLACEHOLDER
+        if (cut >= 0) {
+            // Instead of hiding the whole protocol block behind a placeholder, stream
+            // the `message` field value out of the partial JSON as it arrives.
+            val streamedMessage = extractJsonStringField(text.substring(cut), InteractionRequestSchema.RESP_MESSAGE)
+                ?.takeIf { it.isNotBlank() }
+            val prose = if (cut == 0) "" else text.take(cut).trimEnd() + "\n\n"
+            text = prose + (streamedMessage ?: PLACEHOLDER)
+        }
         return capTail(text)
     }
 
-    private fun thinkingDisplay(): String = capTail(joined("#t"))
+    private fun thinkingDisplay(): String {
+        // CLI thinking deltas (empty on CLIs that redact thinking text) plus the
+        // `reasoning` field value streamed out of the partial protocol JSON.
+        val thinking = joined("#t")
+        val narr = joined("#n")
+        val cut = protocolMarkerIndex(narr)
+        val jsonReasoning = if (cut >= 0)
+            extractJsonStringField(narr.substring(cut), InteractionRequestSchema.RESP_REASONING)
+                ?.takeIf { it.isNotBlank() }
+        else null
+        val combined = listOfNotNull(thinking.takeIf { it.isNotBlank() }, jsonReasoning).joinToString("\n\n")
+        return capTail(combined)
+    }
 
     /**
      * Earliest index of a protocol-block marker in the visible narration, or -1.
@@ -393,6 +411,51 @@ class LiveTurnPanel(
         }
         if (best < 0 && text.trimStart().startsWith("{")) best = 0
         return best
+    }
+
+    /**
+     * Streams the value of a top-level string field out of a PARTIAL protocol-JSON
+     * block: finds `"field"`, skips the colon, then decodes the string literal up to
+     * the closing quote — or up to the end of the received prefix while the value is
+     * still being streamed. Returns null while the field has not appeared yet.
+     * Tolerant of an escape sequence truncated at the stream cut point.
+     */
+    private fun extractJsonStringField(json: String, field: String): String? {
+        val keyIdx = json.indexOf("\"$field\"")
+        if (keyIdx < 0) return null
+        var i = keyIdx + field.length + 2
+        while (i < json.length && (json[i] == ':' || json[i].isWhitespace())) i++
+        if (i >= json.length || json[i] != '"') return null
+        i++
+        val sb = StringBuilder()
+        while (i < json.length) {
+            val c = json[i]
+            if (c == '\\') {
+                if (i + 1 >= json.length) break
+                when (json[i + 1]) {
+                    'n' -> sb.append('\n')
+                    't' -> sb.append('\t')
+                    'r' -> Unit
+                    'u' -> {
+                        if (i + 6 > json.length) {
+                            i = json.length - 2
+                        } else {
+                            json.substring(i + 2, i + 6).toIntOrNull(16)?.let { code -> sb.append(code.toChar()) }
+                            i += 4
+                        }
+                    }
+
+                    else -> sb.append(json[i + 1])
+                }
+                i += 2
+            } else if (c == '"') {
+                break
+            } else {
+                sb.append(c)
+                i++
+            }
+        }
+        return sb.toString()
     }
 
     private fun capTail(s: String): String =
