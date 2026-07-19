@@ -521,24 +521,38 @@ class ClaudeCodeProcessAdapter(
 
         when (val parsed = parser.parse(line)) {
             is StreamJsonEventParser.Line.RateLimit ->
-                emitEvent(AgentStreamEvent.RateLimitUpdate(
-                    parsed.kind, parsed.status, parsed.utilizationPct, parsed.resetsAtEpochSec))
+                emitEvent(
+                    AgentStreamEvent.RateLimitUpdate(
+                        parsed.kind, parsed.status, parsed.utilizationPct, parsed.resetsAtEpochSec
+                    )
+                )
+
             is StreamJsonEventParser.Line.Init -> {
                 lastKnownSessionId = parsed.sessionId ?: lastKnownSessionId
                 turn?.observedSessionId = parsed.sessionId
-                MaxVibesLogger.info(TAG, "session init",
-                    mapOf("sessionId" to (parsed.sessionId ?: "null"), "model" to (parsed.model ?: "null")))
-                sessionLog?.event("claude session_id observed",
-                    mapOf("claudeSessionId" to (parsed.sessionId ?: "null")))
-                emitEvent(AgentStreamEvent.SessionStarted(
-                    sessionId = parsed.sessionId ?: "?",
-                    model = parsed.model ?: "?"))
+                MaxVibesLogger.info(
+                    TAG, "session init",
+                    mapOf("sessionId" to (parsed.sessionId ?: "null"), "model" to (parsed.model ?: "null"))
+                )
+                sessionLog?.event(
+                    "claude session_id observed",
+                    mapOf("claudeSessionId" to (parsed.sessionId ?: "null"))
+                )
+                emitEvent(
+                    AgentStreamEvent.SessionStarted(
+                        sessionId = parsed.sessionId ?: "?",
+                        model = parsed.model ?: "?"
+                    )
+                )
             }
 
             is StreamJsonEventParser.Line.SystemNotice -> {
                 MaxVibesLogger.info(TAG, "notice", mapOf("text" to parsed.text))
                 emitEvent(AgentStreamEvent.Notice(parsed.text))
             }
+
+            is StreamJsonEventParser.Line.ThinkingTokens ->
+                emitEvent(AgentStreamEvent.ThinkingProgress(parsed.estimatedTokens))
 
             is StreamJsonEventParser.Line.Delta ->
                 emitEvent(AgentStreamEvent.NarrationDelta(parsed.messageId, parsed.text, parsed.thinking))
@@ -574,28 +588,40 @@ class ClaudeCodeProcessAdapter(
                 // authoritative assistant text - protocol parsing survives schema drift.
                 val finalText = parsed.finalText?.takeIf { it.isNotBlank() }
                     ?: turn?.snapshotText().orEmpty()
-                MaxVibesLogger.info(TAG, "turn end",
-                    mapOf("isError" to parsed.isError, "finalLen" to finalText.length,
+                MaxVibesLogger.info(
+                    TAG, "turn end",
+                    mapOf(
+                        "isError" to parsed.isError, "finalLen" to finalText.length,
                         "costUsd" to parsed.costUsd, "numTurns" to parsed.numTurns,
-                        "inTok" to parsed.inputTokens, "outTok" to parsed.outputTokens))
+                        "inTok" to parsed.inputTokens, "outTok" to parsed.outputTokens
+                    )
+                )
                 if (parsed.isError) {
-                    emitEvent(AgentStreamEvent.Failed(
-                        finalText.ifBlank { "turn ended with error" },
-                        turn?.snapshotText()?.takeIf { it.isNotBlank() }))
+                    emitEvent(
+                        AgentStreamEvent.Failed(
+                            finalText.ifBlank { "turn ended with error" },
+                            turn?.snapshotText()?.takeIf { it.isNotBlank() })
+                    )
                 } else {
                     emitEvent(AgentStreamEvent.Completed(finalText, stats))
                 }
                 parser.reset()
                 turn?.deferred?.complete(
-                    TurnOutcome.Finished(finalText, parsed.isError, stats))
+                    TurnOutcome.Finished(finalText, parsed.isError, stats)
+                )
             }
 
             is StreamJsonEventParser.Line.Unknown ->
-                MaxVibesLogger.info(TAG, "unknown stream-json line skipped",
-                    mapOf("type" to (parsed.type ?: "unparseable"),
-                        "preview" to line.take(LOG_LINE_PREVIEW_MAX)))
+                MaxVibesLogger.info(
+                    TAG, "unknown stream-json line skipped",
+                    mapOf(
+                        "type" to (parsed.type ?: "unparseable"),
+                        "preview" to line.take(LOG_LINE_PREVIEW_MAX)
+                    )
+                )
 
-            StreamJsonEventParser.Line.Ignored -> { /* service envelope - raw already in CC log */ }
+            StreamJsonEventParser.Line.Ignored -> { /* service envelope - raw already in CC log */
+            }
         }
     }
 

@@ -49,6 +49,13 @@ sealed interface AgentStreamEvent {
     /** Out-of-band notice: api_retry/rate-limit, history compaction, stderr. */
     data class Notice(val text: String) : AgentStreamEvent
 
+    /**
+     * Cumulative hidden-thinking token estimate for the current turn. The thinking
+     * text is redacted server-side, so this counter is the only visible reasoning
+     * signal; rendered in the live header, never as a feed notice (fires every ~1.5s).
+     */
+    data class ThinkingProgress(val estimatedTokens: Int) : AgentStreamEvent
+
     /** Turn finished. [finalText] is the ONLY text that feeds the channel-protocol parser. */
     data class Completed(val finalText: String, val stats: SessionStats) : AgentStreamEvent
 

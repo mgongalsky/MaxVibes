@@ -63,6 +63,13 @@ internal class StreamJsonEventParser {
 
         /** Unrecognised top-level type - caller logs it to the plugin log. */
         data class Unknown(val type: String?) : Line
+
+        /**
+         * system/thinking_tokens: cumulative estimate of hidden-thinking tokens for the
+         * current turn. The thinking text itself is server-redacted (empty thinking_delta),
+         * so this counter is the only visible signal of reasoning progress.
+         */
+        data class ThinkingTokens(val estimatedTokens: Int) : Line
     }
 
     private val json = Json {
@@ -102,6 +109,9 @@ internal class StreamJsonEventParser {
             val tail = delayMs?.takeIf { it > 0 }?.let { " (waiting ${it / 1000}s)" } ?: ""
             Line.SystemNotice("$head: $err$tail")
         }
+        // Fires every ~1.5s while the model reasons internally - a header counter,
+        // never a feed notice (it drowned the feed when mapped to SystemNotice).
+        "thinking_tokens" -> Line.ThinkingTokens(obj.int("estimated_tokens") ?: 0)
         // Fires at every turn start with status="requesting" - zero info for the user;
         // liveness is covered by the last-event-age indicator. Raw line stays in CC log.
         "status" -> Line.Ignored

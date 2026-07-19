@@ -75,6 +75,9 @@ class LiveTurnPanel(
     private var lastThink = ""
     private var thinkExpanded = true
 
+    /** Cumulative hidden-thinking token estimate for the current turn (header counter). */
+    private var thinkingTokens = 0
+
     // ---- components ----
     private val headerLabel = JBLabel("").apply {
         font = font.deriveFont(Font.BOLD, 11f)
@@ -237,20 +240,25 @@ class LiveTurnPanel(
                 model = event.model
                 addFeedLine("session ${event.sessionId.take(8)} \u00B7 ${event.model}", neutralColor)
             }
+
             is AgentStreamEvent.NarrationDelta -> {
                 messageIds.add(event.messageId)
                 appendSegment(keyOf(event.messageId, event.thinking), event.text, replace = false)
             }
+
             is AgentStreamEvent.NarrationMessage -> {
                 messageIds.add(event.messageId)
                 appendSegment(keyOf(event.messageId, event.thinking), event.text, replace = true)
             }
+
+            is AgentStreamEvent.ThinkingProgress -> thinkingTokens = event.estimatedTokens
             is AgentStreamEvent.ToolStarted -> {
                 val base = "${event.name} ${event.summary}".trim()
                 val label = feedLabel("\u23F3 $base", neutralColor)
                 toolRows[event.toolUseId] = ToolRow(System.currentTimeMillis(), label, base)
                 addFeedComponent(label)
             }
+
             is AgentStreamEvent.RateLimitUpdate -> Unit
             is AgentStreamEvent.ToolFinished -> {
                 val row = toolRows.remove(event.toolUseId)
@@ -260,11 +268,16 @@ class LiveTurnPanel(
                 val base = row?.base ?: (event.summary ?: event.toolUseId)
                 val text = (if (event.ok) "\u2713 " else "\u2717 ") + base + dur
                 val color = if (event.ok) okColor else errColor
-                if (row != null) { row.label.text = text; row.label.foreground = color }
-                else addFeedComponent(feedLabel(text, color))
+                if (row != null) {
+                    row.label.text = text; row.label.foreground = color
+                } else addFeedComponent(feedLabel(text, color))
             }
+
             is AgentStreamEvent.Notice -> addFeedLine("\u2139 ${event.text}", noticeColor)
-            is AgentStreamEvent.Completed -> { reset(); return true }
+            is AgentStreamEvent.Completed -> {
+                reset(); return true
+            }
+
             is AgentStreamEvent.Failed -> {
                 val partial = narrationDisplay()
                 reset()
@@ -287,6 +300,7 @@ class LiveTurnPanel(
         model = "?"
         messageIds.clear(); segments.clear(); toolRows.clear()
         lastNarr = ""; lastThink = ""
+        thinkingTokens = 0
         narrArea.text = ""; thinkArea.text = ""
         feedPanel.removeAll(); feedScroll.isVisible = false
         thinkExpanded = true; thinkScroll.isVisible = true; thinkToggle.isVisible = false
@@ -305,9 +319,10 @@ class LiveTurnPanel(
         val now = System.currentTimeMillis()
         val elapsed = ((now - turnStartedAtMs) / 1000).coerceAtLeast(0)
         val age = ((now - lastEventAtMs) / 1000).coerceAtLeast(0)
+        val thinkPart = if (thinkingTokens > 0) " \u00B7 \uD83D\uDCAD ~$thinkingTokens tok" else ""
         headerLabel.text = "$model \u00B7 turn ${messageIds.size.coerceAtLeast(1)} \u00B7 " +
                 String.format("%d:%02d", elapsed / 60, elapsed % 60) +
-                " \u00B7 last event ${age}s ago"
+                " \u00B7 last event ${age}s ago" + thinkPart
         stalledLabel.isVisible = age * 1000 >= STALLED_MS
     }
 
