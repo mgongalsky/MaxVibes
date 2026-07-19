@@ -56,7 +56,7 @@ tasks {
     patchPluginXml {
         version.set("1.2.1")
         sinceBuild.set("231")
-        untilBuild.set("253.*")
+        untilBuild.set("262.*")
     }
 
     register<org.jetbrains.intellij.tasks.RunIdeTask>("runIdePyCharm") {

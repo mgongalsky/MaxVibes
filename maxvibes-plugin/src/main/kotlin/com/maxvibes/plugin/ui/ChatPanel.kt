@@ -372,6 +372,21 @@ class ChatPanel(
         }
     )
 
+    /**
+     * Pinned planner panel: collapsible checklist of the active session's TaskPlan.
+     * Mounted above the conversation in [setupUI]; fed snapshots via [render].
+     * Manual checkbox toggles persist through ChatTreeService.setPlanStepStatus and
+     * reach the model with the next request (currentPlan field); doc links open
+     * PLAN.md / STEP_N.md via [openPlanDoc].
+     */
+    private val planPanel = PlanPanel(
+        onToggleStep = { stepId, newStatus ->
+            chatTreeService.setPlanStepStatus(chatTreeService.getActiveSession().id, stepId, newStatus)
+            render(buildState())
+        },
+        onOpenDoc = { docPath -> openPlanDoc(docPath) }
+    )
+
     private val service: MaxVibesService by lazy { MaxVibesService.getInstance(project) }
     private val chatTreeService get() = service.chatTreeService
     private val promptService: PromptService by lazy { PromptService.getInstance(project) }
@@ -813,12 +828,21 @@ class ChatPanel(
             })
         }
 
+        // Planner panel pinned above the conversation: both live inside the first
+        // splitter section so the plan scrolls with nothing — it stays fixed while
+        // only the conversation below it scrolls.
+        val conversationWithPlan = JPanel(BorderLayout()).apply {
+            background = JBColor.background()
+            add(planPanel, BorderLayout.NORTH)
+            add(conversationPanel, BorderLayout.CENTER)
+        }
+
         // Conversation on top, live turn block below, separated by a draggable one-pixel
         // splitter. The proportion is persisted via PropertiesComponent, so a size dragged
         // once survives IDE restarts. While the live panel is invisible between turns,
         // the conversation takes the full available height.
         val conversationSplitter = com.intellij.ui.OnePixelSplitter(true, 0.72f).apply {
-            firstComponent = conversationPanel
+            firstComponent = conversationWithPlan
             secondComponent = liveTurnPanel
             setAndLoadSplitterProportionKey("MaxVibes.liveTurnSplitterProportion")
         }
@@ -1278,9 +1302,27 @@ class ChatPanel(
         statusLabel.text = "Opened Claude Code log"
     }
 
+    /**
+     * Opens a plan document (PLAN.md / STEP_N.md) referenced from the planner panel.
+     * Paths are project-relative. A missing file reports to the status bar instead of
+     * throwing — the LLM may reference docs it has not created yet.
+     */
+    private fun openPlanDoc(docPath: String) {
+        val basePath = project.basePath ?: return
+        val vFile = com.intellij.openapi.vfs.LocalFileSystem.getInstance()
+            .refreshAndFindFileByIoFile(java.io.File(basePath, docPath))
+        if (vFile == null) {
+            statusLabel.text = "Doc not found: $docPath"
+            return
+        }
+        com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project).openFile(vFile, true)
+        statusLabel.text = "Opened $docPath"
+    }
+
     fun render(state: ChatPanelState) {
         updateBreadcrumb()
         updateModeUI(state)
+        planPanel.update(state.plan)
         claudeModelCombo.isVisible = state.mode == InteractionMode.CLAUDE_CODE
         claudeEffortCombo.isVisible = state.mode == InteractionMode.CLAUDE_CODE
         updateIndicators()
@@ -1437,7 +1479,8 @@ class ChatPanel(
             selectedSpecificPromptName = service.specificPromptService
                 .validatePromptName(chatTreeService.getActiveSession()?.selectedSpecificPromptName),
             claudeCodeApproveVisible = approveVisible,
-            claudeCodeSending = false
+            claudeCodeSending = false,
+            plan = session.plan
         )
     }
 

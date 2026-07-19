@@ -30,6 +30,7 @@ import com.maxvibes.domain.model.modification.Modification
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.shared.result.Result
 import com.maxvibes.domain.model.interaction.AttachedImage
+import com.maxvibes.domain.model.planning.TaskPlan
 
 /**
  * Application-layer service that orchestrates the Claude Code dialog mode.
@@ -471,7 +472,8 @@ class ClaudeCodeInteractionService(
             ideErrors = ideErrors,
             specificPromptContent = specificPromptContent,
             commandResults = commandResults,
-            attachedImages = attachedImages
+            attachedImages = attachedImages,
+            currentPlan = session.plan
         )
 
         // Pass the system prompt unconditionally on the first ensureStarted call:
@@ -513,7 +515,8 @@ class ClaudeCodeInteractionService(
                 ideErrors = ideErrors,
                 specificPromptContent = specificPromptContent,
                 commandResults = commandResults,
-                attachedImages = attachedImages
+                attachedImages = attachedImages,
+                currentPlan = session.plan
             )
             ensureResult = claudeCodePort.ensureStarted(
                 resumeSessionId = null,
@@ -620,6 +623,17 @@ class ClaudeCodeInteractionService(
                 "thinkingLen" to (thinkingText?.length ?: 0)
             )
         )
+
+        // Plan snapshot: full-replacement semantics, orthogonal to the approve cycle.
+        // Absent field = plan unchanged; present with empty steps = explicit clear.
+        response.plan?.let { snapshot ->
+            chatSessionRepository.getSessionById(sessionId)?.let { current ->
+                val newPlan = snapshot.takeIf { it.steps.isNotEmpty() }
+                chatSessionRepository.saveSession(current.withPlan(newPlan))
+                log(if (newPlan != null) "Plan updated: ${newPlan.steps.size} step(s), done=${newPlan.doneCount}" else "Plan cleared")
+                sessionLog?.event("plan updated", mapOf("steps" to snapshot.steps.size))
+            }
+        }
 
         val combinedReasoning = listOfNotNull(
             thinkingText?.takeIf { it.isNotBlank() },
@@ -793,7 +807,8 @@ class ClaudeCodeInteractionService(
         ideErrors: String?,
         specificPromptContent: String?,
         commandResults: String? = null,
-        attachedImages: List<AttachedImage> = emptyList()
+        attachedImages: List<AttachedImage> = emptyList(),
+        currentPlan: TaskPlan? = null
     ): ClipboardRequest = InteractionRequestBuilder.build(
         state = state,
         freshFiles = freshFiles,
@@ -808,7 +823,8 @@ class ClaudeCodeInteractionService(
         // JSON payload would trip Claude Code's prompt-injection classifier.
         omitSystemInstruction = true,
         commandResults = commandResults,
-        attachedImages = attachedImages
+        attachedImages = attachedImages,
+        currentPlan = currentPlan
     )
 
     /**

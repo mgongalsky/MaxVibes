@@ -5,6 +5,7 @@ import com.maxvibes.domain.model.interaction.InteractionHistoryEntry
 import com.maxvibes.domain.model.interaction.InteractionPhase
 import com.maxvibes.domain.model.interaction.ClipboardRequest
 import com.maxvibes.domain.model.interaction.AttachedImage
+import com.maxvibes.domain.model.planning.TaskPlan
 
 /**
  * Pure builder for [ClipboardRequest].
@@ -31,6 +32,9 @@ internal object InteractionRequestBuilder {
      * @param commandResults formatted outcomes of the previous turn's shell commands
      *        (execution output or user declines). One-shot per-message context like
      *        [ideErrors] — always forwarded when provided, never stored in state.
+     * @param currentPlan live plan state of the session (planner panel), including
+     *        manual user toggles. Forwarded even in minimal mode — the plan is small
+     *        and the model must see user edits. Null when the session has no plan.
      */
     fun build(
         state: ClipboardSessionState,
@@ -43,7 +47,8 @@ internal object InteractionRequestBuilder {
         specificPromptContent: String? = null,
         omitSystemInstruction: Boolean = false,
         commandResults: String? = null,
-        attachedImages: List<AttachedImage> = emptyList()
+        attachedImages: List<AttachedImage> = emptyList(),
+        currentPlan: TaskPlan? = null
     ): ClipboardRequest {
         // Minimal-mode: LLM already has full context in its chat window — send only the delta.
         val isMinimal = !isFirstMessage && !addHistory
@@ -108,7 +113,9 @@ internal object InteractionRequestBuilder {
             attachedImages = attachedImages,
             planOnly = if (isMinimal) false else state.planOnly,
             // specificPromptContent is passed through unconditionally — even in minimal mode.
-            specificPrompt = specificPromptContent
+            specificPrompt = specificPromptContent,
+            // currentPlan: forwarded even in minimal mode — manual toggles must reach the model.
+            currentPlan = currentPlan
         )
     }
 

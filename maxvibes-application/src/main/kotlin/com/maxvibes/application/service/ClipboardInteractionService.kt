@@ -435,6 +435,16 @@ class ClipboardInteractionService(
 
         log("Processing: hasFiles=$hasFiles, hasMods=$hasMods, hasMessage=$hasMessage, commands=${commands.size}")
 
+        // Plan snapshot: full-replacement semantics, orthogonal to the state machine.
+        // Absent field = plan unchanged; present with empty steps = explicit clear.
+        response.plan?.let { snapshot ->
+            chatSessionRepository.getSessionById(sessionId)?.let { current ->
+                val newPlan = snapshot.takeIf { it.steps.isNotEmpty() }
+                chatSessionRepository.saveSession(current.withPlan(newPlan))
+                log(if (newPlan != null) "Plan updated: ${newPlan.steps.size} step(s)" else "Plan cleared")
+            }
+        }
+
         val modResults = if (hasMods) applyModifications(response.modifications)
         else emptyList<ModificationResult>()
 
@@ -559,7 +569,9 @@ class ClipboardInteractionService(
             ideErrors = ideErrors,
             attachedContext = attachedContext,
             specificPromptContent = specificPromptContent,
-            commandResults = commandResults
+            commandResults = commandResults,
+            // Live plan state (planner panel), including manual user toggles.
+            currentPlan = chatSessionRepository.getSessionById(sessionId)?.plan
         )
 
         val copied = clipboardPort.copyRequestToClipboard(request)

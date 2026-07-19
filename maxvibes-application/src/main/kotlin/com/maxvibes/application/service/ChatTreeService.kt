@@ -7,6 +7,7 @@ import com.maxvibes.domain.model.chat.MessageRole
 import com.maxvibes.domain.model.chat.SessionTreeNode
 import com.maxvibes.domain.model.code.RequestedViewInfo
 import com.maxvibes.domain.model.modification.AppliedModInfo
+import com.maxvibes.domain.model.planning.PlanStepStatus
 
 class ChatTreeService(private val repository: ChatSessionRepository) {
 
@@ -162,6 +163,20 @@ class ChatTreeService(private val repository: ChatSessionRepository) {
      */
     fun saveSession(session: ChatSession) {
         repository.saveSession(session)
+    }
+
+    /**
+     * Sets the status of one plan step (manual checkbox toggle in the planner panel)
+     * and persists the session. The change reaches the LLM with the next request via
+     * the `currentPlan` field. No-op when the session is unknown or has no plan;
+     * an unknown step id leaves the plan unchanged (see TaskPlan.withStepStatus).
+     */
+    fun setPlanStepStatus(sessionId: String, stepId: String, status: PlanStepStatus): ChatSession? {
+        val session = repository.getSessionById(sessionId) ?: return null
+        val plan = session.plan ?: return session
+        val updated = session.withPlan(plan.withStepStatus(stepId, status))
+        repository.saveSession(updated)
+        return updated
     }
 
     fun clearSession(sessionId: String): ChatSession? {

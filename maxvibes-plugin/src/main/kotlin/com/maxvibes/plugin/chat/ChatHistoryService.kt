@@ -22,6 +22,9 @@ import com.maxvibes.domain.model.modification.ModificationCategory
 import com.maxvibes.plugin.service.MaxVibesLogger
 import java.time.Instant
 import java.util.UUID
+import com.maxvibes.domain.model.planning.TaskPlan
+import com.maxvibes.domain.model.planning.PlanStep
+import com.maxvibes.domain.model.planning.PlanStepStatus
 
 @Tag("requestedView")
 class XmlRequestedViewInfo {
@@ -84,6 +87,69 @@ class XmlAppliedModInfo {
 
     companion object {
         fun fromDomain(m: AppliedModInfo) = XmlAppliedModInfo(m.path, m.category.name)
+    }
+}
+
+@Tag("plan")
+class XmlTaskPlan {
+    @Attribute("title")
+    var title: String = ""
+
+    @Attribute("docPath")
+    var docPath: String? = null
+
+    @XCollection(style = XCollection.Style.v2)
+    var steps: MutableList<XmlPlanStep> = mutableListOf()
+
+    constructor()
+
+    constructor(title: String, docPath: String?, steps: List<XmlPlanStep>) {
+        this.title = title; this.docPath = docPath; this.steps = steps.toMutableList()
+    }
+
+    fun toDomain(): TaskPlan =
+        TaskPlan(title = title, docPath = docPath, steps = steps.map { it.toDomain() })
+
+    companion object {
+        fun fromDomain(p: TaskPlan) =
+            XmlTaskPlan(p.title, p.docPath, p.steps.map { XmlPlanStep.fromDomain(it) })
+    }
+}
+
+@Tag("planStep")
+class XmlPlanStep {
+    @Attribute("id")
+    var id: String = ""
+
+    @Attribute("title")
+    var title: String = ""
+
+    /** Enum name of PlanStepStatus. Default PENDING for forward compat. */
+    @Attribute("status")
+    var status: String = "PENDING"
+
+    @Attribute("docPath")
+    var docPath: String? = null
+
+    constructor()
+
+    constructor(id: String, title: String, status: String, docPath: String?) {
+        this.id = id; this.title = title; this.status = status; this.docPath = docPath
+    }
+
+    fun toDomain(): PlanStep = PlanStep(
+        id = id,
+        title = title,
+        status = try {
+            PlanStepStatus.valueOf(status)
+        } catch (_: IllegalArgumentException) {
+            PlanStepStatus.PENDING
+        },
+        docPath = docPath
+    )
+
+    companion object {
+        fun fromDomain(s: PlanStep) = XmlPlanStep(s.id, s.title, s.status.name, s.docPath)
     }
 }
 
@@ -266,6 +332,12 @@ class XmlChatSession {
     @Attribute("claudeCodeNeedsFullContext")
     var claudeCodeNeedsFullContext: Boolean = true
 
+    /**
+     * Task plan of the planner panel. Null for sessions without a plan and for
+     * XML files written before this field existed (backward compatible).
+     */
+    var plan: XmlTaskPlan? = null
+
     constructor()
 
     fun toTokenUsage(): TokenUsage = TokenUsage(
@@ -291,7 +363,8 @@ class XmlChatSession {
         },
         selectedSpecificPromptName = selectedSpecificPromptName.takeIf { it.isNotEmpty() },
         claudeCodeSessionId = claudeCodeSessionId,
-        claudeCodeNeedsFullContext = claudeCodeNeedsFullContext
+        claudeCodeNeedsFullContext = claudeCodeNeedsFullContext,
+        plan = plan?.toDomain()
     )
 
     companion object {
@@ -312,6 +385,7 @@ class XmlChatSession {
             xml.selectedSpecificPromptName = session.selectedSpecificPromptName ?: ""
             xml.claudeCodeSessionId = session.claudeCodeSessionId
             xml.claudeCodeNeedsFullContext = session.claudeCodeNeedsFullContext
+            xml.plan = session.plan?.let { XmlTaskPlan.fromDomain(it) }
             return xml
         }
     }

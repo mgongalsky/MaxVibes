@@ -1,6 +1,7 @@
 package com.maxvibes.domain.model.interaction
 
 import com.maxvibes.domain.model.code.CodeViewRequest
+import com.maxvibes.domain.model.planning.TaskPlan
 
 /**
  * Фаза clipboard-протокола — используется внутренне для трекинга.
@@ -44,7 +45,13 @@ data class ClipboardRequest(
     val commandResults: String? = null,
 
     /** Attached images (screenshots) — one-shot, sent with this message only. Claude Code transport only. */
-    val attachedImages: List<AttachedImage> = emptyList()
+    val attachedImages: List<AttachedImage> = emptyList(),
+
+    /**
+     * Актуальное состояние плана сессии (planner panel), включая ручные toggles юзера.
+     * Null — у сессии нет плана; поле в JSON тогда опускается.
+     */
+    val currentPlan: TaskPlan? = null
 )
 
 data class InteractionHistoryEntry(
@@ -83,7 +90,14 @@ data class InteractionResponse(
      * ends awaiting the user's answers, which arrive as the next regular message.
      * Mutually exclusive with [modifications] and [codeViewRequests] per protocol.
      */
-    val questions: List<InteractionQuestion> = emptyList()
+    val questions: List<InteractionQuestion> = emptyList(),
+
+    /**
+     * Snapshot плана задачи от LLM (planner panel).
+     * Null — поле отсутствовало в ответе, план сессии не меняется.
+     * Non-null с пустым [TaskPlan.steps] — маркер очистки плана (обрабатывается сервисом).
+     */
+    val plan: TaskPlan? = null
 )
 
 /**

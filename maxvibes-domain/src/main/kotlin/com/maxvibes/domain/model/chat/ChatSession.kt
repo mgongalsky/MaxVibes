@@ -1,6 +1,7 @@
 package com.maxvibes.domain.model.chat
 
 import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
+import com.maxvibes.domain.model.planning.TaskPlan
 import java.time.Instant
 import java.util.UUID
 
@@ -28,7 +29,13 @@ data class ChatSession(
      *  - after a failed `--resume` attempt that fell back to a fresh process.
      * Cleared to false after the first successful send.
      */
-    val claudeCodeNeedsFullContext: Boolean = true
+    val claudeCodeNeedsFullContext: Boolean = true,
+    /**
+     * Task plan maintained by the LLM for this session (planner panel).
+     * Snapshot-based: each `plan` field in an LLM response replaces it entirely.
+     * Null when no plan is active.
+     */
+    val plan: TaskPlan? = null
 ) {
     /** True if this session has no parent (i.e., it is a root-level session). */
     val isRoot: Boolean get() = parentId == null
@@ -90,4 +97,10 @@ data class ChatSession(
      */
     fun withSelectedPrompt(name: String?): ChatSession =
         copy(selectedSpecificPromptName = name, updatedAt = Instant.now().toEpochMilli())
+
+    /**
+     * Returns a new session with [plan] replaced (null clears the plan) and [updatedAt] refreshed.
+     */
+    fun withPlan(plan: TaskPlan?): ChatSession =
+        copy(plan = plan, updatedAt = Instant.now().toEpochMilli())
 }

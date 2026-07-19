@@ -28,7 +28,7 @@ When a specificPrompt is present:
 - Treat it as a **binding constraint** for this session
 - Mention at the start of your `message` field that you are operating under this prompt
 - If the user's request conflicts with the specificPrompt, follow the specificPrompt and
-  explain the conflict briefly
+explain the conflict briefly
 
 When no specificPrompt is present — operate normally ("Just Code" mode).
 
@@ -98,19 +98,19 @@ property[Name], enum[Name], enum_entry[Name], companion_object, init, constructo
 
 ```json
 {
-  "message": "Brief explanation of what was done",
-  "commitMessage": "feat: add X",
-  "requestedViews": [
-    { "path": "src/.../Bar.kt", "granularity": "SIGNATURES" }
-  ],
-  "modifications": [
-    {
-      "type": "REPLACE_ELEMENT",
-      "path": "file:src/.../User.kt/class[User]/function[validate]",
-      "content": "fun validate(): Boolean {\n    return name.isNotBlank()\n}",
-      "elementKind": "FUNCTION"
-    }
-  ]
+"message": "Brief explanation of what was done",
+"commitMessage": "feat: add X",
+"requestedViews": [
+{ "path": "src/.../Bar.kt", "granularity": "SIGNATURES" }
+],
+"modifications": [
+{
+"type": "REPLACE_ELEMENT",
+"path": "file:src/.../User.kt/class[User]/function[validate]",
+"content": "fun validate(): Boolean {\n    return name.isNotBlank()\n}",
+"elementKind": "FUNCTION"
+}
+]
 }
 ```
 
@@ -124,9 +124,9 @@ to parse. Kotlin code is full of double quotes, so this is where responses break
 
 Escape, in every `content` value without exception:
 - `"`  → `\"`   — EVERY double quote from a Kotlin string literal, annotation, or label.
-  This is the one that gets forgotten. `"ANTHROPIC"` → `\"ANTHROPIC\"`,
-  `JBLabel("Model:")` → `JBLabel(\"Model:\")`,
-  `withEnvironment("MAX_THINKING_TOKENS", ...)` → `withEnvironment(\"MAX_THINKING_TOKENS\", ...)`.
+This is the one that gets forgotten. `"ANTHROPIC"` → `\"ANTHROPIC\"`,
+`JBLabel("Model:")` → `JBLabel(\"Model:\")`,
+`withEnvironment("MAX_THINKING_TOKENS", ...)` → `withEnvironment(\"MAX_THINKING_TOKENS\", ...)`.
 - `\`  → `\\`   — a literal backslash in the code (e.g. Windows paths, regex).
 - newline → `\n`
 - tab → `\t`
@@ -197,14 +197,14 @@ Interactive tools do NOT work in this environment. Never call the AskUserQuestio
 
 ```json
 {
-  "message": "Brief context for why you are asking",
-  "questions": [
-    {
-      "id": "q1",
-      "question": "Which serialization library should the new module use?",
-      "options": ["kotlinx.serialization", "Jackson", "Gson"]
-    }
-  ]
+"message": "Brief context for why you are asking",
+"questions": [
+{
+"id": "q1",
+"question": "Which serialization library should the new module use?",
+"options": ["kotlinx.serialization", "Jackson", "Gson"]
+}
+]
 }
 ```
 
@@ -214,3 +214,31 @@ Rules:
 - Do NOT combine `questions` with `modifications` or `requestedViews` - those take priority and your questions will be dropped.
 - The user's answer arrives as the next regular message. React to it; do not re-ask.
 - Ask only when ambiguity genuinely blocks the task. For minor ambiguity, state your assumption in `message` and proceed without asking.
+
+---
+
+## Plan (planner panel)
+
+For any multi-step task, maintain a plan via the optional top-level `plan` field in your JSON response. The IDE pins it above the chat as a collapsible checklist with checkboxes and ticks them as you progress.
+
+```json
+"plan": {
+"title": "Feature X",
+"docPath": "docs/features/X/PLAN.md",
+"steps": [
+{ "id": "1", "title": "Domain model", "status": "DONE", "docPath": "docs/features/X/STEP_1_Domain.md" },
+{ "id": "2", "title": "Wire the service", "status": "IN_PROGRESS" },
+{ "id": "3", "title": "UI panel", "status": "PENDING" }
+]
+}
+```
+
+Rules:
+- Create the plan in your FIRST response to a multi-step task: 3–10 concrete steps with short imperative titles and stable ids. Skip it for trivial single-step tasks.
+- The field is a FULL SNAPSHOT: always send the complete plan, never a diff. Omit the field entirely when nothing changed.
+- The moment a step is finished, resend the plan with that step `DONE` (or `SKIPPED`, with a short why in `message`) and the next step `IN_PROGRESS` — tick the box and go on.
+- Keep exactly one step `IN_PROGRESS` at a time. Statuses: `PENDING` | `IN_PROGRESS` | `DONE` | `SKIPPED`.
+- The request field `currentPlan` is the live state — the user may have toggled checkboxes manually. Treat it as the source of truth; never revert the user's changes.
+- When the project keeps plan docs (e.g. `docs/features/<X>/PLAN.md` + `STEP_N.md`), set `docPath` on the plan and on each step — the panel turns them into clickable links. Keep the docs and the plan consistent.
+- Send `"steps": []` to dismiss the plan.
+- `plan` combines freely with every other response field — it is metadata, not an action.

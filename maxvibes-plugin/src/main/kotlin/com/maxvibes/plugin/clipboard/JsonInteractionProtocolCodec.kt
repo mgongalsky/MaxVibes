@@ -6,6 +6,9 @@ import com.maxvibes.domain.model.interaction.*
 import kotlinx.serialization.json.*
 import com.maxvibes.domain.model.code.CodeGranularity
 import com.maxvibes.domain.model.code.CodeViewRequest
+import com.maxvibes.domain.model.planning.TaskPlan
+import com.maxvibes.domain.model.planning.PlanStep
+import com.maxvibes.domain.model.planning.PlanStepStatus
 
 /**
  * Pure [InteractionProtocolCodec] implementation backed by kotlinx.serialization.
@@ -106,6 +109,25 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
             request.commandResults?.takeIf { it.isNotBlank() }?.let {
                 put(InteractionRequestSchema.FIELD_COMMAND_RESULTS, it)
             }
+
+            // Current plan snapshot (planner panel) — lets the model see the live state,
+            // including checkboxes the user toggled manually since the last turn.
+            request.currentPlan?.let { plan ->
+                putJsonObject(InteractionRequestSchema.FIELD_CURRENT_PLAN) {
+                    put(InteractionRequestSchema.PLAN_TITLE, plan.title)
+                    plan.docPath?.let { put(InteractionRequestSchema.PLAN_DOC_PATH, it) }
+                    putJsonArray(InteractionRequestSchema.PLAN_STEPS) {
+                        plan.steps.forEach { step ->
+                            addJsonObject {
+                                put(InteractionRequestSchema.PLAN_STEP_ID, step.id)
+                                put(InteractionRequestSchema.PLAN_TITLE, step.title)
+                                put(InteractionRequestSchema.PLAN_STEP_STATUS, step.status.name)
+                                step.docPath?.let { put(InteractionRequestSchema.PLAN_DOC_PATH, it) }
+                            }
+                        }
+                    }
+                }
+            }
         }
         return json.encodeToString(JsonObject.serializer(), obj)
     }
@@ -205,7 +227,8 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
             commands = obj[InteractionRequestSchema.RESP_COMMANDS]?.jsonArray
                 ?.mapNotNull { parseCommand(it.jsonObject) } ?: emptyList(),
             questions = obj[InteractionRequestSchema.RESP_QUESTIONS]?.jsonArray
-                ?.mapNotNull { parseQuestion(it.jsonObject) } ?: emptyList()
+                ?.mapNotNull { parseQuestion(it.jsonObject) } ?: emptyList(),
+            plan = parsePlan(obj)
         )
     }
 
@@ -263,6 +286,43 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
             ?: emptyList()
         return InteractionQuestion(id = id, question = question, options = options)
     }
+
+    /**
+     * Parses the optional `plan` response field into a [TaskPlan].
+     *
+     * Tolerant by design (a malformed plan must never fail the whole response):
+     * - unknown/broken step `status` → [PlanStepStatus.PENDING];
+     * - missing step `id` → 1-based ordinal;
+     * - steps without a `title` are skipped; a blank plan title becomes "Plan";
+     * - any parsing error yields `null` (plan unchanged) instead of throwing.
+     *
+     * Returns `null` when the field is absent. A present plan with an empty `steps`
+     * array is returned as-is — the service layer treats it as "clear the plan".
+     */
+    private fun parsePlan(obj: JsonObject): TaskPlan? = runCatching {
+        val planObj = obj[InteractionRequestSchema.RESP_PLAN] as? JsonObject ?: return null
+        val steps = planObj[InteractionRequestSchema.PLAN_STEPS]?.jsonArray
+            ?.mapIndexedNotNull { index, element ->
+                val stepObj = element as? JsonObject ?: return@mapIndexedNotNull null
+                val title = stepObj[InteractionRequestSchema.PLAN_TITLE]?.jsonPrimitive?.contentOrNull
+                    ?.takeIf { it.isNotBlank() } ?: return@mapIndexedNotNull null
+                val id = stepObj[InteractionRequestSchema.PLAN_STEP_ID]?.jsonPrimitive?.contentOrNull
+                    ?.takeIf { it.isNotBlank() } ?: (index + 1).toString()
+                val status = stepObj[InteractionRequestSchema.PLAN_STEP_STATUS]?.jsonPrimitive?.contentOrNull
+                    ?.let { raw -> runCatching { PlanStepStatus.valueOf(raw.uppercase()) }.getOrNull() }
+                    ?: PlanStepStatus.PENDING
+                val docPath = stepObj[InteractionRequestSchema.PLAN_DOC_PATH]?.jsonPrimitive?.contentOrNull
+                    ?.takeIf { it.isNotBlank() }
+                PlanStep(id = id, title = title, status = status, docPath = docPath)
+            } ?: emptyList()
+        TaskPlan(
+            title = planObj[InteractionRequestSchema.PLAN_TITLE]?.jsonPrimitive?.contentOrNull
+                ?.takeIf { it.isNotBlank() } ?: "Plan",
+            docPath = planObj[InteractionRequestSchema.PLAN_DOC_PATH]?.jsonPrimitive?.contentOrNull
+                ?.takeIf { it.isNotBlank() },
+            steps = steps
+        )
+    }.getOrNull()
 
     internal fun findEmbeddedJson(text: String): String? {
         // Look for the leftmost occurrence of any known indicator key

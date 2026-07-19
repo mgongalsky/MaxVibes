@@ -138,6 +138,34 @@ Supported segments: `class[Name]`, `interface[Name]`, `object[Name]`, `function[
 
 ---
 
+## Plan (planner panel)
+
+For any multi-step task, maintain a plan via the optional top-level `plan` field in your JSON response. The IDE pins it above the chat as a collapsible checklist with checkboxes and ticks them as you progress.
+
+```json
+"plan": {
+"title": "Feature X",
+"docPath": "docs/features/X/PLAN.md",
+"steps": [
+{ "id": "1", "title": "Domain model", "status": "DONE", "docPath": "docs/features/X/STEP_1_Domain.md" },
+{ "id": "2", "title": "Wire the service", "status": "IN_PROGRESS" },
+{ "id": "3", "title": "UI panel", "status": "PENDING" }
+]
+}
+```
+
+Rules:
+- Create the plan in your FIRST response to a multi-step task: 3–10 concrete steps with short imperative titles and stable ids. Skip it for trivial single-step tasks.
+- The field is a FULL SNAPSHOT: always send the complete plan, never a diff. Omit the field entirely when nothing changed.
+- The moment a step is finished, resend the plan with that step `DONE` (or `SKIPPED`, with a short why in `message`) and the next step `IN_PROGRESS` — tick the box and go on.
+- Keep exactly one step `IN_PROGRESS` at a time. Statuses: `PENDING` | `IN_PROGRESS` | `DONE` | `SKIPPED`.
+- The request field `currentPlan` is the live state — the user may have toggled checkboxes manually. Treat it as the source of truth; never revert the user's changes.
+- When the project keeps plan docs (e.g. `docs/features/<X>/PLAN.md` + `STEP_N.md`), set `docPath` on the plan and on each step — the panel turns them into clickable links. Keep the docs and the plan consistent.
+- Send `"steps": []` to dismiss the plan.
+- `plan` combines freely with every other response field — it is metadata, not an action.
+
+---
+
 ## Key rules
 
 - **PREFER REPLACE_ELEMENT/CREATE_ELEMENT** over REPLACE_FILE — saves tokens!

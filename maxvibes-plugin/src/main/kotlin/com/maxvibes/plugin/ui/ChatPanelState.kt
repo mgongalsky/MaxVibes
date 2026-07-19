@@ -4,6 +4,7 @@ import com.maxvibes.domain.model.chat.ChatSession
 import com.maxvibes.domain.model.chat.TokenUsage
 import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 import com.maxvibes.domain.model.interaction.InteractionMode
+import com.maxvibes.domain.model.planning.TaskPlan
 
 data class ChatPanelState(
     val currentSession: ChatSession?,
@@ -54,7 +55,12 @@ data class ChatPanelState(
      * Send and Approve while a request is being processed; current implementation
      * relies on [ChatPanel.setInputEnabled] for the same effect.
      */
-    val claudeCodeSending: Boolean = false
+    val claudeCodeSending: Boolean = false,
+
+    /**
+     * Текущий план активной сессии (planner panel). Null — панель скрыта.
+     */
+    val plan: TaskPlan? = null
 ) {
     /** true если есть прикреплённые данные любого типа. */
     val hasAttachments: Boolean get() = attachedTrace != null || attachedErrors != null

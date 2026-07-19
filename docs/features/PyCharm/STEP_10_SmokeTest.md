@@ -31,7 +31,7 @@ Preferred — the dedicated Gradle task (already present in `maxvibes-plugin/bui
 - Resolves the IDE from the `PYCHARM_PATH` environment variable, otherwise falls back to
 `C:/Program Files/JetBrains/PyCharm Community Edition 2023.1.5` on Windows.
 Set `PYCHARM_PATH` if your install differs.
-- Compatibility window: `sinceBuild=231`, `untilBuild=253.*` — any PyCharm 2023.1+ works.
+- Compatibility window: `sinceBuild=231`, `untilBuild=262.*` — any PyCharm 2023.1+ works.
 
 Alternative — build a distribution and install into a live PyCharm:
 

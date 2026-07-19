@@ -160,4 +160,25 @@ object InteractionRequestSchema {
 
     /** Optional PSI element path inside a `requestedViews` entry (required when granularity = ELEMENT). */
     const val VIEW_ELEMENT_PATH = "elementPath"
+
+    /** Response field: task-plan snapshot from the LLM (planner panel). Absent = plan unchanged. */
+    const val RESP_PLAN = "plan"
+
+    /** Request field: current plan state of the session, including manual user toggles. */
+    const val FIELD_CURRENT_PLAN = "currentPlan"
+
+    /** Title of a plan or of a single plan step. */
+    const val PLAN_TITLE = "title"
+
+    /** Project-relative path to the PLAN.md (on the plan) or STEP_N.md (on a step). */
+    const val PLAN_DOC_PATH = "docPath"
+
+    /** Ordered list of plan steps inside a plan object. */
+    const val PLAN_STEPS = "steps"
+
+    /** Stable identifier of a plan step (used to address status updates). */
+    const val PLAN_STEP_ID = "id"
+
+    /** Plan step status: PENDING | IN_PROGRESS | DONE | SKIPPED. */
+    const val PLAN_STEP_STATUS = "status"
 }
