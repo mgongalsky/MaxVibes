@@ -223,6 +223,14 @@ object ChatNavigationHelper {
         }
     }
 
+    fun formatElementPath(path: String): String {
+        return try {
+            formatElementPath(ElementPath(path))
+        } catch (e: Exception) {
+            path.substringAfterLast('/')
+        }
+    }
+
     /**
      * Registers element paths from modification results for click navigation.
      */

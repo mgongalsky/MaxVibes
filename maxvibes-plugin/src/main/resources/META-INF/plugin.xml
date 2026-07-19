@@ -2,7 +2,7 @@
     <id>com.maxvibes.plugin</id>
     <name>MaxVibes</name>
     <vendor email="support@maxvibes.ai" url="https://maxvibes.ai">MaxVibes Team</vendor>
-    <version>1.0-SNAPSHOT</version>
+    <version>1.2.1-SNAPSHOT</version>
 
     <description><![CDATA[
         <h2>MaxVibes - AI-powered Kotlin Assistant</h2>
@@ -25,7 +25,7 @@
     ]]></description>
 
     <change-notes><![CDATA[
-        <h3>Version 1.0</h3>
+        <h3>Version 1.2.1</h3>
         <ul>
             <li>Initial release</li>
             <li>Support for OpenAI, Anthropic, and Ollama</li>
@@ -34,7 +34,8 @@
     ]]></change-notes>
 
     <depends>com.intellij.modules.platform</depends>
-    <depends>org.jetbrains.kotlin</depends>
+    <depends optional="true" config-file="maxvibes-kotlin.xml">org.jetbrains.kotlin</depends>
+    <depends optional="true" config-file="maxvibes-python.xml">com.intellij.modules.python</depends>
 
     <extensions defaultExtensionNs="com.intellij">
         <applicationService
@@ -74,7 +75,7 @@
                     text="Modify with AI..."
                     description="Modify selected code using AI"
                     icon="AllIcons.Actions.Edit">
-                <keyboard-shortcut keymap="\$default" first-keystroke="ctrl alt M"/>
+                <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt M"/>
             </action>
 
             <action id="MaxVibes.AnalyzeCode"
@@ -82,7 +83,7 @@
                     text="Explain Code"
                     description="Get AI explanation of selected code"
                     icon="AllIcons.Actions.Preview">
-                <keyboard-shortcut keymap="\$default" first-keystroke="ctrl alt A"/>
+                <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt A"/>
             </action>
 
             <action id="MaxVibes.SmartModify"

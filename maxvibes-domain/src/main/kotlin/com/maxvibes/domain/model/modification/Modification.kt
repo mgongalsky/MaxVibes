@@ -72,6 +72,37 @@ sealed interface Modification {
         override val targetPath: ElementPath,
         val importPath: String
     ) : Modification
+
+    // ═══════════════════════════════════════════════════
+    // IDE refactoring operations (platform refactoring processors)
+    // ═══════════════════════════════════════════════════
+
+    /**
+     * Rename an element (or a whole file) and update every reference
+     * project-wide via the IDE RenameProcessor.
+     */
+    data class RenameElement(
+        override val targetPath: ElementPath,
+        val newName: String
+    ) : Modification
+
+    /**
+     * Delete an element only if it has no remaining usages, via the IDE
+     * SafeDeleteProcessor. Fails explicitly when live references exist.
+     */
+    data class SafeDelete(
+        override val targetPath: ElementPath
+    ) : Modification
+
+    /**
+     * Move a FILE to another directory via the IDE move refactoring.
+     * References and the package directive are updated by the platform.
+     * targetPath = file path; destination = project-relative directory.
+     */
+    data class MoveElement(
+        override val targetPath: ElementPath,
+        val destination: String
+    ) : Modification
 }
 
 sealed interface ModificationResult {

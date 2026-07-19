@@ -5,7 +5,7 @@ enum class ElementKind {
     FILE,
     CLASS, INTERFACE, OBJECT, ENUM,
     FUNCTION, PROPERTY,
-    CONSTRUCTOR
+    CONSTRUCTOR, INIT
 }
 
 sealed interface CodeElement {

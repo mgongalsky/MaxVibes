@@ -3,19 +3,24 @@ package com.maxvibes.adapter.llm.dto
 
 import dev.langchain4j.model.output.structured.Description
 
-/**
- * DTO for structured chat response from LLM via AiServices tool calling.
- * LangChain4j converts this to JSON Schema automatically.
- *
- * IMPORTANT: Use regular classes with mutable fields (not Kotlin data classes)
- * for best compatibility with LangChain4j's JSON schema generation.
- */
 class ChatResponseDTO {
     @Description("Your response message to the user explaining what you did or answering their question")
     var message: String = ""
 
+    @Description("Optional reasoning or step-by-step thoughts")
+    var reasoning: String? = null
+
     @Description("List of code modifications to apply. Empty list if no code changes needed")
     var modifications: List<ModificationDTO> = emptyList()
+
+    @Description("Optional: a concise Git commit message summarizing the changes made (in English, conventional commits format preferred, e.g. 'feat: add commit message generation'). Include when you've completed a coding task and there are actual code modifications, or when the user explicitly asks for a commit message. Leave null if no code changes were made.")
+    var commitMessage: String? = null
+
+    @Description("List of file/element views requested from the project. Each entry describes what was requested and at what granularity.")
+    var requestedViews: List<RequestedViewInfoDTO> = emptyList()
+
+    @Description("Shell commands to run in the user's terminal. LAST RESORT — only for what modifications cannot do (build, tests, git, dependencies, diagnostics). Never create/edit/delete source files via shell; sole exception is working around a PSI modification that just failed — state that in reason. Normally an empty list.")
+    var commands: List<CommandDTO> = emptyList()
 }
 
 class ModificationDTO {
@@ -49,15 +54,40 @@ Supported segments: class[Name], interface[Name], object[Name], function[Name], 
     override fun toString(): String = "ModificationDTO(type=$type, path=$path, content=${content.take(50)}...)"
 }
 
+class RequestedViewInfoDTO {
+    @Description("File path as used in the request (e.g. 'src/main/kotlin/com/example/Foo.kt')")
+    var path: String = ""
+
+    @Description("Granularity of the view: FULL, SIGNATURES, OUTLINE, or ELEMENT")
+    var granularity: String = "FULL"
+
+    @Description("Element path within the file, required when granularity is ELEMENT (e.g. 'class[Foo]/function[bar]')")
+    var elementPath: String? = null
+}
+
 /**
  * DTO for planning phase response.
+ * Now uses same message field as chat, no separate reasoning.
  */
 class PlanningResultDTO {
+    @Description("Your thoughts and explanation about what files you need and why")
+    var message: String = ""
+
     @Description("List of file paths that need to be read for this task")
     var requestedFiles: List<String> = emptyList()
 
-    @Description("Brief explanation of why these files are needed")
-    var reasoning: String? = null
+    override fun toString(): String = "PlanningResultDTO(files=${requestedFiles.size}, message=${message.take(50)})"
+}
 
-    override fun toString(): String = "PlanningResultDTO(files=${requestedFiles.size}, reasoning=${reasoning?.take(50)})"
+class CommandDTO {
+    @Description("Shell command line to execute from the project root (e.g. 'gradlew.bat test')")
+    var command: String = ""
+
+    @Description("REQUIRED: one human-readable sentence explaining why this command is needed and why modifications cannot do it. Shown to the user for approval.")
+    var reason: String? = null
+
+    @Description("Timeout in seconds for this command (default 120)")
+    var timeoutSec: Int = 120
+
+    override fun toString(): String = "CommandDTO(command=${command.take(60)})"
 }

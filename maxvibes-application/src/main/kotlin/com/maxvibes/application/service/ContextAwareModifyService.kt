@@ -16,49 +16,64 @@ class ContextAwareModifyService(
     private val llmService: LLMService,
     private val codeRepository: CodeRepository,
     private val notificationPort: NotificationPort,
-    private val promptPort: PromptPort? = null
+    private val promptPort: PromptPort? = null,
+    private val logger: LoggerPort? = null
 ) : ContextAwareModifyUseCase {
 
     override suspend fun execute(request: ContextAwareRequest): ContextAwareResult {
+        logger?.info(
+            TAG,
+            "execute() started, currentMessage='${request.currentMessage.take(80)}', planOnly=${request.planOnly}"
+        )
         notificationPort.showProgress("Starting...", 0.0)
 
-        // Загружаем промпты (или дефолтные если порт не предоставлен)
         val prompts = promptPort?.getPrompts() ?: PromptTemplates.EMPTY
 
-        // 1. Собираем контекст проекта
         notificationPort.showProgress("Gathering project context...", 0.1)
+        logger?.debug(TAG, "Requesting project context")
         val projectContextResult = contextProvider.getProjectContext()
         if (projectContextResult is Result.Failure) {
-            return errorResult("Failed to get project context: ${projectContextResult.error.message}")
+            val errMsg = "Failed to get project context: ${projectContextResult.error.message}"
+            logger?.error(TAG, errMsg)
+            return errorResult(errMsg)
         }
         val projectContext = (projectContextResult as Result.Success).value
+        logger?.debug(TAG, "Project context obtained")
 
-        // 2. Planning — LLM определяет нужные файлы
         notificationPort.showProgress("Analyzing task...", 0.2)
-        val planResult = llmService.planContext(request.task, projectContext, prompts)
+        logger?.debug(TAG, "Starting LLM planContext call")
+        val planResult = llmService.planContext(request.currentMessage, projectContext, prompts)
         if (planResult is Result.Failure) {
-            return errorResult("Planning failed: ${planResult.error.message}")
+            val errMsg = "Planning failed: ${planResult.error.message}"
+            logger?.error(TAG, errMsg)
+            return errorResult(errMsg)
         }
         val contextRequest = (planResult as Result.Success).value
+        logger?.debug(TAG, "planContext succeeded, requestedFiles=${contextRequest.requestedFiles}")
 
-        // Объединяем запрошенные файлы + глобальные контекстные файлы
         val filesToGather = (contextRequest.requestedFiles + request.additionalFiles + request.globalContextFiles)
             .distinct()
             .filterNot { it in request.excludeFiles }
 
-        // 3. Собираем содержимое файлов
         notificationPort.showProgress("Gathering ${filesToGather.size} files...", 0.4)
+        logger?.debug(TAG, "Gathering ${filesToGather.size} files: $filesToGather")
         val gatherResult = contextProvider.gatherFiles(filesToGather)
         if (gatherResult is Result.Failure) {
+            val errMsg = "Failed to gather files: ${gatherResult.error.message}"
+            logger?.error(TAG, errMsg)
             return errorResult(
-                message = "Failed to gather files: ${gatherResult.error.message}",
+                message = errMsg,
                 requestedFiles = filesToGather
             )
         }
         val gatheredContext = (gatherResult as Result.Success).value
+        logger?.debug(
+            TAG,
+            "Gathered ${gatheredContext.files.size} files, tokens~${gatheredContext.totalTokensEstimate}"
+        )
 
-        // Dry run — только показываем план
         if (request.dryRun) {
+            logger?.info(TAG, "Dry run completed")
             notificationPort.showSuccess("Dry run completed")
             return ContextAwareResult(
                 success = true,
@@ -69,9 +84,12 @@ class ContextAwareModifyService(
             )
         }
 
-        // 4. Chat — LLM отвечает текстом + модификации
         val modeLabel = if (request.planOnly) "Discussing (plan only)..." else "Generating response..."
         notificationPort.showProgress(modeLabel, 0.6)
+        logger?.debug(
+            TAG,
+            "Calling llmService.chat(), planOnly=${request.planOnly}, historySize=${request.history.size}"
+        )
 
         val chatContext = ChatContext(
             projectContext = projectContext,
@@ -82,44 +100,49 @@ class ContextAwareModifyService(
         )
 
         val chatResult = llmService.chat(
-            message = request.task,
+            message = request.currentMessage,
             history = request.history,
             context = chatContext
         )
 
         if (chatResult is Result.Failure) {
+            val errMsg = "Chat failed: ${chatResult.error.message}"
+            logger?.error(TAG, errMsg)
             return errorResult(
-                message = "Chat failed: ${chatResult.error.message}",
+                message = errMsg,
                 requestedFiles = filesToGather,
                 gatheredFiles = gatheredContext.files.keys.toList()
             )
         }
 
         val chatResponse = (chatResult as Result.Success).value
+        logger?.info(
+            TAG,
+            "Chat succeeded, modifications=${chatResponse.modifications.size}, " +
+                    "commands=${chatResponse.commands.size}, " +
+                    "tokens(in/out)=${chatResponse.tokenUsage?.inputTokens}/${chatResponse.tokenUsage?.outputTokens}"
+        )
 
-        // 5. Применяем модификации (если есть и НЕ planOnly)
         val modificationResults = if (chatResponse.modifications.isNotEmpty() && !request.planOnly) {
             notificationPort.showProgress("Applying ${chatResponse.modifications.size} changes...", 0.8)
+            logger?.debug(TAG, "Applying ${chatResponse.modifications.size} modifications")
             codeRepository.applyModifications(chatResponse.modifications)
         } else {
             emptyList()
         }
 
-        // Если planOnly и LLM всё-таки вернул модификации — предупреждаем
         val planOnlyNote = if (request.planOnly && chatResponse.modifications.isNotEmpty()) {
-            "\n\n⚠️ Plan-only mode: ${chatResponse.modifications.size} modification(s) were suggested but NOT applied."
+            "\n\n\u26A0\uFE0F Plan-only mode: ${chatResponse.modifications.size} modification(s) were suggested but NOT applied."
         } else ""
 
-        // 6. Формируем результат
         val successCount = modificationResults.count { it is ModificationResult.Success }
         val failCount = modificationResults.size - successCount
 
+        logger?.info(TAG, "Modifications applied: success=$successCount, failed=$failCount")
+
         if (modificationResults.isNotEmpty()) {
-            if (failCount > 0) {
-                notificationPort.showWarning("Applied $successCount changes, $failCount failed")
-            } else {
-                notificationPort.showSuccess("Applied $successCount changes")
-            }
+            if (failCount > 0) notificationPort.showWarning("Applied $successCount changes, $failCount failed")
+            else notificationPort.showSuccess("Applied $successCount changes")
         } else {
             notificationPort.showSuccess(if (request.planOnly) "Plan complete" else "Done")
         }
@@ -130,7 +153,14 @@ class ContextAwareModifyService(
             requestedFiles = filesToGather,
             gatheredFiles = gatheredContext.files.keys.toList(),
             modifications = modificationResults,
-            error = if (failCount > 0) "$failCount modifications failed" else null
+            error = if (failCount > 0) "$failCount modifications failed" else null,
+            planningInputTokens = 0,
+            planningOutputTokens = 0,
+            chatInputTokens = chatResponse.tokenUsage?.inputTokens ?: 0,
+            chatOutputTokens = chatResponse.tokenUsage?.outputTokens ?: 0,
+            commitMessage = chatResponse.commitMessage,
+            requestedViews = chatResponse.requestedViews,
+            commands = chatResponse.commands
         )
     }
 
@@ -148,5 +178,9 @@ class ContextAwareModifyService(
             modifications = emptyList(),
             error = message
         )
+    }
+
+    companion object {
+        private const val TAG = "ContextAwareModifyService"
     }
 }

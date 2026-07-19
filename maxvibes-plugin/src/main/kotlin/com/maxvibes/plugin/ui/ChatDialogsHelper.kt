@@ -6,7 +6,7 @@ import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
-import com.maxvibes.plugin.chat.ChatHistoryService
+import com.maxvibes.application.service.ChatTreeService
 import java.awt.*
 import java.io.File
 import javax.swing.*
@@ -23,10 +23,10 @@ object ChatDialogsHelper {
     fun showContextFilesDialog(
         parent: JComponent,
         project: Project,
-        chatHistory: ChatHistoryService
+        chatTreeService: ChatTreeService
     ): List<String>? {
         val listModel = DefaultListModel<String>().apply {
-            chatHistory.getGlobalContextFiles().forEach { addElement(it) }
+            chatTreeService.getGlobalContextFiles().forEach { addElement(it) }
         }
         val fileList = JList(listModel).apply {
             selectionMode = ListSelectionModel.SINGLE_SELECTION
@@ -37,11 +37,15 @@ object ChatDialogsHelper {
             preferredSize = Dimension(500, 350)
             border = JBUI.Borders.empty(8)
 
-            add(JBLabel("<html><b>Global Context Files</b><br>" +
-                    "<small>These files are included in every LLM request as background context.<br>" +
-                    "Useful for architecture docs, coding guidelines, etc.</small></html>").apply {
-                border = JBUI.Borders.empty(0, 0, 8, 0)
-            }, BorderLayout.NORTH)
+            add(
+                JBLabel(
+                    "<html><b>Global Context Files</b><br>" +
+                            "<small>These files are included in every LLM request as background context.<br>" +
+                            "Useful for architecture docs, coding guidelines, etc.</small></html>"
+                ).apply {
+                    border = JBUI.Borders.empty(0, 0, 8, 0)
+                }, BorderLayout.NORTH
+            )
 
             add(JBScrollPane(fileList), BorderLayout.CENTER)
 
@@ -191,11 +195,11 @@ When you receive a JSON message containing "_protocol", "systemInstruction", "ta
    |------------------|-------------------------------|----------------------------------------------------------|----------------------|-----------------------|
    | REPLACE_ELEMENT  | Change a function/class/prop  | file:path/File.kt/class[Name]/function[method]           | Complete element     | elementKind           |
    | CREATE_ELEMENT   | Add new element to parent     | file:path/File.kt/class[Name]                            | New element code     | elementKind, position |
-   | DELETE_ELEMENT    | Remove an element             | file:path/File.kt/class[Name]/function[old]              | (empty)              |                       |
-   | ADD_IMPORT        | Add import to file            | file:path/File.kt                                        | (empty)              | importPath            |
-   | REMOVE_IMPORT     | Remove import from file       | file:path/File.kt                                        | (empty)              | importPath            |
-   | CREATE_FILE       | New file                      | src/main/kotlin/.../File.kt                              | Full file            |                       |
-   | REPLACE_FILE      | Rewrite entire file           | src/main/kotlin/.../File.kt                              | Full file            |                       |
+   | DELETE_ELEMENT   | Remove an element             | file:path/File.kt/class[Name]/function[old]              | (empty)              |                       |
+   | ADD_IMPORT       | Add import to file            | file:path/File.kt                                        | (empty)              | importPath            |
+   | REMOVE_IMPORT    | Remove import from file       | file:path/File.kt                                        | (empty)              | importPath            |
+   | CREATE_FILE      | New file                      | src/main/kotlin/.../File.kt                              | Full file            |                       |
+   | REPLACE_FILE     | Rewrite entire file           | src/main/kotlin/.../File.kt                              | Full file            |                       |
 
 6. Element path format:
    file:src/main/kotlin/com/example/User.kt/class[User]/function[validate]

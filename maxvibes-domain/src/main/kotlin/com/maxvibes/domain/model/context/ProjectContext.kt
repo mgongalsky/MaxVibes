@@ -23,9 +23,17 @@ data class FileTree(
     /**
      * Компактное представление для промпта (экономим токены)
      */
-    fun toCompactString(maxDepth: Int = 4): String {
+    fun toCompactString(maxDepth: Int = Int.MAX_VALUE): String {
         val sb = StringBuilder()
-        root.appendTo(sb, "", maxDepth, 0)
+        fun appendNode(node: FileNode, indent: String) {
+            sb.append(indent)
+            sb.append(if (node.isDirectory) "📁 " else "📄 ")
+            sb.appendLine(node.name)
+            if (node.isDirectory) {
+                node.children.forEach { appendNode(it, "$indent  ") }
+            }
+        }
+        appendNode(root, "")
         return sb.toString()
     }
 }
@@ -40,24 +48,7 @@ data class FileNode(
     val children: List<FileNode> = emptyList(),
     val size: Long? = null
 ) {
-    internal fun appendTo(sb: StringBuilder, prefix: String, maxDepth: Int, currentDepth: Int) {
-        sb.append(prefix)
-        sb.append(if (isDirectory) "📁 " else "📄 ")
-        sb.append(name)
-        sb.appendLine()
 
-        if (isDirectory && currentDepth < maxDepth) {
-            val sortedChildren = children.sortedWith(
-                compareBy({ !it.isDirectory }, { it.name })
-            )
-            sortedChildren.forEachIndexed { index, child ->
-                val isLast = index == sortedChildren.lastIndex
-                val newPrefix = prefix + if (isLast) "    " else "│   "
-                val connector = if (isLast) "└── " else "├── "
-                child.appendTo(sb, prefix + connector.dropLast(4), maxDepth, currentDepth + 1)
-            }
-        }
-    }
 }
 
 /**

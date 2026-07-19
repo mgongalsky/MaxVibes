@@ -5,8 +5,7 @@ import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.treeStructure.Tree
 import com.intellij.util.ui.JBUI
-import com.maxvibes.plugin.chat.ChatHistoryService
-import com.maxvibes.plugin.chat.SessionTreeNode
+import com.maxvibes.application.service.ChatTreeService
 import java.awt.*
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
@@ -17,13 +16,18 @@ import javax.swing.tree.DefaultMutableTreeNode
 import javax.swing.tree.DefaultTreeCellRenderer
 import javax.swing.tree.DefaultTreeModel
 import javax.swing.tree.TreePath
+import javax.swing.tree.TreeSelectionModel
+import javax.swing.AbstractAction
+import javax.swing.JComponent
+import javax.swing.KeyStroke
+import com.maxvibes.domain.model.chat.SessionTreeNode
 
 /**
  * Full-window panel for browsing the session tree.
  * Shows all dialogs as a tree with branches, allows opening, creating, deleting, renaming.
  */
 class SessionTreePanel(
-    private val chatHistory: ChatHistoryService,
+    private val chatTreeService: ChatTreeService,
     private val onOpenSession: (String) -> Unit,
     private val onNewRoot: () -> Unit,
     private val onNewBranch: (parentId: String) -> Unit,
@@ -38,8 +42,9 @@ class SessionTreePanel(
     private val tree = Tree(treeModel).apply {
         isRootVisible = false
         showsRootHandles = true
-        rowHeight = 0  // auto-calculate from renderer
+        rowHeight = 0
         border = JBUI.Borders.empty(2)
+        selectionModel.selectionMode = TreeSelectionModel.DISCONTIGUOUS_TREE_SELECTION
     }
 
     init {
@@ -59,7 +64,7 @@ class SessionTreePanel(
 
             val titlePanel = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
                 background = JBColor.background()
-                add(JBLabel("\uD83D\uDCC2").apply { font = font.deriveFont(16f) }) // 📂
+                add(JBLabel("\uD83D\uDCC2").apply { font = font.deriveFont(16f) })
                 add(JBLabel("<html><b>Sessions</b></html>").apply {
                     font = font.deriveFont(14f)
                 })
@@ -67,6 +72,13 @@ class SessionTreePanel(
 
             val actionsPanel = JPanel(FlowLayout(FlowLayout.RIGHT, 6, 0)).apply {
                 background = JBColor.background()
+                add(JButton("\uD83D\uDDD1 Delete").apply {
+                    toolTipText = "Delete selected chats"
+                    font = font.deriveFont(12f)
+                    isFocusPainted = false
+                    foreground = JBColor(Color(0xE53935), Color(0xEF5350))
+                    addActionListener { deleteSelectedSessions() }
+                })
                 add(JButton("+ New Chat").apply {
                     toolTipText = "Create new root dialog"
                     font = font.deriveFont(12f)
@@ -90,7 +102,19 @@ class SessionTreePanel(
     private fun setupTree() {
         tree.cellRenderer = SessionCellRenderer(dateFormat)
 
-        // Double click → open
+        val deleteAction = object : AbstractAction() {
+            override fun actionPerformed(e: java.awt.event.ActionEvent) {
+                deleteSelectedSessions()
+            }
+        }
+        tree.getInputMap(JComponent.WHEN_FOCUSED).put(
+            KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_DELETE, 0), "deleteSelected"
+        )
+        tree.getInputMap(JComponent.WHEN_FOCUSED).put(
+            KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_BACK_SPACE, 0), "deleteSelected"
+        )
+        tree.actionMap.put("deleteSelected", deleteAction)
+
         tree.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
                 if (e.clickCount == 2) {
@@ -101,36 +125,65 @@ class SessionTreePanel(
             }
         })
 
-        // Right click → context menu
         tree.addMouseListener(object : MouseAdapter() {
-            override fun mousePressed(e: MouseEvent) { showContextMenu(e) }
-            override fun mouseReleased(e: MouseEvent) { showContextMenu(e) }
+            override fun mousePressed(e: MouseEvent) {
+                showContextMenu(e)
+            }
+
+            override fun mouseReleased(e: MouseEvent) {
+                showContextMenu(e)
+            }
 
             private fun showContextMenu(e: MouseEvent) {
                 if (!e.isPopupTrigger) return
                 val path = tree.getPathForLocation(e.x, e.y) ?: return
-                tree.selectionPath = path
+
+                val selectedPaths = tree.selectionPaths ?: emptyArray()
+                val isMultiSelection = selectedPaths.size > 1 && selectedPaths.contains(path)
+                if (!isMultiSelection) {
+                    tree.selectionPath = path
+                }
+
                 val node = path.lastPathComponent as? DefaultMutableTreeNode ?: return
                 val data = node.userObject as? TreeNodeData ?: return
 
                 JPopupMenu().apply {
-                    add(JMenuItem("\uD83D\uDCAC Open").apply {
-                        font = font.deriveFont(12f)
-                        addActionListener { onOpenSession(data.sessionId) }
-                    })
-                    add(JMenuItem("\u270F\uFE0F Rename").apply {
-                        font = font.deriveFont(12f)
-                        addActionListener { renameSession(data) }
-                    })
-                    add(JMenuItem("\u2442 New branch here").apply {
-                        font = font.deriveFont(12f)
-                        addActionListener { onNewBranch(data.sessionId) }
-                    })
-                    addSeparator()
-                    add(JMenuItem("\uD83D\uDDD1 Delete").apply {
+                    if (!isMultiSelection) {
+                        add(JMenuItem("\uD83D\uDCAC Open").apply {
+                            font = font.deriveFont(12f)
+                            addActionListener { onOpenSession(data.sessionId) }
+                        })
+                        add(JMenuItem("\u270F\uFE0F Rename").apply {
+                            font = font.deriveFont(12f)
+                            addActionListener { renameSession(data) }
+                        })
+                        add(JMenuItem("\u2442 New branch here").apply {
+                            font = font.deriveFont(12f)
+                            addActionListener { onNewBranch(data.sessionId) }
+                        })
+                        addSeparator()
+                    }
+                    val selectedCount = if (isMultiSelection) (tree.selectionPaths?.size ?: 1) else 1
+                    add(JMenuItem("\uD83D\uDDD1 Delete${if (isMultiSelection) " ($selectedCount selected)" else " & branches"}").apply {
                         font = font.deriveFont(12f)
                         foreground = JBColor(Color(0xE53935), Color(0xEF5350))
-                        addActionListener { onDeleteSession(data.sessionId) }
+                        addActionListener {
+                            if (isMultiSelection) {
+                                deleteSelectedSessions()
+                            } else {
+                                val confirmed = JOptionPane.showConfirmDialog(
+                                    this@SessionTreePanel,
+                                    "Delete \"${data.title}\" and all its branches?\nThis cannot be undone.",
+                                    "Confirm Delete",
+                                    JOptionPane.YES_NO_OPTION,
+                                    JOptionPane.WARNING_MESSAGE
+                                )
+                                if (confirmed == JOptionPane.YES_OPTION) {
+                                    onDeleteSession(data.sessionId)
+                                    refresh()
+                                }
+                            }
+                        }
                     })
                 }.show(tree, e.x, e.y)
             }
@@ -141,17 +194,49 @@ class SessionTreePanel(
         }
         add(scrollPane, BorderLayout.CENTER)
 
-        // Bottom hint
-        val hint = JBLabel("<html><small>Double-click to open \u2022 Right-click for actions</small></html>").apply {
-            foreground = JBColor.GRAY
-            border = JBUI.Borders.empty(4, 12)
-        }
+        val hint =
+            JBLabel("<html><small>Double-click to open \u2022 Right-click for actions \u2022 Ctrl+click to multi-select \u2022 Del to delete</small></html>").apply {
+                foreground = JBColor.GRAY
+                border = JBUI.Borders.empty(4, 12)
+            }
         add(hint, BorderLayout.SOUTH)
     }
 
-    /**
-     * Shows an input dialog to rename a session.
-     */
+    private fun deleteSelectedSessions() {
+        val paths = tree.selectionPaths ?: return
+        val items = paths.mapNotNull { path ->
+            (path.lastPathComponent as? DefaultMutableTreeNode)
+                ?.userObject as? TreeNodeData
+        }
+        if (items.isEmpty()) return
+
+        val count = items.size
+        val message = if (count == 1) {
+            "Delete \"${items.first().title}\" and all its branches?\nThis cannot be undone."
+        } else {
+            "Delete $count selected chats and all their branches?\nThis cannot be undone."
+        }
+
+        val confirmed = JOptionPane.showConfirmDialog(
+            this,
+            message,
+            "Confirm Delete",
+            JOptionPane.YES_NO_OPTION,
+            JOptionPane.WARNING_MESSAGE
+        )
+        if (confirmed != JOptionPane.YES_OPTION) return
+
+        val sorted = items.sortedByDescending { it.depth }
+        val deletedIds = mutableSetOf<String>()
+        for (item in sorted) {
+            if (item.sessionId !in deletedIds) {
+                onDeleteSession(item.sessionId)
+                deletedIds.add(item.sessionId)
+            }
+        }
+        refresh()
+    }
+
     private fun renameSession(data: TreeNodeData) {
         val newTitle = JOptionPane.showInputDialog(
             this,
@@ -164,14 +249,14 @@ class SessionTreePanel(
         ) as? String
 
         if (newTitle != null && newTitle.isNotBlank() && newTitle != data.title) {
-            chatHistory.renameSession(data.sessionId, newTitle)
+            chatTreeService.renameSession(data.sessionId, newTitle)
             refresh()
         }
     }
 
     fun refresh() {
         treeRoot.removeAllChildren()
-        val sessionTree = chatHistory.buildTree()
+        val sessionTree = chatTreeService.buildTree()
         for (node in sessionTree) {
             treeRoot.add(buildNode(node))
         }
@@ -186,7 +271,8 @@ class SessionTreePanel(
             updatedAt = node.session.updatedAt,
             messageCount = node.session.messages.size,
             childCount = node.children.size,
-            depth = node.depth
+            depth = node.depth,
+            totalTokens = node.session.tokenUsage.total
         )
         val swingNode = DefaultMutableTreeNode(data)
         for (child in node.children) {
@@ -196,7 +282,7 @@ class SessionTreePanel(
     }
 
     private fun expandToActive() {
-        val activeId = chatHistory.getActiveSession().id
+        val activeId = chatTreeService.getActiveSession().id
         val target = findNode(treeRoot, activeId)
         if (target != null) {
             val path = TreePath(target.path)
@@ -204,7 +290,6 @@ class SessionTreePanel(
             tree.selectionPath = path
             tree.scrollPathToVisible(path)
         } else {
-            // Expand first level
             for (i in 0 until treeRoot.childCount) {
                 tree.expandRow(i)
             }
@@ -225,32 +310,23 @@ class SessionTreePanel(
 
 // ==================== Tree Data & Renderers ====================
 
-/**
- * Node data for JTree display.
- */
 data class TreeNodeData(
     val sessionId: String,
     val title: String,
     val updatedAt: Long,
     val messageCount: Int,
     val childCount: Int,
-    val depth: Int
+    val depth: Int,
+    val totalTokens: Int = 0
 ) {
     override fun toString(): String = title
 }
 
-/**
- * Simple HTML-based tree cell renderer.
- * Uses a single JLabel with HTML — JTree handles sizing correctly.
- * Line 1: icon + title (bold)
- * Line 2: date • msg count • branch count (small, gray)
- */
 class SessionCellRenderer(
     private val dateFormat: SimpleDateFormat
 ) : DefaultTreeCellRenderer() {
 
     init {
-        // Remove default icons — we use text icons
         leafIcon = null
         openIcon = null
         closedIcon = null
@@ -260,7 +336,6 @@ class SessionCellRenderer(
         tree: JTree, value: Any?, sel: Boolean, expanded: Boolean,
         leaf: Boolean, row: Int, hasFocus: Boolean
     ): Component {
-        // Let default handle selection colors
         super.getTreeCellRendererComponent(tree, value, sel, expanded, leaf, row, hasFocus)
 
         val node = (value as? DefaultMutableTreeNode)?.userObject as? TreeNodeData
@@ -270,17 +345,19 @@ class SessionCellRenderer(
         }
 
         val icon = when {
-            node.childCount > 0 -> "\uD83D\uDCC2"  // 📂
-            node.messageCount == 0 -> "\uD83D\uDCC4" // 📄
-            else -> "\uD83D\uDCAC"                    // 💬
+            node.childCount > 0 -> "\uD83D\uDCC2"
+            node.messageCount == 0 -> "\uD83D\uDCC4"
+            else -> "\uD83D\uDCAC"
         }
 
         val title = escapeHtml(node.title)
         val date = dateFormat.format(Date(node.updatedAt))
+        val tokenStr = if (node.totalTokens > 0) " \u2022 ${formatTok(node.totalTokens)} tok" else ""
         val meta = buildString {
             append(date)
             append(" \u2022 ${node.messageCount} msg")
             if (node.childCount > 0) append(" \u2022 ${node.childCount} branch")
+            append(tokenStr)
         }
 
         val gray = if (JBColor.isBright()) "#888888" else "#999999"
@@ -297,4 +374,10 @@ class SessionCellRenderer(
 
     private fun escapeHtml(text: String): String =
         text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    private fun formatTok(n: Int): String = when {
+        n >= 1_000_000 -> "${n / 1_000_000}.${(n % 1_000_000) / 100_000}M"
+        n >= 1_000 -> "${n / 1_000}k"
+        else -> n.toString()
+    }
 }

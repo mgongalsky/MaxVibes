@@ -1,0 +1,1106 @@
+﻿
+========== Q3 LEFTOVERS ==========
+E:\Programs\Kotlin\MaxPilot\MaxVibes\maxvibes-application\src\main\kotlin\com\maxvibes\application\port\output\ClaudeCodePort.kt:60: * @param onActivity optional callback invoked from the transport thread when
+E:\Programs\Kotlin\MaxPilot\MaxVibes\maxvibes-application\src\main\kotlin\com\maxvibes\application\port\output\ClaudeCodePort.kt:61: *        intermediate stream-JSON events arrive ([ClaudeCodeActivity.Started],
+E:\Programs\Kotlin\MaxPilot\MaxVibes\maxvibes-application\src\main\kotlin\com\maxvibes\application\port\output\ClaudeCodePort.kt:62: *        [ClaudeCodeActivity.Thinking], [ClaudeCodeActivity.RateLimit]).
+
+========== SETTINGS FILE PATHS ==========
+E:\Programs\Kotlin\MaxPilot\MaxVibes\maxvibes-plugin\src\main\kotlin\com\maxvibes\plugin\claudecode\ClaudeCodeProcessAdapter.kt
+E:\Programs\Kotlin\MaxPilot\MaxVibes\maxvibes-plugin\src\main\kotlin\com\maxvibes\plugin\settings\MaxVibesSettings.kt
+E:\Programs\Kotlin\MaxPilot\MaxVibes\maxvibes-plugin\src\main\kotlin\com\maxvibes\plugin\settings\MaxVibesSettingsPanel.kt
+
+========== FILE: E:\Programs\Kotlin\MaxPilot\MaxVibes\maxvibes-plugin\src\main\kotlin\com\maxvibes\plugin\settings\MaxVibesSettings.kt ==========
+package com.maxvibes.plugin.settings
+
+import com.intellij.credentialStore.CredentialAttributes
+import com.intellij.credentialStore.Credentials
+import com.intellij.credentialStore.generateServiceName
+import com.intellij.ide.passwordSafe.PasswordSafe
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.components.PersistentStateComponent
+import com.intellij.openapi.components.State
+import com.intellij.openapi.components.Storage
+import com.intellij.util.xmlb.XmlSerializerUtil
+
+/**
+ * Persistent settings for MaxVibes plugin.
+ * Stores LLM provider configuration, interaction mode, and cheap LLM config.
+ *
+ * API keys are stored securely using IntelliJ's PasswordSafe.
+ */
+@State(
+    name = "MaxVibesSettings",
+    storages = [Storage("maxvibes.xml")]
+)
+class MaxVibesSettings : PersistentStateComponent<MaxVibesSettings.State> {
+
+    data class State(
+        // ===== Primary LLM (API mode) =====
+        var provider: String = "ANTHROPIC",
+        var modelId: String = "claude-sonnet-4-5-20250929",
+        var ollamaBaseUrl: String = "http://localhost:11434",
+        var temperature: Double = 0.2,
+        var maxTokens: Int = 32768,
+        var enableMockFallback: Boolean = true,
+
+        // ===== Interaction Mode =====
+        var interactionMode: String = "API",  // API, CLIPBOARD, CHEAP_API, CLAUDE_CODE
+
+        // ===== Cheap LLM (for CHEAP_API mode) =====
+        var cheapProvider: String = "ANTHROPIC",
+        var cheapModelId: String = "claude-haiku-4-5-20251001",
+        var cheapOllamaBaseUrl: String = "http://localhost:11434",
+        var cheapTemperature: Double = 0.1,
+        var cheapMaxTokens: Int = 16384,
+
+        // ===== Claude Code (CLI mode) =====
+        // Path can be a name in PATH ("claude") or an absolute path.
+        var claudeCodePath: String = "claude",
+        // Extra CLI args separated by whitespace, e.g. --allowedTools ""
+        var claudeCodeExtraArgs: String = "",
+        // Timeout for waiting on a single stream-json response turn.
+        var claudeCodeReadTimeoutSec: Int = 120,
+        // Timeout for waiting for the process to spawn and emit system/init.
+        var claudeCodeStartTimeoutSec: Int = 30
+    )
+
+    private var myState = State()
+
+    override fun getState(): State = myState
+
+    override fun loadState(state: State) {
+        XmlSerializerUtil.copyBean(state, myState)
+    }
+
+    // ===== Primary LLM =====
+
+    var provider: String
+        get() = myState.provider
+        set(value) {
+            myState.provider = value
+        }
+
+    var modelId: String
+        get() = myState.modelId
+        set(value) {
+            myState.modelId = value
+        }
+
+    var ollamaBaseUrl: String
+        get() = myState.ollamaBaseUrl
+        set(value) {
+            myState.ollamaBaseUrl = value
+        }
+
+    var temperature: Double
+        get() = myState.temperature
+        set(value) {
+            myState.temperature = value
+        }
+
+    var maxTokens: Int
+        get() = myState.maxTokens
+        set(value) {
+            myState.maxTokens = value
+        }
+
+    var enableMockFallback: Boolean
+        get() = myState.enableMockFallback
+        set(value) {
+            myState.enableMockFallback = value
+        }
+
+    // ===== Interaction Mode =====
+
+    var interactionMode: String
+        get() = myState.interactionMode
+        set(value) {
+            myState.interactionMode = value
+        }
+
+    // ===== Cheap LLM =====
+
+    var cheapProvider: String
+        get() = myState.cheapProvider
+        set(value) {
+            myState.cheapProvider = value
+        }
+
+    var cheapModelId: String
+        get() = myState.cheapModelId
+        set(value) {
+            myState.cheapModelId = value
+        }
+
+    var cheapOllamaBaseUrl: String
+        get() = myState.cheapOllamaBaseUrl
+        set(value) {
+            myState.cheapOllamaBaseUrl = value
+        }
+
+    var cheapTemperature: Double
+        get() = myState.cheapTemperature
+        set(value) {
+            myState.cheapTemperature = value
+        }
+
+    var cheapMaxTokens: Int
+        get() = myState.cheapMaxTokens
+        set(value) {
+            myState.cheapMaxTokens = value
+        }
+
+    // ===== Claude Code =====
+
+    var claudeCodePath: String
+        get() = myState.claudeCodePath
+        set(value) {
+            myState.claudeCodePath = value
+        }
+
+    var claudeCodeExtraArgs: String
+        get() = myState.claudeCodeExtraArgs
+        set(value) {
+            myState.claudeCodeExtraArgs = value
+        }
+
+    var claudeCodeReadTimeoutSec: Int
+        get() = myState.claudeCodeReadTimeoutSec
+        set(value) {
+            myState.claudeCodeReadTimeoutSec = value
+        }
+
+    var claudeCodeStartTimeoutSec: Int
+        get() = myState.claudeCodeStartTimeoutSec
+        set(value) {
+            myState.claudeCodeStartTimeoutSec = value
+        }
+
+    // ========== Secure API Key Storage ==========
+
+    var openAIApiKey: String
+        get() = getSecureKey(OPENAI_KEY_NAME)
+        set(value) = setSecureKey(OPENAI_KEY_NAME, value)
+
+    var anthropicApiKey: String
+        get() = getSecureKey(ANTHROPIC_KEY_NAME)
+        set(value) = setSecureKey(ANTHROPIC_KEY_NAME, value)
+
+    /** API key for cheap/external provider (DeepSeek, etc.) */
+    var cheapApiKey: String
+        get() = getSecureKey(CHEAP_API_KEY_NAME)
+        set(value) = setSecureKey(CHEAP_API_KEY_NAME, value)
+
+    val currentApiKey: String
+        get() = when (provider) {
+            "OPENAI" -> openAIApiKey
+            "ANTHROPIC" -> anthropicApiKey
+            "OLLAMA" -> ""
+            else -> ""
+        }
+
+    /** API key for cheap provider — reuses main keys for same providers */
+    val currentCheapApiKey: String
+        get() = when (cheapProvider) {
+            "OPENAI" -> openAIApiKey
+            "ANTHROPIC" -> anthropicApiKey
+            "DEEPSEEK" -> cheapApiKey
+            "OLLAMA" -> ""
+            else -> cheapApiKey
+        }
+
+    val isConfigured: Boolean
+        get() = when (provider) {
+            "OPENAI" -> openAIApiKey.isNotBlank()
+            "ANTHROPIC" -> anthropicApiKey.isNotBlank()
+            "OLLAMA" -> ollamaBaseUrl.isNotBlank()
+            else -> false
+        }
+
+    val isCheapConfigured: Boolean
+        get() = when (cheapProvider) {
+            "OPENAI" -> openAIApiKey.isNotBlank()
+            "ANTHROPIC" -> anthropicApiKey.isNotBlank()
+            "DEEPSEEK" -> cheapApiKey.isNotBlank()
+            "OLLAMA" -> cheapOllamaBaseUrl.isNotBlank()
+            else -> false
+        }
+
+    private fun getSecureKey(keyName: String): String {
+        val attributes = createCredentialAttributes(keyName)
+        return PasswordSafe.instance.getPassword(attributes) ?: ""
+    }
+
+    private fun setSecureKey(keyName: String, value: String) {
+        val attributes = createCredentialAttributes(keyName)
+        if (value.isBlank()) {
+            PasswordSafe.instance.set(attributes, null)
+        } else {
+            PasswordSafe.instance.set(attributes, Credentials("", value))
+        }
+    }
+
+    private fun createCredentialAttributes(key: String): CredentialAttributes {
+        return CredentialAttributes(
+            generateServiceName("MaxVibes", key)
+        )
+    }
+
+    companion object {
+        private const val OPENAI_KEY_NAME = "openai_api_key"
+        private const val ANTHROPIC_KEY_NAME = "anthropic_api_key"
+        private const val CHEAP_API_KEY_NAME = "cheap_llm_api_key"
+
+        fun getInstance(): MaxVibesSettings {
+            return ApplicationManager.getApplication().getService(MaxVibesSettings::class.java)
+        }
+
+        // Default models for each provider
+        val DEFAULT_MODELS = mapOf(
+            "OPENAI" to listOf(
+                "gpt-5.2" to "GPT-5.2 (Recommended)",
+                "gpt-5.2-pro" to "GPT-5.2 Pro (Most Capable)",
+                "gpt-4o" to "GPT-4o",
+                "gpt-4o-mini" to "GPT-4o Mini (Faster)",
+                "o3-mini" to "O3 Mini (Reasoning)"
+            ),
+            "ANTHROPIC" to listOf(
+                "claude-sonnet-4-5-20250929" to "Claude Sonnet 4.5 (Recommended)",
+                "claude-opus-4-6" to "Claude Opus 4.6 (Most Intelligent)",
+                "claude-opus-4-5-20251101" to "Claude Opus 4.5",
+                "claude-haiku-4-5-20251001" to "Claude Haiku 4.5 (Fastest)",
+                "claude-sonnet-4-20250514" to "Claude Sonnet 4 (Legacy)"
+            ),
+            "OLLAMA" to listOf(
+                "llama3.2" to "Llama 3.2 (Default)",
+                "codellama" to "CodeLlama",
+                "mistral" to "Mistral",
+                "qwen2.5-coder" to "Qwen 2.5 Coder"
+            )
+        )
+
+        /** Cheap models — optimized for cost */
+        val CHEAP_MODELS = mapOf(
+            "ANTHROPIC" to listOf(
+                "claude-haiku-4-5-20251001" to "Claude Haiku 4.5 (\$0.80/\$4 per M tokens)",
+                "claude-sonnet-4-5-20250929" to "Claude Sonnet 4.5 (\$3/\$15 per M tokens)"
+            ),
+            "OPENAI" to listOf(
+                "gpt-4o-mini" to "GPT-4o Mini (\$0.15/\$0.60 per M tokens)",
+                "gpt-4o" to "GPT-4o (\$2.50/\$10 per M tokens)"
+            ),
+            "DEEPSEEK" to listOf(
+                "deepseek-chat" to "DeepSeek V3 (\$0.14/\$0.28 per M tokens)",
+                "deepseek-coder" to "DeepSeek Coder (\$0.14/\$0.28 per M tokens)"
+            ),
+            "OLLAMA" to listOf(
+                "qwen2.5-coder:7b" to "Qwen 2.5 Coder 7B (Free, Local)",
+                "codellama:7b" to "CodeLlama 7B (Free, Local)",
+                "deepseek-coder:6.7b" to "DeepSeek Coder 6.7B (Free, Local)"
+            )
+        )
+
+        val PROVIDERS = listOf(
+            "ANTHROPIC" to "Anthropic Claude",
+            "OPENAI" to "OpenAI GPT",
+            "OLLAMA" to "Ollama (Local)"
+        )
+
+        val CHEAP_PROVIDERS = listOf(
+            "ANTHROPIC" to "Anthropic (Haiku)",
+            "OPENAI" to "OpenAI (Mini)",
+            "DEEPSEEK" to "DeepSeek (Cheapest)",
+            "OLLAMA" to "Ollama (Free, Local)"
+        )
+
+        /** Interaction mode display names */
+        val INTERACTION_MODES = listOf(
+            "API" to "\uD83D\uDD0C API (Direct, pay-per-token)",
+            "CLIPBOARD" to "\uD83D\uDCCB Clipboard (Copy-paste, subscription)",
+            "CHEAP_API" to "\uD83D\uDCB0 Cheap API (Budget model)",
+            "CLAUDE_CODE" to "\uD83E\uDD16 Claude Code (Local CLI)"
+        )
+    }
+}
+
+
+========== FILE: E:\Programs\Kotlin\MaxPilot\MaxVibes\maxvibes-plugin\src\main\kotlin\com\maxvibes\plugin\settings\MaxVibesSettingsPanel.kt ==========
+// maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/settings/MaxVibesSettingsPanel.kt
+package com.maxvibes.plugin.settings
+
+import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
+import com.intellij.openapi.ui.ComboBox
+import com.intellij.openapi.ui.TextFieldWithBrowseButton
+import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBPasswordField
+import com.intellij.ui.components.JBTextField
+import com.intellij.util.ui.FormBuilder
+import com.intellij.util.ui.JBUI
+import com.maxvibes.adapter.llm.LLMServiceFactory
+import com.maxvibes.adapter.llm.config.LLMProviderConfig
+import com.maxvibes.adapter.llm.config.LLMProviderType
+import java.awt.BorderLayout
+import java.awt.FlowLayout
+import javax.swing.*
+import javax.swing.event.DocumentEvent
+import javax.swing.event.DocumentListener
+
+/**
+ * Settings panel for MaxVibes LLM configuration.
+ * Provides UI for selecting provider, entering API keys, and configuring model.
+ */
+class MaxVibesSettingsPanel {
+
+    private val providerComboBox: ComboBox<String>
+    private val openAIKeyField: JBPasswordField
+    private val anthropicKeyField: JBPasswordField
+    private val modelComboBox: ComboBox<String>
+    private val customModelField: JBTextField
+    private val ollamaUrlField: JBTextField
+    private val temperatureSlider: JSlider
+    private val temperatureLabel: JBLabel
+    private val mockFallbackCheckBox: JCheckBox
+    private val testConnectionButton: JButton
+    private val statusLabel: JBLabel
+
+    // Claude Code section
+    private val claudeCodePathField: TextFieldWithBrowseButton
+    private val claudeCodeExtraArgsField: JBTextField
+    private val claudeCodeReadTimeoutField: JBTextField
+    private val claudeCodeStartTimeoutField: JBTextField
+
+    // Panels for conditional display
+    private val openAIPanel: JPanel
+    private val anthropicPanel: JPanel
+    private val ollamaPanel: JPanel
+
+    val panel: JPanel
+
+    init {
+        // Initialize components
+        providerComboBox = ComboBox(MaxVibesSettings.PROVIDERS.map { it.second }.toTypedArray())
+
+        openAIKeyField = JBPasswordField().apply {
+            columns = 40
+            emptyText.text = "sk-..."
+        }
+
+        anthropicKeyField = JBPasswordField().apply {
+            columns = 40
+            emptyText.text = "sk-ant-..."
+        }
+
+        modelComboBox = ComboBox<String>().apply {
+            isEditable = false
+        }
+
+        customModelField = JBTextField().apply {
+            columns = 30
+            emptyText.text = "Or enter custom model ID"
+        }
+
+        ollamaUrlField = JBTextField().apply {
+            columns = 30
+            text = "http://localhost:11434"
+        }
+
+        temperatureSlider = JSlider(0, 100, 20).apply {
+            majorTickSpacing = 25
+            minorTickSpacing = 5
+            paintTicks = true
+            paintLabels = true
+            val labels = java.util.Hashtable<Int, JLabel>()
+            labels[0] = JLabel("0.0")
+            labels[50] = JLabel("0.5")
+            labels[100] = JLabel("1.0")
+            labelTable = labels
+        }
+
+        temperatureLabel = JBLabel("0.2")
+
+        mockFallbackCheckBox = JCheckBox("Enable mock fallback when API is not configured").apply {
+            isSelected = true
+        }
+
+        testConnectionButton = JButton("Test Connection")
+        statusLabel = JBLabel(" ")
+
+        // Claude Code fields
+        claudeCodePathField = TextFieldWithBrowseButton().apply {
+            textField.columns = 30
+            (textField as? JBTextField)?.emptyText?.text = "claude (in PATH) or absolute path"
+            @Suppress("DEPRECATION")
+            addBrowseFolderListener(
+                "Claude Code Binary",
+                "Path to the claude CLI binary",
+                null,
+                FileChooserDescriptorFactory.createSingleFileDescriptor()
+            )
+        }
+        claudeCodeExtraArgsField = JBTextField().apply {
+            columns = 30
+            emptyText.text = "e.g. --allowedTools \"\""
+        }
+        claudeCodeReadTimeoutField = JBTextField().apply { columns = 6 }
+        claudeCodeStartTimeoutField = JBTextField().apply { columns = 6 }
+
+        // Create provider-specific panels
+        openAIPanel = createOpenAIPanel()
+        anthropicPanel = createAnthropicPanel()
+        ollamaPanel = createOllamaPanel()
+
+        // Build the main panel
+        panel = buildPanel()
+
+        // Setup listeners
+        setupListeners()
+
+        // Initial state
+        updateProviderPanels()
+        updateModelComboBox()
+    }
+
+    private fun createOpenAIPanel(): JPanel {
+        return JPanel(BorderLayout()).apply {
+            border = JBUI.Borders.emptyTop(5)
+            add(JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
+                add(JBLabel("OpenAI API Key: "))
+                add(openAIKeyField)
+                add(Box.createHorizontalStrut(10))
+                add(createHelpLink("https://platform.openai.com/api-keys"))
+            }, BorderLayout.CENTER)
+        }
+    }
+
+    private fun createAnthropicPanel(): JPanel {
+        return JPanel(BorderLayout()).apply {
+            border = JBUI.Borders.emptyTop(5)
+            add(JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
+                add(JBLabel("Anthropic API Key: "))
+                add(anthropicKeyField)
+                add(Box.createHorizontalStrut(10))
+                add(createHelpLink("https://console.anthropic.com/"))
+            }, BorderLayout.CENTER)
+        }
+    }
+
+    private fun createOllamaPanel(): JPanel {
+        return JPanel(BorderLayout()).apply {
+            border = JBUI.Borders.emptyTop(5)
+            add(JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
+                add(JBLabel("Ollama URL: "))
+                add(ollamaUrlField)
+                add(Box.createHorizontalStrut(10))
+                add(createHelpLink("https://ollama.ai/"))
+            }, BorderLayout.CENTER)
+        }
+    }
+
+    private fun createHelpLink(url: String): JButton {
+        return JButton("?").apply {
+            toolTipText = "Open $url"
+            isFocusPainted = false
+            addActionListener {
+                try {
+                    java.awt.Desktop.getDesktop().browse(java.net.URI(url))
+                } catch (e: Exception) {
+                    // Ignore
+                }
+            }
+        }
+    }
+
+    private fun buildPanel(): JPanel {
+        val temperaturePanel = JPanel(FlowLayout(FlowLayout.LEFT, 5, 0)).apply {
+            add(temperatureSlider)
+            add(temperatureLabel)
+        }
+
+        val modelPanel = JPanel(FlowLayout(FlowLayout.LEFT, 5, 0)).apply {
+            add(modelComboBox)
+            add(JBLabel(" or "))
+            add(customModelField)
+        }
+
+        val testPanel = JPanel(FlowLayout(FlowLayout.LEFT, 5, 0)).apply {
+            add(testConnectionButton)
+            add(statusLabel)
+        }
+
+        // Provider panels container
+        val providerPanelsContainer = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            add(openAIPanel)
+            add(anthropicPanel)
+            add(ollamaPanel)
+        }
+
+        return FormBuilder.createFormBuilder()
+            .addLabeledComponent(JBLabel("LLM Provider:"), providerComboBox)
+            .addComponent(providerPanelsContainer)
+            .addSeparator()
+            .addLabeledComponent(JBLabel("Model:"), modelPanel)
+            .addLabeledComponent(JBLabel("Temperature:"), temperaturePanel)
+            .addSeparator()
+            .addComponent(JBLabel("Claude Code (CLI mode):"))
+            .addLabeledComponent(JBLabel("Binary path:"), claudeCodePathField)
+            .addLabeledComponent(JBLabel("Extra CLI args:"), claudeCodeExtraArgsField)
+            .addLabeledComponent(JBLabel("Read timeout (sec):"), claudeCodeReadTimeoutField)
+            .addLabeledComponent(JBLabel("Start timeout (sec):"), claudeCodeStartTimeoutField)
+            .addSeparator()
+            .addComponent(mockFallbackCheckBox)
+            .addComponent(testPanel)
+            .addComponentFillVertically(JPanel(), 0)
+            .panel.apply {
+                border = JBUI.Borders.empty(10)
+            }
+    }
+
+    private fun setupListeners() {
+        // Provider change listener
+        providerComboBox.addActionListener {
+            updateProviderPanels()
+            updateModelComboBox()
+        }
+
+        // Temperature slider listener
+        temperatureSlider.addChangeListener {
+            val temp = temperatureSlider.value / 100.0
+            temperatureLabel.text = String.format("%.2f", temp)
+        }
+
+        // Custom model field listener
+        customModelField.document.addDocumentListener(object : DocumentListener {
+            override fun insertUpdate(e: DocumentEvent?) = onCustomModelChanged()
+            override fun removeUpdate(e: DocumentEvent?) = onCustomModelChanged()
+            override fun changedUpdate(e: DocumentEvent?) = onCustomModelChanged()
+        })
+
+        // Test connection button
+        testConnectionButton.addActionListener {
+            testConnection()
+        }
+    }
+
+    private fun onCustomModelChanged() {
+        if (customModelField.text.isNotBlank()) {
+            modelComboBox.isEnabled = false
+        } else {
+            modelComboBox.isEnabled = true
+        }
+    }
+
+    private fun updateProviderPanels() {
+        val providerKey = getSelectedProviderKey()
+        openAIPanel.isVisible = providerKey == "OPENAI"
+        anthropicPanel.isVisible = providerKey == "ANTHROPIC"
+        ollamaPanel.isVisible = providerKey == "OLLAMA"
+    }
+
+    private fun updateModelComboBox() {
+        val providerKey = getSelectedProviderKey()
+        val models = MaxVibesSettings.DEFAULT_MODELS[providerKey] ?: emptyList()
+
+        modelComboBox.removeAllItems()
+        models.forEach { (_, displayName) ->
+            modelComboBox.addItem(displayName)
+        }
+
+        if (modelComboBox.itemCount > 0) {
+            modelComboBox.selectedIndex = 0
+        }
+    }
+
+    private fun getSelectedProviderKey(): String {
+        val index = providerComboBox.selectedIndex
+        return if (index >= 0) {
+            MaxVibesSettings.PROVIDERS[index].first
+        } else {
+            "ANTHROPIC"
+        }
+    }
+
+    private fun getSelectedModelId(): String {
+        // If custom model is specified, use it
+        if (customModelField.text.isNotBlank()) {
+            return customModelField.text.trim()
+        }
+
+        // Otherwise use the selected preset
+        val providerKey = getSelectedProviderKey()
+        val models = MaxVibesSettings.DEFAULT_MODELS[providerKey] ?: emptyList()
+        val index = modelComboBox.selectedIndex
+
+        return if (index >= 0 && index < models.size) {
+            models[index].first
+        } else {
+            models.firstOrNull()?.first ?: ""
+        }
+    }
+
+    private fun testConnection() {
+        statusLabel.text = "Testing..."
+        testConnectionButton.isEnabled = false
+
+        Thread {
+            try {
+                val config = createCurrentConfig()
+                val service = LLMServiceFactory.create(config)
+
+                // Simple test - just check if we can get provider info
+                val info = service.getProviderInfo()
+
+                SwingUtilities.invokeLater {
+                    statusLabel.text = "\u2713 Connected: $info"
+                    statusLabel.foreground = java.awt.Color(0, 128, 0)
+                    testConnectionButton.isEnabled = true
+                }
+            } catch (e: Exception) {
+                SwingUtilities.invokeLater {
+                    statusLabel.text = "\u2717 Error: ${e.message?.take(50)}"
+                    statusLabel.foreground = java.awt.Color(200, 0, 0)
+                    testConnectionButton.isEnabled = true
+                }
+            }
+        }.start()
+    }
+
+    private fun createCurrentConfig(): LLMProviderConfig {
+        val providerKey = getSelectedProviderKey()
+        val modelId = getSelectedModelId()
+        val temp = temperatureSlider.value / 100.0
+
+        return when (providerKey) {
+            "OPENAI" -> LLMProviderConfig(
+                providerType = LLMProviderType.OPENAI,
+                apiKey = String(openAIKeyField.password),
+                modelId = modelId,
+                temperature = temp
+            )
+
+            "ANTHROPIC" -> LLMProviderConfig(
+                providerType = LLMProviderType.ANTHROPIC,
+                apiKey = String(anthropicKeyField.password),
+                modelId = modelId,
+                temperature = temp
+            )
+
+            "OLLAMA" -> LLMProviderConfig(
+                providerType = LLMProviderType.OLLAMA,
+                apiKey = "",
+                modelId = modelId,
+                baseUrl = ollamaUrlField.text,
+                temperature = temp
+            )
+
+            else -> throw IllegalStateException("Unknown provider: $providerKey")
+        }
+    }
+
+    // ========== Settings Load/Save ==========
+
+    fun loadSettings(settings: MaxVibesSettings) {
+        // Provider
+        val providerIndex = MaxVibesSettings.PROVIDERS.indexOfFirst { it.first == settings.provider }
+        if (providerIndex >= 0) {
+            providerComboBox.selectedIndex = providerIndex
+        }
+        updateProviderPanels()
+        updateModelComboBox()
+
+        // API Keys
+        openAIKeyField.text = settings.openAIApiKey
+        anthropicKeyField.text = settings.anthropicApiKey
+
+        // Model
+        val models = MaxVibesSettings.DEFAULT_MODELS[settings.provider] ?: emptyList()
+        val modelIndex = models.indexOfFirst { it.first == settings.modelId }
+        if (modelIndex >= 0) {
+            modelComboBox.selectedIndex = modelIndex
+            customModelField.text = ""
+        } else {
+            // Custom model
+            customModelField.text = settings.modelId
+        }
+
+        // Ollama URL
+        ollamaUrlField.text = settings.ollamaBaseUrl
+
+        // Temperature
+        temperatureSlider.value = (settings.temperature * 100).toInt()
+        temperatureLabel.text = String.format("%.2f", settings.temperature)
+
+        // Mock fallback
+        mockFallbackCheckBox.isSelected = settings.enableMockFallback
+
+        // Claude Code
+        claudeCodePathField.text = settings.claudeCodePath
+        claudeCodeExtraArgsField.text = settings.claudeCodeExtraArgs
+        claudeCodeReadTimeoutField.text = settings.claudeCodeReadTimeoutSec.toString()
+        claudeCodeStartTimeoutField.text = settings.claudeCodeStartTimeoutSec.toString()
+
+        // Reset status
+        statusLabel.text = " "
+    }
+
+    fun saveSettings(settings: MaxVibesSettings) {
+        settings.provider = getSelectedProviderKey()
+        settings.modelId = getSelectedModelId()
+        settings.ollamaBaseUrl = ollamaUrlField.text
+        settings.temperature = temperatureSlider.value / 100.0
+        settings.enableMockFallback = mockFallbackCheckBox.isSelected
+
+        // Save API keys securely
+        settings.openAIApiKey = String(openAIKeyField.password)
+        settings.anthropicApiKey = String(anthropicKeyField.password)
+
+        // Claude Code — defensive int parsing falls back to current value if input is garbage
+        settings.claudeCodePath = claudeCodePathField.text.trim().ifBlank { "claude" }
+        settings.claudeCodeExtraArgs = claudeCodeExtraArgsField.text
+        settings.claudeCodeReadTimeoutSec =
+            claudeCodeReadTimeoutField.text.trim().toIntOrNull()?.coerceAtLeast(1)
+                ?: settings.claudeCodeReadTimeoutSec
+        settings.claudeCodeStartTimeoutSec =
+            claudeCodeStartTimeoutField.text.trim().toIntOrNull()?.coerceAtLeast(1)
+                ?: settings.claudeCodeStartTimeoutSec
+    }
+
+    fun isModified(settings: MaxVibesSettings): Boolean {
+        val pathChanged = settings.claudeCodePath != claudeCodePathField.text.trim().ifBlank { "claude" }
+        val argsChanged = settings.claudeCodeExtraArgs != claudeCodeExtraArgsField.text
+        val readTimeoutChanged =
+            settings.claudeCodeReadTimeoutSec.toString() != claudeCodeReadTimeoutField.text.trim()
+        val startTimeoutChanged =
+            settings.claudeCodeStartTimeoutSec.toString() != claudeCodeStartTimeoutField.text.trim()
+
+        return settings.provider != getSelectedProviderKey() ||
+                settings.modelId != getSelectedModelId() ||
+                settings.ollamaBaseUrl != ollamaUrlField.text ||
+                settings.temperature != temperatureSlider.value / 100.0 ||
+                settings.enableMockFallback != mockFallbackCheckBox.isSelected ||
+                settings.openAIApiKey != String(openAIKeyField.password) ||
+                settings.anthropicApiKey != String(anthropicKeyField.password) ||
+                pathChanged ||
+                argsChanged ||
+                readTimeoutChanged ||
+                startTimeoutChanged
+    }
+}
+
+
+========== CONTROLLER: status strings ==========
+--- line 37 ---
+    fun appendToChat(text: String)
+    fun appendAssistantMessage(text: String)
+    fun setInputEnabled(enabled: Boolean)
+>>>     fun setStatus(text: String)
+    fun updateModeIndicator()
+    fun updateBreadcrumb()
+    fun registerElementPaths(modifications: List<ModificationResult>)
+--- line 193 ---
+                        chatTreeService.addMessage(session.id, MessageRole.SYSTEM, "Cancelled")
+                        callbacks.appendToChat("\u26A0\uFE0F Cancelled")
+                        callbacks.setInputEnabled(true)
+>>>                         callbacks.setStatus("Cancelled")
+                    }
+                }
+            })
+--- line 299 ---
+            )
+        )
+        callbacks.setInputEnabled(false)
+>>>         callbacks.setStatus("Claude Code: approving...")
+        runClaudeCodeBg("Claude Code: approving...", session) {
+            service.claudeCodeService.approve(
+                sessionId = session.id,
+--- line 342 ---
+        val turn = CommandTurn(session.id, mode)
+        commandTurn = turn
+        callbacks.setInputEnabled(false)
+>>>         callbacks.setStatus("\u26A1 ${commands.size} command(s) awaiting approval")
+        if (commands.size > 1) {
+            turn.batchBar = callbacks.addCommandBatchBar(
+                count = commands.size,
+--- line 406 ---
+        if (item.resolved || item.started) return
+        item.started = true
+        item.view?.setRunning()
+>>>         callbacks.setStatus("\u26A1 Running: ${item.request.command.take(50)}")
+        ProgressManager.getInstance().run(object : Task.Backgroundable(project, "MaxVibes: Running command...", false) {
+            override fun run(indicator: ProgressIndicator) {
+                val execution = runBlocking { service.executeCommandUseCase.execute(item.request) }
+--- line 445 ---
+        turn.executions.add(execution)
+        val remaining = turn.items.size - turn.executions.size
+        if (remaining > 0) {
+>>>             callbacks.setStatus("\u26A1 $remaining command(s) awaiting approval")
+            return
+        }
+        turn.batchBar?.dismiss()
+--- line 462 ---
+            "Controller", "commandTurn complete",
+            mapOf("mode" to turn.mode.name, "n" to turn.executions.size)
+        )
+>>>         callbacks.setStatus("\u26A1 Sending command results...")
+        when (turn.mode) {
+            InteractionMode.CLIPBOARD -> runClipboardBg("Sending command results...", session) {
+                service.clipboardService.submitCommandResults(session.id, formatted)
+--- line 507 ---
+        val feedbackMsg =
+            "\uD83D\uDD04 Auto-fix: ${failures.size} modification(s) failed \u2014 asking LLM to correct:\n$errorSummary"
+        callbacks.appendToChat(feedbackMsg)
+>>>         callbacks.setStatus("Auto-fixing...")
+
+        val history = session.messages.map { it.toChatMessageDTO() }
+        val retrySession = chatTreeService.addMessage(session.id, MessageRole.USER, retryTask)
+--- line 554 ---
+                        chatTreeService.addMessage(session.id, MessageRole.SYSTEM, "Cancelled")
+                        callbacks.appendToChat("\u26A0\uFE0F Cancelled")
+                        callbacks.setInputEnabled(true)
+>>>                         callbacks.setStatus("Cancelled")
+                        MaxVibesLogger.warn("Controller", "cancelled by user")
+                    }
+                }
+--- line 655 ---
+
+        callbacks.setInputEnabled(true)
+        if (failures.isNotEmpty()) {
+>>>             callbacks.setStatus("Done \u2014 ${failures.size} modification(s) failed (retry exhausted)")
+        } else {
+            callbacks.setStatus(if (result.success) "Ready" else "Errors")
+        }
+--- line 657 ---
+        if (failures.isNotEmpty()) {
+            callbacks.setStatus("Done \u2014 ${failures.size} modification(s) failed (retry exhausted)")
+        } else {
+>>>             callbacks.setStatus(if (result.success) "Ready" else "Errors")
+        }
+        callbacks.updateBreadcrumb()
+    }
+--- line 712 ---
+                callbacks.appendToChat(result.statusMessage)
+                callbacks.setInputEnabled(true)
+                callbacks.updateModeIndicator()
+>>>                 callbacks.setStatus("Waiting for LLM response...")
+            }
+
+            is ClipboardStepResult.Completed -> {
+--- line 780 ---
+
+                    callbacks.setInputEnabled(true)
+                    callbacks.updateModeIndicator()
+>>>                     callbacks.setStatus("\u26A0\uFE0F ${failures.size} failed \u2014 retry prompt copied, paste LLM response")
+                } else {
+                    callbacks.updateTokenDisplay()
+
+--- line 808 ---
+                    callbacks.updateModeIndicator()
+                    val isSessionActive = service.clipboardService.status(session.id) != ClipboardSessionStatus.IDLE
+                    val hint = if (isSessionActive) " \u2022 Session active" else ""
+>>>                     callbacks.setStatus((if (result.success) "Ready" else "Errors") + hint)
+                    callbacks.updateBreadcrumb()
+                }
+            }
+--- line 827 ---
+                }
+                callbacks.setInputEnabled(true)
+                callbacks.updateModeIndicator()
+>>>                 callbacks.setStatus("\u26A0\uFE0F Parse error \u2014 paste corrected LLM response")
+            }
+
+            is ClipboardStepResult.Error -> {
+--- line 836 ---
+                callbacks.appendToChat("\u274C ${result.message}")
+                callbacks.setInputEnabled(true)
+                callbacks.updateModeIndicator()
+>>>                 callbacks.setStatus("Error")
+            }
+        }
+    }
+--- line 898 ---
+
+                callbacks.setInputEnabled(true)
+                callbacks.updateModeIndicator()
+>>>                 callbacks.setStatus("\uD83E\uDD16 Awaiting approval \u2014 click Approve to gather files and continue")
+            }
+
+            is ClaudeCodeStepResult.AwaitingModApprove -> {
+--- line 946 ---
+
+                callbacks.setInputEnabled(true)
+                callbacks.updateModeIndicator()
+>>>                 callbacks.setStatus(
+                    "\uD83E\uDD16 ${result.proposedModifications.size} modification(s) awaiting approval \u2014 Approve to apply, or type to reject"
+                )
+            }
+--- line 1023 ---
+                callbacks.setInputEnabled(true)
+                callbacks.updateModeIndicator()
+                if (failures.isNotEmpty()) {
+>>>                     callbacks.setStatus("\u26A0\uFE0F ${failures.size} modification(s) failed")
+                } else {
+                    callbacks.setStatus(if (result.success) "Ready" else "Errors")
+                }
+--- line 1025 ---
+                if (failures.isNotEmpty()) {
+                    callbacks.setStatus("\u26A0\uFE0F ${failures.size} modification(s) failed")
+                } else {
+>>>                     callbacks.setStatus(if (result.success) "Ready" else "Errors")
+                }
+                callbacks.updateBreadcrumb()
+            }
+--- line 1036 ---
+                callbacks.appendToChat("\u274C ${result.message}")
+                callbacks.setInputEnabled(true)
+                callbacks.updateModeIndicator()
+>>>                 callbacks.setStatus("Claude Code error")
+            }
+
+            is ClaudeCodeStepResult.TransportError -> {
+--- line 1054 ---
+                callbacks.appendToChat("Check Claude Code settings (binary path, args) and retry.")
+                callbacks.setInputEnabled(true)
+                callbacks.updateModeIndicator()
+>>>                 callbacks.setStatus("\u26A0\uFE0F Claude Code transport error")
+            }
+        }
+    }
+--- line 1169 ---
+    /** Attaches an image; enforces the per-message cap. Returns false when the cap is hit. */
+    fun attachImage(image: AttachedImage): Boolean {
+        if (attachedImages.size >= ImageAttachments.MAX_IMAGES) {
+>>>             callbacks.setStatus("🖼 Max ${ImageAttachments.MAX_IMAGES} images per message")
+            return false
+        }
+        attachedImages.add(image)
+--- line 1174 ---
+        }
+        attachedImages.add(image)
+        callbacks.onImagesChanged(attachedImages.toList())
+>>>         callbacks.setStatus("🖼 Image attached (${attachedImages.size})")
+        return true
+    }
+
+--- line 1191 ---
+    }
+
+    fun fetchIdeErrors() {
+>>>         callbacks.setStatus("Fetching IDE errors...")
+        object : Task.Backgroundable(project, "Fetching IDE errors", false) {
+            override fun run(indicator: ProgressIndicator) {
+                runBlocking {
+--- line 1201 ---
+                            is Result.Success -> {
+                                val errors = result.value
+                                if (errors.isEmpty()) {
+>>>                                     callbacks.setStatus("No IDE errors found in open files")
+                                } else {
+                                    attachedErrors = errors.joinToString("\n") { it.formatForLlm() }
+                                    callbacks.setStatus("Attached ${errors.size} IDE errors")
+--- line 1204 ---
+                                    callbacks.setStatus("No IDE errors found in open files")
+                                } else {
+                                    attachedErrors = errors.joinToString("\n") { it.formatForLlm() }
+>>>                                     callbacks.setStatus("Attached ${errors.size} IDE errors")
+                                    callbacks.onAttachmentsChanged(attachedTrace, attachedErrors)
+                                }
+                            }
+--- line 1326 ---
+        session = chatTreeService.addMessage(session.id, MessageRole.USER, fullTask)
+        callbacks.addUserMessageBubble(msg)
+        callbacks.setInputEnabled(false)
+>>>         callbacks.setStatus(if (isPlanOnly) "Planning..." else "Thinking...")
+        sendApiMessage(fullTask, session, history, isDryRun, isPlanOnly, chatTreeService.getGlobalContextFiles(), errs)
+    }
+
+--- line 1375 ---
+            // Clipboard mode should never see AWAITING_APPROVE (Claude Code-only); fall back gracefully.
+            ClipboardSessionStatus.AWAITING_APPROVE -> "Awaiting approval..."
+        }
+>>>         callbacks.setStatus(statusText)
+
+        val capturedSession = session
+        runClipboardBg(statusText, capturedSession) {
+--- line 1406 ---
+        session = chatTreeService.addMessage(session.id, MessageRole.USER, fullTask)
+        callbacks.addUserMessageBubble(msg)
+        callbacks.setInputEnabled(false)
+>>>         callbacks.setStatus("Thinking (cheap)...")
+        @Suppress("DEPRECATION")
+        service.ensureCheapLLMService()
+        sendCheapApiMessage(
+--- line 1455 ---
+        callbacks.addUserMessageBubble(userInput, images)
+
+        callbacks.setInputEnabled(false)
+>>>         callbacks.setStatus("Claude Code: sending...")
+
+        val capturedSession = session
+        runClaudeCodeBg("Claude Code: sending...", capturedSession) {
+
+========== CHATPANEL: wrapper region ==========
+--- line 621 ---
+            add(JPanel(BorderLayout()).apply {
+                background = JBColor.background(); add(statusLabel, BorderLayout.WEST)
+            })
+            add(JPanel(BorderLayout()).apply {
+                background = JBColor.background()
+                add(tokenLabel.apply { horizontalAlignment = SwingConstants.LEFT }, BorderLayout.WEST)
+            })
+        }
+
+        // Conversation + live turn block share one wrapper so the block sits directly
+        // beneath the messages, above the input area. It is invisible until the first
+        // stream event of a turn arrives and hides itself when the turn ends.
+>>>         val conversationWrapper = JPanel(BorderLayout()).apply {
+            background = JBColor.background()
+            add(conversationPanel, BorderLayout.CENTER)
+            add(liveTurnPanel, BorderLayout.SOUTH)
+        }
+
+        add(headerPanel, BorderLayout.NORTH)
+        add(conversationWrapper, BorderLayout.CENTER)
+        add(JPanel(BorderLayout()).apply {
+            add(inputPanel, BorderLayout.CENTER); add(statusBar, BorderLayout.SOUTH)
+        }, BorderLayout.SOUTH)
+    }
+
+    /** Paste handler: a clipboard image becomes an attachment, anything else pastes as text. */
+    private fun pasteImageOrText() {
+        val img = ImageAttachments.fromClipboard()
+        if (img != null) messageController.attachImage(img) else inputArea.paste()
+    }
+
+--- line 628 ---
+        }
+
+        // Conversation + live turn block share one wrapper so the block sits directly
+        // beneath the messages, above the input area. It is invisible until the first
+        // stream event of a turn arrives and hides itself when the turn ends.
+        val conversationWrapper = JPanel(BorderLayout()).apply {
+            background = JBColor.background()
+            add(conversationPanel, BorderLayout.CENTER)
+            add(liveTurnPanel, BorderLayout.SOUTH)
+        }
+
+        add(headerPanel, BorderLayout.NORTH)
+>>>         add(conversationWrapper, BorderLayout.CENTER)
+        add(JPanel(BorderLayout()).apply {
+            add(inputPanel, BorderLayout.CENTER); add(statusBar, BorderLayout.SOUTH)
+        }, BorderLayout.SOUTH)
+    }
+
+    /** Paste handler: a clipboard image becomes an attachment, anything else pastes as text. */
+    private fun pasteImageOrText() {
+        val img = ImageAttachments.fromClipboard()
+        if (img != null) messageController.attachImage(img) else inputArea.paste()
+    }
+
+    private fun setupListeners() {
+        fun attachFromClipboard() {
+            val content = try {
+                java.awt.Toolkit.getDefaultToolkit().systemClipboard
+                    .getData(java.awt.datatransfer.DataFlavor.stringFlavor) as? String
+            } catch (e: Exception) {
+                statusLabel.text = "Clipboard error: ${e.message}"; return
+

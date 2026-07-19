@@ -1,19 +1,170 @@
 package com.maxvibes.plugin.chat
 
-import com.intellij.openapi.components.*
+import com.intellij.openapi.components.PersistentStateComponent
+import com.intellij.openapi.components.Service
+import com.intellij.openapi.components.State
+import com.intellij.openapi.components.Storage
 import com.intellij.openapi.project.Project
 import com.intellij.util.xmlb.XmlSerializerUtil
 import com.intellij.util.xmlb.annotations.Attribute
 import com.intellij.util.xmlb.annotations.Tag
 import com.intellij.util.xmlb.annotations.XCollection
+import com.maxvibes.application.port.output.ChatSessionRepository
+import com.maxvibes.domain.model.chat.ChatMessage
+import com.maxvibes.domain.model.chat.ChatSession
+import com.maxvibes.domain.model.chat.MessageRole
+import com.maxvibes.domain.model.chat.TokenUsage
+import com.maxvibes.domain.model.code.CodeGranularity
+import com.maxvibes.domain.model.code.RequestedViewInfo
+import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
+import com.maxvibes.domain.model.modification.AppliedModInfo
+import com.maxvibes.domain.model.modification.ModificationCategory
+import com.maxvibes.plugin.service.MaxVibesLogger
 import java.time.Instant
 import java.util.UUID
+import com.maxvibes.domain.model.planning.TaskPlan
+import com.maxvibes.domain.model.planning.PlanStep
+import com.maxvibes.domain.model.planning.PlanStepStatus
+
+@Tag("requestedView")
+class XmlRequestedViewInfo {
+    @Attribute("path")
+    var path: String = ""
+
+    /** Enum name of CodeGranularity. Default FULL for forward compat. */
+    @Attribute("granularity")
+    var granularity: String = "FULL"
+
+    /** Non-null only for ELEMENT granularity. */
+    @Attribute("elementPath")
+    var elementPath: String? = null
+
+    constructor()
+
+    constructor(path: String, granularity: String, elementPath: String?) {
+        this.path = path; this.granularity = granularity; this.elementPath = elementPath
+    }
+
+    fun toDomain(): RequestedViewInfo = RequestedViewInfo(
+        path = path,
+        granularity = try {
+            CodeGranularity.valueOf(granularity)
+        } catch (_: IllegalArgumentException) {
+            CodeGranularity.FULL
+        },
+        elementPath = elementPath
+    )
+
+    companion object {
+        fun fromDomain(v: RequestedViewInfo) =
+            XmlRequestedViewInfo(v.path, v.granularity.name, v.elementPath)
+    }
+}
+
+@Tag("appliedMod")
+class XmlAppliedModInfo {
+    @Attribute("path")
+    var path: String = ""
+
+    /** Enum name of ModificationCategory. Default ELEMENT_LEVEL for forward compat. */
+    @Attribute("category")
+    var category: String = "ELEMENT_LEVEL"
+
+    constructor()
+
+    constructor(path: String, category: String) {
+        this.path = path; this.category = category
+    }
+
+    fun toDomain(): AppliedModInfo = AppliedModInfo(
+        path = path,
+        category = try {
+            ModificationCategory.valueOf(category)
+        } catch (_: IllegalArgumentException) {
+            ModificationCategory.ELEMENT_LEVEL
+        }
+    )
+
+    companion object {
+        fun fromDomain(m: AppliedModInfo) = XmlAppliedModInfo(m.path, m.category.name)
+    }
+}
+
+@Tag("plan")
+class XmlTaskPlan {
+    @Attribute("title")
+    var title: String = ""
+
+    @Attribute("docPath")
+    var docPath: String? = null
+
+    @XCollection(style = XCollection.Style.v2)
+    var steps: MutableList<XmlPlanStep> = mutableListOf()
+
+    constructor()
+
+    constructor(title: String, docPath: String?, steps: List<XmlPlanStep>) {
+        this.title = title; this.docPath = docPath; this.steps = steps.toMutableList()
+    }
+
+    fun toDomain(): TaskPlan =
+        TaskPlan(title = title, docPath = docPath, steps = steps.map { it.toDomain() })
+
+    companion object {
+        fun fromDomain(p: TaskPlan) =
+            XmlTaskPlan(p.title, p.docPath, p.steps.map { XmlPlanStep.fromDomain(it) })
+    }
+}
+
+@Tag("planStep")
+class XmlPlanStep {
+    @Attribute("id")
+    var id: String = ""
+
+    @Attribute("title")
+    var title: String = ""
+
+    /** Enum name of PlanStepStatus. Default PENDING for forward compat. */
+    @Attribute("status")
+    var status: String = "PENDING"
+
+    @Attribute("docPath")
+    var docPath: String? = null
+
+    constructor()
+
+    constructor(id: String, title: String, status: String, docPath: String?) {
+        this.id = id; this.title = title; this.status = status; this.docPath = docPath
+    }
+
+    fun toDomain(): PlanStep = PlanStep(
+        id = id,
+        title = title,
+        status = try {
+            PlanStepStatus.valueOf(status)
+        } catch (_: IllegalArgumentException) {
+            PlanStepStatus.PENDING
+        },
+        docPath = docPath
+    )
+
+    companion object {
+        fun fromDomain(s: PlanStep) = XmlPlanStep(s.id, s.title, s.status.name, s.docPath)
+    }
+}
 
 /**
- * Сообщение в чате
+ * XML DTO for a single chat message.
+ *
+ * All collection fields use [XCollection] with [XCollection.Style.v2] so they are stored
+ * as nested XML elements. Fields absent in older XML files default to empty — this ensures
+ * backward compatibility when new fields are added.
+ *
+ * Nullable string fields ([reasoning], [tokenInfo]) are stored as XML tags/attributes;
+ * if their value is null they are omitted from XML (IntelliJ serializer behaviour).
  */
 @Tag("message")
-class ChatMessage {
+class XmlChatMessage {
     @Attribute("id")
     var id: String = UUID.randomUUID().toString()
 
@@ -26,44 +177,114 @@ class ChatMessage {
     @Attribute("timestamp")
     var timestamp: Long = Instant.now().toEpochMilli()
 
+    /** File paths requested by the LLM. Absent in old XML reads as empty list. */
+    @XCollection(style = XCollection.Style.v2, elementTypes = [String::class])
+    var requestedFiles: MutableList<String> = mutableListOf()
+
+    /** File paths sent TO the LLM (clipboard gathered files). */
+    @XCollection(style = XCollection.Style.v2, elementTypes = [String::class])
+    var attachedFiles: MutableList<String> = mutableListOf()
+
+    /** String-encoded ElementPath values for each successfully applied modification. */
+    @XCollection(style = XCollection.Style.v2, elementTypes = [String::class])
+    var appliedModificationPaths: MutableList<String> = mutableListOf()
+
+    /** Typed view requests with granularity. Empty for messages predating this field. */
+    @XCollection(style = XCollection.Style.v2)
+    var requestedViews: MutableList<XmlRequestedViewInfo> = mutableListOf()
+
+    /** Typed applied modifications with category. Empty for messages predating this field. */
+    @XCollection(style = XCollection.Style.v2)
+    var appliedModifications: MutableList<XmlAppliedModInfo> = mutableListOf()
+
+    /**
+     * LLM reasoning / thinking block. Stored as a nested tag (not attribute) because
+     * reasoning text can be very long — XML attributes are not suited for multi-line text.
+     */
+    @Tag("reasoning")
+    var reasoning: String? = null
+
+    /** Short token-info summary line. Fits comfortably in an XML attribute. */
+    @Attribute("tokenInfo")
+    var tokenInfo: String? = null
+
     constructor()
 
-    constructor(id: String, role: MessageRole, content: String, timestamp: Long) {
+    constructor(
+        id: String,
+        role: MessageRole,
+        content: String,
+        timestamp: Long,
+        requestedFiles: List<String> = emptyList(),
+        attachedFiles: List<String> = emptyList(),
+        appliedModificationPaths: List<String> = emptyList(),
+        requestedViews: List<RequestedViewInfo> = emptyList(),
+        appliedModifications: List<AppliedModInfo> = emptyList(),
+        reasoning: String? = null,
+        tokenInfo: String? = null
+    ) {
         this.id = id
         this.role = role
         this.content = content
         this.timestamp = timestamp
+        this.requestedFiles = requestedFiles.toMutableList()
+        this.attachedFiles = attachedFiles.toMutableList()
+        this.appliedModificationPaths = appliedModificationPaths.toMutableList()
+        this.requestedViews = requestedViews.map { XmlRequestedViewInfo.fromDomain(it) }.toMutableList()
+        this.appliedModifications = appliedModifications.map { XmlAppliedModInfo.fromDomain(it) }.toMutableList()
+        this.reasoning = reasoning
+        this.tokenInfo = tokenInfo
+    }
+
+    /** Converts this XML DTO to the domain [ChatMessage]. */
+    fun toDomain(): ChatMessage = ChatMessage(
+        id = id,
+        role = role,
+        content = content,
+        timestamp = timestamp,
+        requestedFiles = requestedFiles.toList(),
+        attachedFiles = attachedFiles.toList(),
+        appliedModificationPaths = appliedModificationPaths.toList(),
+        requestedViews = requestedViews.map { it.toDomain() },
+        appliedModifications = appliedModifications.map { it.toDomain() },
+        reasoning = reasoning,
+        tokenInfo = tokenInfo
+    )
+
+    companion object {
+        /** Creates an XML DTO from a domain [ChatMessage] for serialization. */
+        fun fromDomain(msg: ChatMessage) = XmlChatMessage(
+            id = msg.id,
+            role = msg.role,
+            content = msg.content,
+            timestamp = msg.timestamp,
+            requestedFiles = msg.requestedFiles,
+            attachedFiles = msg.attachedFiles,
+            appliedModificationPaths = msg.appliedModificationPaths,
+            requestedViews = msg.requestedViews,
+            appliedModifications = msg.appliedModifications,
+            reasoning = msg.reasoning,
+            tokenInfo = msg.tokenInfo
+        )
     }
 }
 
-enum class MessageRole {
-    USER, ASSISTANT, SYSTEM
-}
-
-/**
- * Сессия чата с поддержкой иерархии (дерево диалогов).
- *
- * parentId == null означает корневую сессию (root).
- * Дети вычисляются динамически через ChatHistoryService.getChildren().
- */
 @Tag("session")
-class ChatSession {
+class XmlChatSession {
     @Attribute("id")
     var id: String = UUID.randomUUID().toString()
 
     @Attribute("title")
     var title: String = "New Chat"
 
-    /** ID родительской сессии. null = корневая сессия. */
     @Attribute("parentId")
     var parentId: String? = null
 
-    /** Глубина в дереве (0 = root). Вычисляется при загрузке, для удобства. */
     @Attribute("depth")
     var depth: Int = 0
 
     @XCollection(style = XCollection.Style.v2)
-    var messages: MutableList<ChatMessage> = mutableListOf()
+    var messages: MutableList<XmlChatMessage> = mutableListOf()
 
     @Attribute("createdAt")
     var createdAt: Long = Instant.now().toEpochMilli()
@@ -71,88 +292,128 @@ class ChatSession {
     @Attribute("updatedAt")
     var updatedAt: Long = Instant.now().toEpochMilli()
 
+    @Attribute("planningInputTokens")
+    var planningInputTokens: Int = 0
+
+    @Attribute("planningOutputTokens")
+    var planningOutputTokens: Int = 0
+
+    @Attribute("chatInputTokens")
+    var chatInputTokens: Int = 0
+
+    @Attribute("chatOutputTokens")
+    var chatOutputTokens: Int = 0
+
+    /**
+     * Clipboard session status serialized as a string enum name.
+     * Default "IDLE" ensures backward compat with XML files written before this field existed.
+     */
+    @Attribute("clipboardStatus")
+    var clipboardStatus: String = "IDLE"
+
+    /**
+     * Selected specific prompt name for this session.
+     * Empty string = null ("Just Code"). Default empty for backward compat.
+     */
+    @Attribute("selectedSpecificPromptName")
+    var selectedSpecificPromptName: String = ""
+
+    /**
+     * Claude Code CLI session id used for --resume. Null for sessions that never ran
+     * CLI mode and for XML files written before this field existed.
+     */
+    @Attribute("claudeCodeSessionId")
+    var claudeCodeSessionId: String? = null
+
+    /**
+     * Whether the next CLI send must include full context. Default true is the safe
+     * fallback for legacy XML files without this attribute.
+     */
+    @Attribute("claudeCodeNeedsFullContext")
+    var claudeCodeNeedsFullContext: Boolean = true
+
+    /**
+     * Task plan of the planner panel. Null for sessions without a plan and for
+     * XML files written before this field existed (backward compatible).
+     */
+    var plan: XmlTaskPlan? = null
+
     constructor()
 
-    constructor(
-        id: String,
-        title: String,
-        messages: MutableList<ChatMessage>,
-        createdAt: Long,
-        updatedAt: Long,
-        parentId: String? = null,
-        depth: Int = 0
-    ) {
-        this.id = id
-        this.title = title
-        this.messages = messages
-        this.createdAt = createdAt
-        this.updatedAt = updatedAt
-        this.parentId = parentId
-        this.depth = depth
-    }
+    fun toTokenUsage(): TokenUsage = TokenUsage(
+        planningInput = planningInputTokens,
+        planningOutput = planningOutputTokens,
+        chatInput = chatInputTokens,
+        chatOutput = chatOutputTokens
+    )
 
-    fun addMessage(role: MessageRole, content: String): ChatMessage {
-        val message = ChatMessage(
-            UUID.randomUUID().toString(),
-            role,
-            content,
-            Instant.now().toEpochMilli()
-        )
-        messages.add(message)
-        updatedAt = Instant.now().toEpochMilli()
+    fun toDomain(): ChatSession = ChatSession(
+        id = id,
+        title = title,
+        parentId = parentId,
+        depth = depth,
+        messages = messages.map { it.toDomain() },
+        tokenUsage = toTokenUsage(),
+        createdAt = createdAt,
+        updatedAt = updatedAt,
+        clipboardStatus = try {
+            ClipboardSessionStatus.valueOf(clipboardStatus)
+        } catch (_: IllegalArgumentException) {
+            ClipboardSessionStatus.IDLE
+        },
+        selectedSpecificPromptName = selectedSpecificPromptName.takeIf { it.isNotEmpty() },
+        claudeCodeSessionId = claudeCodeSessionId,
+        claudeCodeNeedsFullContext = claudeCodeNeedsFullContext,
+        plan = plan?.toDomain()
+    )
 
-        // Auto-title from first user message
-        if (title == "New Chat" && role == MessageRole.USER) {
-            title = content.take(40) + if (content.length > 40) "..." else ""
+    companion object {
+        fun fromDomain(session: ChatSession): XmlChatSession {
+            val xml = XmlChatSession()
+            xml.id = session.id
+            xml.title = session.title
+            xml.parentId = session.parentId
+            xml.depth = session.depth
+            xml.messages = session.messages.map { XmlChatMessage.fromDomain(it) }.toMutableList()
+            xml.planningInputTokens = session.tokenUsage.planningInput
+            xml.planningOutputTokens = session.tokenUsage.planningOutput
+            xml.chatInputTokens = session.tokenUsage.chatInput
+            xml.chatOutputTokens = session.tokenUsage.chatOutput
+            xml.createdAt = session.createdAt
+            xml.updatedAt = session.updatedAt
+            xml.clipboardStatus = session.clipboardStatus.name
+            xml.selectedSpecificPromptName = session.selectedSpecificPromptName ?: ""
+            xml.claudeCodeSessionId = session.claudeCodeSessionId
+            xml.claudeCodeNeedsFullContext = session.claudeCodeNeedsFullContext
+            xml.plan = session.plan?.let { XmlTaskPlan.fromDomain(it) }
+            return xml
         }
-
-        return message
-    }
-
-    fun clear() {
-        messages.clear()
-        updatedAt = Instant.now().toEpochMilli()
     }
 }
 
-/**
- * Состояние для сериализации
- */
 class ChatHistoryState {
     @XCollection(style = XCollection.Style.v2)
-    var sessions: MutableList<ChatSession> = mutableListOf()
+    var sessions: MutableList<XmlChatSession> = mutableListOf()
 
     var activeSessionId: String? = null
 
-    /** Global context files — always included in every LLM request (relative paths from project root) */
     @XCollection(style = XCollection.Style.v2, elementTypes = [String::class])
     var globalContextFiles: MutableList<String> = mutableListOf()
 }
 
 /**
- * Узел дерева сессий для навигации.
- * Не сериализуется — строится динамически.
- */
-data class SessionTreeNode(
-    val session: ChatSession,
-    val children: MutableList<SessionTreeNode> = mutableListOf()
-) {
-    val id: String get() = session.id
-    val title: String get() = session.title
-    val depth: Int get() = session.depth
-    val hasChildren: Boolean get() = children.isNotEmpty()
-}
-
-/**
- * Сервис хранения истории чатов (per-project).
- * Поддерживает иерархию сессий (дерево диалогов).
+ * Pure persistence adapter for per-project chat history storage.
+ *
+ * Implements [ChatSessionRepository] — the application-layer port.
+ * Manages only XML serialization via IntelliJ [PersistentStateComponent];
+ * all business logic lives in [com.maxvibes.application.service.ChatTreeService].
  */
 @Service(Service.Level.PROJECT)
 @State(
     name = "MaxVibesChatHistory",
     storages = [Storage("maxvibes-chat-history.xml")]
 )
-class ChatHistoryService : PersistentStateComponent<ChatHistoryState> {
+class ChatHistoryService : PersistentStateComponent<ChatHistoryState>, ChatSessionRepository {
 
     private var state = ChatHistoryState()
 
@@ -161,274 +422,65 @@ class ChatHistoryService : PersistentStateComponent<ChatHistoryState> {
     override fun loadState(state: ChatHistoryState) {
         XmlSerializerUtil.copyBean(state, this.state)
         recalculateDepths()
+        MaxVibesLogger.info(
+            "ChatHistory", "loadState", mapOf(
+                "sessions" to state.sessions.size,
+                "activeId" to (state.activeSessionId ?: "none"),
+                "contextFiles" to state.globalContextFiles.size
+            )
+        )
     }
 
-    // ==================== Basic Operations ====================
+    override fun getAllSessions(): List<ChatSession> = state.sessions.map { it.toDomain() }
 
-    fun getAllSessions(): List<ChatSession> {
-        return state.sessions.toList()
-    }
+    override fun getSessionById(id: String): ChatSession? =
+        state.sessions.find { it.id == id }?.toDomain()
 
-    fun getSessions(): List<ChatSession> {
-        return state.sessions.sortedByDescending { it.updatedAt }
-    }
+    override fun getActiveSessionId(): String? = state.activeSessionId
 
-    fun getSessionById(id: String): ChatSession? {
-        return state.sessions.find { it.id == id }
-    }
-
-    fun getActiveSession(): ChatSession {
-        val activeId = state.activeSessionId
-        val session = state.sessions.find { it.id == activeId }
-        return session ?: createNewSession()
-    }
-
-    fun setActiveSession(sessionId: String) {
+    override fun setActiveSessionId(sessionId: String) {
         state.activeSessionId = sessionId
     }
 
-    // ==================== Rename ====================
-
-    /**
-     * Переименовывает сессию.
-     * @return true если переименование успешно, false если сессия не найдена.
-     */
-    fun renameSession(sessionId: String, newTitle: String): Boolean {
-        val session = getSessionById(sessionId) ?: return false
-        session.title = newTitle.trim().ifBlank { "Untitled" }
-        session.updatedAt = java.time.Instant.now().toEpochMilli()
-        return true
+    override fun saveSession(session: ChatSession) {
+        val index = state.sessions.indexOfFirst { it.id == session.id }
+        val xml = XmlChatSession.fromDomain(session)
+        if (index >= 0) state.sessions[index] = xml
+        else state.sessions.add(0, xml)
     }
 
-    // ==================== Tree Operations ====================
-
-    /** Возвращает корневые сессии (без родителя) */
-    fun getRootSessions(): List<ChatSession> {
-        return state.sessions
-            .filter { it.parentId == null }
-            .sortedByDescending { it.updatedAt }
-    }
-
-    /** Возвращает дочерние сессии данной сессии */
-    fun getChildren(sessionId: String): List<ChatSession> {
-        return state.sessions
-            .filter { it.parentId == sessionId }
-            .sortedByDescending { it.updatedAt }
-    }
-
-    /** Возвращает родительскую сессию */
-    fun getParent(sessionId: String): ChatSession? {
-        val session = getSessionById(sessionId) ?: return null
-        return session.parentId?.let { getSessionById(it) }
-    }
-
-    /** Возвращает путь от корня до данной сессии (breadcrumb) */
-    fun getSessionPath(sessionId: String): List<ChatSession> {
-        val path = mutableListOf<ChatSession>()
-        var current = getSessionById(sessionId)
-        while (current != null) {
-            path.add(0, current)
-            current = current.parentId?.let { getSessionById(it) }
-        }
-        return path
-    }
-
-    /** Возвращает количество дочерних сессий (прямых) */
-    fun getChildCount(sessionId: String): Int {
-        return state.sessions.count { it.parentId == sessionId }
-    }
-
-    /** Возвращает общее количество потомков (рекурсивно) */
-    fun getDescendantCount(sessionId: String): Int {
-        val children = getChildren(sessionId)
-        return children.size + children.sumOf { getDescendantCount(it.id) }
-    }
-
-    /** Проверяет, является ли сессия корневой */
-    fun isRoot(sessionId: String): Boolean {
-        return getSessionById(sessionId)?.parentId == null
-    }
-
-    /**
-     * Строит полное дерево сессий для навигации.
-     * Возвращает список корневых узлов с рекурсивно заполненными children.
-     */
-    fun buildTree(): List<SessionTreeNode> {
-        val nodeMap = state.sessions.associate { it.id to SessionTreeNode(it) }.toMutableMap()
-
-        // Привязываем детей к родителям
-        for (session in state.sessions) {
-            val parentId = session.parentId ?: continue
-            nodeMap[parentId]?.children?.add(nodeMap[session.id]!!)
-        }
-
-        // Сортируем детей по updatedAt desc
-        for (node in nodeMap.values) {
-            node.children.sortByDescending { it.session.updatedAt }
-        }
-
-        // Возвращаем корневые узлы
-        return nodeMap.values
-            .filter { it.session.parentId == null }
-            .sortedByDescending { it.session.updatedAt }
-    }
-
-    // ==================== Create / Delete ====================
-
-    /** Создаёт новую корневую сессию */
-    fun createNewSession(): ChatSession {
-        val session = ChatSession().apply {
-            parentId = null
-            depth = 0
-        }
-        state.sessions.add(0, session)
-        state.activeSessionId = session.id
-        trimOldSessions()
-        return session
-    }
-
-    /** Создаёт дочернюю сессию (ветку) от указанного родителя */
-    fun createBranch(parentSessionId: String, branchTitle: String? = null): ChatSession? {
-        val parent = getSessionById(parentSessionId) ?: return null
-
-        val session = ChatSession().apply {
-            parentId = parentSessionId
-            depth = parent.depth + 1
-            title = branchTitle ?: "Branch of: ${parent.title.take(30)}"
-        }
-        state.sessions.add(0, session)
-        state.activeSessionId = session.id
-
-        // Обновляем updatedAt родителя, чтобы он поднялся в списке
-        parent.updatedAt = java.time.Instant.now().toEpochMilli()
-
-        trimOldSessions()
-        return session
-    }
-
-    /**
-     * Удаляет сессию.
-     * Стратегия: дети переподвешиваются к родителю удалённой сессии.
-     * Если удаляется корневая — дети становятся корневыми.
-     */
-    fun deleteSession(sessionId: String) {
-        val session = getSessionById(sessionId) ?: return
-        val parentId = session.parentId
-
-        // Переподвешиваем детей
-        val children = getChildren(sessionId)
-        for (child in children) {
-            child.parentId = parentId
-            child.depth = (parentId?.let { getSessionById(it)?.depth?.plus(1) }) ?: 0
-            recalculateChildDepths(child.id)
-        }
-
-        // Удаляем сессию
+    override fun deleteSession(sessionId: String) {
         state.sessions.removeIf { it.id == sessionId }
-
-        // Если удалили активную — переключаемся
         if (state.activeSessionId == sessionId) {
-            state.activeSessionId = parentId
-                ?: children.firstOrNull()?.id
-                        ?: state.sessions.firstOrNull()?.id
+            state.activeSessionId = state.sessions.firstOrNull()?.id
         }
     }
 
-    /**
-     * Удаляет сессию вместе со всеми потомками (каскадное удаление).
-     */
-    fun deleteSessionCascade(sessionId: String) {
-        val toDelete = collectDescendantIds(sessionId) + sessionId
-        state.sessions.removeIf { it.id in toDelete }
+    override fun getGlobalContextFiles(): List<String> = state.globalContextFiles.toList()
 
-        if (state.activeSessionId in toDelete) {
-            val parent = getSessionById(sessionId)?.parentId
-            state.activeSessionId = parent ?: state.sessions.firstOrNull()?.id
-        }
-    }
-
-    fun clearActiveSession() {
-        getActiveSession().clear()
-    }
-
-    // ==================== Global Context Files ====================
-
-    /** Get the list of global context files */
-    fun getGlobalContextFiles(): List<String> {
-        return state.globalContextFiles.toList()
-    }
-
-    /** Set the list of global context files */
-    fun setGlobalContextFiles(files: List<String>) {
+    override fun setGlobalContextFiles(files: List<String>) {
         state.globalContextFiles = files.distinct().toMutableList()
     }
 
-    /** Add a global context file (if not already present) */
-    fun addGlobalContextFile(relativePath: String) {
-        val normalized = relativePath.replace('\\', '/')
-        if (normalized !in state.globalContextFiles) {
-            state.globalContextFiles.add(normalized)
-        }
-    }
+    // ── Depth recalculation ────────────────────────────────────────────────────
 
-    /** Remove a global context file */
-    fun removeGlobalContextFile(relativePath: String) {
-        state.globalContextFiles.remove(relativePath.replace('\\', '/'))
-    }
-
-    // ==================== Internal Helpers ====================
-
-    /** Собирает все ID потомков рекурсивно */
-    private fun collectDescendantIds(sessionId: String): Set<String> {
-        val result = mutableSetOf<String>()
-        val children = getChildren(sessionId)
-        for (child in children) {
-            result.add(child.id)
-            result.addAll(collectDescendantIds(child.id))
-        }
-        return result
-    }
-
-    /** Пересчитывает depth для всех потомков данной сессии */
     private fun recalculateChildDepths(sessionId: String) {
-        val parent = getSessionById(sessionId) ?: return
-        val children = getChildren(sessionId)
-        for (child in children) {
+        val parent = state.sessions.find { it.id == sessionId } ?: return
+        state.sessions.filter { it.parentId == sessionId }.forEach { child ->
             child.depth = parent.depth + 1
             recalculateChildDepths(child.id)
         }
     }
 
-    /** Пересчитывает depth для всех сессий (вызывается при загрузке) */
     private fun recalculateDepths() {
-        // Сначала все корневые
-        for (session in state.sessions) {
-            if (session.parentId == null) {
-                session.depth = 0
-            }
-        }
-        // Затем рекурсивно от корней
-        for (session in state.sessions.filter { it.parentId == null }) {
-            recalculateChildDepths(session.id)
-        }
-    }
-
-    /** Обрезаем старые сессии если их слишком много (сохраняя иерархию) */
-    private fun trimOldSessions() {
-        if (state.sessions.size > 100) {
-            // Удаляем самые старые листовые сессии (без детей)
-            val leaves = state.sessions
-                .filter { s -> state.sessions.none { it.parentId == s.id } }
-                .sortedBy { it.updatedAt }
-
-            val toRemove = leaves.take(state.sessions.size - 100)
-            state.sessions.removeAll(toRemove.toSet())
+        state.sessions.filter { it.parentId == null }.forEach { root ->
+            root.depth = 0
+            recalculateChildDepths(root.id)
         }
     }
 
     companion object {
-        fun getInstance(project: Project): ChatHistoryService {
-            return project.getService(ChatHistoryService::class.java)
-        }
+        fun getInstance(project: Project): ChatHistoryService =
+            project.getService(ChatHistoryService::class.java)
     }
 }

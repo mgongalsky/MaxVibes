@@ -22,11 +22,15 @@ class ContextAwareModifyServiceTest {
     private lateinit var service: ContextAwareModifyService
 
     private val testFileTree = FileTree(
-        root = FileNode("project", "/project", true, listOf(
-            FileNode("src", "/project/src", true, listOf(
-                FileNode("Main.kt", "/project/src/Main.kt", false)
-            ))
-        )),
+        root = FileNode(
+            "project", "/project", true, listOf(
+                FileNode(
+                    "src", "/project/src", true, listOf(
+                        FileNode("Main.kt", "/project/src/Main.kt", false)
+                    )
+                )
+            )
+        ),
         totalFiles = 1,
         totalDirectories = 2
     )
@@ -58,7 +62,7 @@ class ContextAwareModifyServiceTest {
     @Test
     fun `execute should complete successfully with all phases`() = runBlocking {
         // Given
-        val request = ContextAwareRequest(task = "Add logging")
+        val request = ContextAwareRequest(currentMessage = "Add logging")
 
         coEvery { contextProvider.getProjectContext() } returns Result.Success(testProjectContext)
 
@@ -112,7 +116,7 @@ class ContextAwareModifyServiceTest {
     @Test
     fun `execute should fail when project context fails`() = runBlocking {
         // Given
-        val request = ContextAwareRequest(task = "Add logging")
+        val request = ContextAwareRequest(currentMessage = "Add logging")
 
         coEvery { contextProvider.getProjectContext() } returns
                 Result.Failure(ContextError.ProjectNotFound())
@@ -129,7 +133,7 @@ class ContextAwareModifyServiceTest {
     @Test
     fun `execute should fail when planning fails`() = runBlocking {
         // Given
-        val request = ContextAwareRequest(task = "Add logging")
+        val request = ContextAwareRequest(currentMessage = "Add logging")
 
         coEvery { contextProvider.getProjectContext() } returns Result.Success(testProjectContext)
         coEvery { llmService.planContext(any(), any()) } returns
@@ -147,7 +151,7 @@ class ContextAwareModifyServiceTest {
     fun `execute should merge additional files with requested files`() = runBlocking {
         // Given
         val request = ContextAwareRequest(
-            task = "Add logging",
+            currentMessage = "Add logging",
             additionalFiles = listOf("config/settings.kt")
         )
 
@@ -186,7 +190,7 @@ class ContextAwareModifyServiceTest {
     fun `execute should exclude files from requested list`() = runBlocking {
         // Given
         val request = ContextAwareRequest(
-            task = "Add logging",
+            currentMessage = "Add logging",
             excludeFiles = listOf("src/Main.kt")
         )
 
@@ -217,7 +221,7 @@ class ContextAwareModifyServiceTest {
     @Test
     fun `execute with dryRun should not call chat or apply modifications`() = runBlocking {
         // Given
-        val request = ContextAwareRequest(task = "Add logging", dryRun = true)
+        val request = ContextAwareRequest(currentMessage = "Add logging", dryRun = true)
 
         coEvery { contextProvider.getProjectContext() } returns Result.Success(testProjectContext)
 
@@ -244,7 +248,7 @@ class ContextAwareModifyServiceTest {
     @Test
     fun `execute should report partial failure when some modifications fail`() = runBlocking {
         // Given
-        val request = ContextAwareRequest(task = "Add files")
+        val request = ContextAwareRequest(currentMessage = "Add files")
 
         coEvery { contextProvider.getProjectContext() } returns Result.Success(testProjectContext)
         coEvery { llmService.planContext(any(), any()) } returns Result.Success(
@@ -266,7 +270,10 @@ class ContextAwareModifyServiceTest {
 
         coEvery { codeRepository.applyModifications(any()) } returns listOf(
             ModificationResult.Success(mod1, ElementPath("src/A.kt"), "class A"),
-            ModificationResult.Failure(mod2, com.maxvibes.domain.model.modification.ModificationError.IOError("Write failed"))
+            ModificationResult.Failure(
+                mod2,
+                com.maxvibes.domain.model.modification.ModificationError.IOError("Write failed")
+            )
         )
 
         // When

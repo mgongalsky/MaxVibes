@@ -31,6 +31,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 import java.time.Duration
+import java.util.concurrent.atomic.AtomicReference
+import dev.langchain4j.model.chat.listener.ChatModelListener
+import dev.langchain4j.model.chat.listener.ChatModelResponseContext
+import com.maxvibes.adapter.llm.dto.RequestedViewInfoDTO
 
 /**
  * LLM Service implementation using LangChain4j 1.11.0 with AiServices.
@@ -91,6 +95,7 @@ class LangChainLLMService(
     }
 
     private val chatModel: ChatModel by lazy { createChatModel() }
+    private val lastTokenUsagePair = AtomicReference<Pair<Int, Int>?>(null)
 
     // AiService proxy for planning - created lazily
     private val planningService: PlanningAiService by lazy {
@@ -108,12 +113,13 @@ class LangChainLLMService(
     // ==================== Model Creation ====================
 
     private fun createChatModel(): ChatModel {
+        val listener = createTokenListener()
         return when (config.providerType) {
             LLMProviderType.OPENAI -> {
                 val isReasoningModel = config.modelId.contains("gpt-5") ||
                         config.modelId.contains("o1") ||
                         config.modelId.contains("o3")
-                val maxTokens = if (isReasoningModel) 32768   else config.maxTokens
+                val maxTokens = if (isReasoningModel) 32768 else config.maxTokens
 
                 OpenAiChatModel.builder()
                     .apiKey(config.apiKey)
@@ -121,6 +127,7 @@ class LangChainLLMService(
                     .temperature(config.temperature)
                     .maxCompletionTokens(maxTokens)
                     .timeout(Duration.ofSeconds(if (isReasoningModel) 300 else 120))
+                    .listeners(listOf(listener))
                     .build()
             }
 
@@ -128,8 +135,9 @@ class LangChainLLMService(
                 .apiKey(config.apiKey)
                 .modelName(resolveAnthropicModel(config.modelId))
                 .temperature(config.temperature)
-                .maxTokens(config.maxTokens.coerceAtLeast(32768  ))
+                .maxTokens(config.maxTokens.coerceAtLeast(32768))
                 .timeout(Duration.ofSeconds(180))
+                .listeners(listOf(listener))
                 .build()
 
             LLMProviderType.OLLAMA -> OllamaChatModel.builder()
@@ -137,6 +145,7 @@ class LangChainLLMService(
                 .modelName(config.modelId)
                 .temperature(config.temperature)
                 .timeout(Duration.ofSeconds(300))
+                .listeners(listOf(listener))
                 .build()
 
             LLMProviderType.DEEPSEEK -> OpenAiChatModel.builder()
@@ -146,7 +155,17 @@ class LangChainLLMService(
                 .temperature(config.temperature)
                 .maxCompletionTokens(config.maxTokens)
                 .timeout(Duration.ofSeconds(120))
+                .listeners(listOf(listener))
                 .build()
+        }
+    }
+
+    private fun createTokenListener() = object : ChatModelListener {
+        override fun onResponse(responseContext: ChatModelResponseContext) {
+            val tu = responseContext.chatResponse()?.tokenUsage()
+            if (tu != null) {
+                lastTokenUsagePair.set(Pair(tu.inputTokenCount() ?: 0, tu.outputTokenCount() ?: 0))
+            }
         }
     }
 
@@ -251,34 +270,42 @@ class LangChainLLMService(
             log("[LangChainLLMService] History: ${history.size} messages")
             log("[LangChainLLMService] Context files: ${context.gatheredFiles.size}")
 
-            // Build dynamic parts
+            lastTokenUsagePair.set(null)
+
             val systemPrompt = buildChatSystemPrompt(context)
             val contextBlock = buildContextBlock(context.gatheredFiles)
 
-            // Try AiServices first (structured output via tool calling)
+            // Attempt structured output via AiServices; fall back to raw model on failure.
             val chatResponse = try {
                 withPluginClassLoader {
                     val chatService = createChatService(systemPrompt, history, contextBlock)
-                    val dto: ChatResponseDTO = chatService.chat(message)
-
+                    val dto: com.maxvibes.adapter.llm.dto.ChatResponseDTO = chatService.chat(message)
                     log("[LangChainLLMService] AiServices OK: ${dto.modifications.size} modifications")
-
                     ChatResponse(
                         message = dto.message,
                         modifications = dto.modifications.mapNotNull { convertModification(it) },
-                        requestedFiles = extractFileRequests(dto.message)
+                        requestedFiles = extractFileRequests(dto.message),
+                        reasoning = dto.reasoning,
+                        commitMessage = dto.commitMessage,
+                        requestedViews = dto.requestedViews.mapNotNull { convertRequestedView(it) },
+                        commands = dto.commands.mapNotNull { convertCommand(it) }
                     )
                 }
             } catch (e: Throwable) {
                 log("[LangChainLLMService] AiServices failed: ${e.message}")
                 log("[LangChainLLMService] Falling back to raw ChatModel + regex parsing")
-
-                // Fallback: raw ChatModel with regex parsing
                 chatViaRawModel(message, history, systemPrompt, contextBlock)
             }
 
-            log("[LangChainLLMService] Final result: ${chatResponse.modifications.size} modifications")
-            Result.Success(chatResponse)
+            // Attach per-call token stats reported by the provider listener.
+            val tu = lastTokenUsagePair.getAndSet(null)
+            val finalResponse = if (tu != null) {
+                log("[LangChainLLMService] Chat tokens: in=${tu.first}, out=${tu.second}")
+                chatResponse.copy(tokenUsage = LLMCallTokenUsage(tu.first, tu.second))
+            } else chatResponse
+
+            log("[LangChainLLMService] Final result: ${finalResponse.modifications.size} modifications")
+            Result.Success(finalResponse)
 
         } catch (e: Exception) {
             log("[LangChainLLMService] Chat error: ${e.message}")
@@ -340,7 +367,7 @@ class LangChainLLMService(
             appendLine("=== CURRENT CODE CONTEXT (${gatheredFiles.size} files) ===")
             gatheredFiles.forEach { (path, content) ->
                 appendLine("--- $path ---")
-                appendLine(content.take(5000))
+                appendLine(content)
                 appendLine()
             }
         }
@@ -348,7 +375,29 @@ class LangChainLLMService(
 
     private fun buildChatSystemPrompt(context: ChatContext): String {
         val template = context.prompts.chatSystem.ifBlank { DEFAULT_CHAT_SYSTEM_PROMPT }
-        return applyPromptVariables(template, context.projectContext)
+        val base = applyPromptVariables(template, context.projectContext)
+        if (!context.planOnly) return base
+        val planOnlyInstruction = """
+
+## ⚠️ PLAN-ONLY MODE — DISCUSSION REQUIRED
+
+DO NOT generate any code modifications.
+You MUST keep the "modifications" list EMPTY: [].
+Keep the "commands" list EMPTY as well.
+
+Your goal is to DISCUSS the plan with the user before any code is written.
+
+Instead of code, you must:
+1. Briefly explain what you understand from the task
+2. List which files you plan to touch and what changes you'll make in each
+3. Mention any architectural decisions or trade-offs
+4. Ask the user to confirm or suggest corrections
+
+End your response with exactly this line:
+> ✅ Ready to implement. Reply to confirm or describe what to change.
+
+Never include code blocks with proposed changes in your message body if you are using structured output. Just fill the 'message' field with your analysis and keep 'modifications' as an empty list.""".trimIndent()
+        return base + planOnlyInstruction
     }
 
     private fun applyPromptVariables(template: String, projectContext: ProjectContext): String {
@@ -357,6 +406,17 @@ class LangChainLLMService(
             .replace("{{language}}", projectContext.techStack.language)
             .replace("{{buildTool}}", projectContext.techStack.buildTool ?: "unknown")
             .replace("{{frameworks}}", projectContext.techStack.frameworks.joinToString(", ").ifEmpty { "none" })
+            .replace("{{os}}", osDescriptor())
+    }
+
+    /** Human-readable OS + shell descriptor for the {{os}} prompt variable. Plain JVM — no IntelliJ deps in this module. */
+    private fun osDescriptor(): String {
+        val os = System.getProperty("os.name")?.lowercase() ?: ""
+        return when {
+            "windows" in os -> "Windows (PowerShell)"
+            "mac" in os -> "macOS (sh)"
+            else -> "Linux (sh)"
+        }
     }
 
     // ==================== Phase 1: Planning (AiServices) ====================
@@ -370,8 +430,10 @@ class LangChainLLMService(
             log("[LangChainLLMService] Planning phase via AiServices")
             log("[LangChainLLMService] Task: $task")
 
-            val result: PlanningResultDTO = try {
-                withPluginClassLoader {
+            lastTokenUsagePair.set(null)
+
+            val contextRequest = try {
+                val result = withPluginClassLoader {
                     planningService.planContext(
                         task = task,
                         projectName = projectContext.name,
@@ -386,23 +448,26 @@ class LangChainLLMService(
                         architectureBlock = projectContext.architecture?.let {
                             "=== ARCHITECTURE ===\n${it.take(3000)}"
                         } ?: "",
-                        fileTree = projectContext.fileTree.toCompactString(maxDepth = 4)
+                        fileTree = projectContext.fileTree.toCompactString()
                     )
                 }
+                val tu = lastTokenUsagePair.getAndSet(null)
+                if (tu != null) log("[LangChainLLMService] Planning tokens: in=${tu.first}, out=${tu.second}")
+                log("[LangChainLLMService] Planning OK: ${result.requestedFiles.size} files")
+                ContextRequest(
+                    requestedFiles = result.requestedFiles,
+                    reasoning = result.message.takeIf { it.isNotBlank() }
+                )
             } catch (e: Throwable) {
                 log("[LangChainLLMService] AiServices planning failed: ${e.message}")
                 log("[LangChainLLMService] Falling back to raw planning")
-                return@withContext planContextRaw(task, projectContext, prompts)
+                lastTokenUsagePair.set(null)
+                val rawResult = planContextRaw(task, projectContext, prompts)
+                if (rawResult is Result.Failure) return@withContext rawResult
+                (rawResult as Result.Success).value
             }
 
-            log("[LangChainLLMService] Planning OK: ${result.requestedFiles.size} files")
-
-            Result.Success(
-                ContextRequest(
-                    requestedFiles = result.requestedFiles,
-                    reasoning = result.reasoning
-                )
-            )
+            Result.Success(contextRequest)
         } catch (e: Exception) {
             log("[LangChainLLMService] Planning error: ${e.message}")
             e.printStackTrace()
@@ -464,12 +529,33 @@ class LangChainLLMService(
         }
     }
 
+    private fun convertRequestedView(dto: com.maxvibes.adapter.llm.dto.RequestedViewInfoDTO): com.maxvibes.domain.model.code.RequestedViewInfo? {
+        val granularity = try {
+            com.maxvibes.domain.model.code.CodeGranularity.valueOf(dto.granularity.uppercase())
+        } catch (e: IllegalArgumentException) {
+            log("[LangChainLLMService] Unknown granularity '${dto.granularity}', defaulting to FULL")
+            com.maxvibes.domain.model.code.CodeGranularity.FULL
+        }
+        if (dto.path.isBlank()) return null
+        return com.maxvibes.domain.model.code.RequestedViewInfo(
+            path = dto.path,
+            granularity = granularity,
+            elementPath = dto.elementPath?.takeIf { it.isNotBlank() }
+        )
+    }
+
+    /** Convert CommandDTO (from AiServices) to domain CommandRequest. Skips blank commands. */
+    private fun convertCommand(dto: com.maxvibes.adapter.llm.dto.CommandDTO): com.maxvibes.domain.model.command.CommandRequest? {
+        if (dto.command.isBlank()) return null
+        return com.maxvibes.domain.model.command.CommandRequest(
+            command = dto.command,
+            reason = dto.reason?.takeIf { it.isNotBlank() },
+            timeoutSec = dto.timeoutSec.coerceIn(1, 3600)
+        )
+    }
+
     // ==================== Fallback Response Parsing (improved) ====================
 
-    /**
-     * Improved parseChatResponse with multiple extraction patterns.
-     * Used as fallback when AiServices doesn't work.
-     */
     private fun parseChatResponse(response: String): ChatResponse {
         // Pattern 1: ```json ... ``` blocks
         val jsonBlockPattern = Regex("```json\\s*\\n([\\s\\S]*?)\\n\\s*```")
@@ -484,6 +570,8 @@ class LangChainLLMService(
 
         val message: String
         val modifications: List<Modification>
+        var reasoning: String? = null
+        var commands: List<com.maxvibes.domain.model.command.CommandRequest> = emptyList()
 
         if (jsonMatch != null) {
             val beforeJson = response.substring(0, jsonMatch.range.first).trim()
@@ -493,6 +581,9 @@ class LangChainLLMService(
             modifications = try {
                 val jsonContent = jsonMatch.groupValues[1]
                 val jsonObject = Json.parseToJsonElement(jsonContent).jsonObject
+                reasoning = jsonObject["reasoning"]?.jsonPrimitive?.contentOrNull
+                commands = jsonObject["commands"]?.jsonArray
+                    ?.mapNotNull { parseCommandElement(it.jsonObject) } ?: emptyList()
                 val modificationsArray = jsonObject["modifications"]?.jsonArray ?: emptyList()
                 modificationsArray.mapNotNull { parseModificationElement(it.jsonObject) }
             } catch (e: Throwable) {
@@ -511,6 +602,9 @@ class LangChainLLMService(
                     val end = findMatchingBrace(jsonContent)
                     val jsonStr = jsonContent.substring(0, end + 1)
                     val jsonObject = Json.parseToJsonElement(jsonStr).jsonObject
+                    reasoning = jsonObject["reasoning"]?.jsonPrimitive?.contentOrNull
+                    commands = jsonObject["commands"]?.jsonArray
+                        ?.mapNotNull { parseCommandElement(it.jsonObject) } ?: emptyList()
                     val modificationsArray = jsonObject["modifications"]?.jsonArray ?: emptyList()
                     modificationsArray.mapNotNull { parseModificationElement(it.jsonObject) }
                 } catch (e: Throwable) {
@@ -535,7 +629,20 @@ class LangChainLLMService(
         return ChatResponse(
             message = finalMessage,
             modifications = modifications,
-            requestedFiles = extractFileRequests(finalMessage)
+            requestedFiles = extractFileRequests(finalMessage),
+            reasoning = reasoning,
+            commands = commands
+        )
+    }
+
+    /** Parses a single commands[] entry from a fallback (non-AiServices) JSON response. */
+    private fun parseCommandElement(json: JsonObject): com.maxvibes.domain.model.command.CommandRequest? {
+        val command = json["command"]?.jsonPrimitive?.contentOrNull
+            ?.takeIf { it.isNotBlank() } ?: return null
+        return com.maxvibes.domain.model.command.CommandRequest(
+            command = command,
+            reason = json["reason"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() },
+            timeoutSec = (json["timeoutSec"]?.jsonPrimitive?.intOrNull ?: 120).coerceIn(1, 3600)
         )
     }
 
@@ -648,7 +755,7 @@ class LangChainLLMService(
         appendLine()
         projectContext.description?.let { appendLine("=== PROJECT DESCRIPTION ===\n${it.take(2000)}\n") }
         projectContext.architecture?.let { appendLine("=== ARCHITECTURE ===\n${it.take(3000)}\n") }
-        appendLine("=== FILE TREE ===\n${projectContext.fileTree.toCompactString(maxDepth = 4)}\n")
+        appendLine("=== FILE TREE ===\n${projectContext.fileTree.toCompactString()}\n")
         appendLine("Based on the task and project structure, which files do I need to see?")
     }
 
@@ -755,10 +862,17 @@ class LangChainLLMService(
         return try {
             val jsonContent = extractJson(response)
             val jsonObject = Json.parseToJsonElement(jsonContent).jsonObject
-            val files = jsonObject["requestedFiles"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
-            ContextRequest(requestedFiles = files, reasoning = jsonObject["reasoning"]?.jsonPrimitive?.contentOrNull)
+            val files =
+                jsonObject["requestedFiles"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
+            // Support both old "reasoning" key and new "message" key for backwards compatibility
+            val message = jsonObject["message"]?.jsonPrimitive?.contentOrNull
+                ?: jsonObject["reasoning"]?.jsonPrimitive?.contentOrNull
+            ContextRequest(requestedFiles = files, reasoning = message)
         } catch (e: Exception) {
-            ContextRequest(requestedFiles = Regex("""[\w/]+\.kt""").findAll(response).map { it.value }.distinct().toList(), reasoning = null)
+            ContextRequest(
+                requestedFiles = Regex("""[\w/]+\.kt""").findAll(response).map { it.value }.distinct().toList(),
+                reasoning = null
+            )
         }
     }
 
@@ -834,7 +948,10 @@ class LangChainLLMService(
             - Only use REPLACE_FILE when the majority of the file changes
             - Only use CREATE_FILE for genuinely new files
             - For REPLACE_ELEMENT: content must be the COMPLETE element (annotations, modifiers, signature, body)
-            - For CREATE_ELEMENT: elementKind must match the content (FUNCTION, CLASS, PROPERTY, etc.)
+            - For CREATE_ELEMENT with position AFTER/BEFORE: path must point to the SIBLING element, NOT the parent
+            - NEVER use "anchor" field — it does not exist and will be silently ignored
+            - To insert after property[X]: path = "file:.../class[Y]/property[X]", position = "AFTER"
+            - To add to end of class: path = "file:.../class[Y]", position = "LAST_CHILD"
             - Use ADD_IMPORT/REMOVE_IMPORT for import changes — never manually edit the import block
             - Write clean, idiomatic Kotlin following existing project patterns
             - If the user just asks a question, respond normally without JSON

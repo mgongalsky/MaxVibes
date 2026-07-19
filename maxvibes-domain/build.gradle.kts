@@ -3,6 +3,17 @@ plugins {
     kotlin("plugin.serialization")
 }
 
+tasks.test {
+    useJUnitPlatform()
+
+    testLogging {
+        events("passed", "skipped", "failed")
+        showStandardStreams = false
+        showExceptions = true
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+    }
+}
+
 dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2")
 

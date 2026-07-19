@@ -1,0 +1,15 @@
+<idea-plugin>
+    <extensions defaultExtensionNs="org.jetbrains.kotlin">
+        <supportsKotlinPluginMode supportsK2="true"/>
+    </extensions>
+
+    <actions>
+        <group id="MaxVibes.OnElement"
+               class="com.maxvibes.plugin.action.MaxVibesOnElementGroup"
+               text="Vibe: On Element"
+               popup="true"
+               icon="AllIcons.Actions.Lightning">
+            <add-to-group group-id="MaxVibes.ActionGroup" anchor="first"/>
+        </group>
+    </actions>
+</idea-plugin>

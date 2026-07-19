@@ -32,14 +32,24 @@ class MaxVibesSettings : PersistentStateComponent<MaxVibesSettings.State> {
         var enableMockFallback: Boolean = true,
 
         // ===== Interaction Mode =====
-        var interactionMode: String = "API",  // API, CLIPBOARD, CHEAP_API
+        var interactionMode: String = "API",
 
         // ===== Cheap LLM (for CHEAP_API mode) =====
         var cheapProvider: String = "ANTHROPIC",
         var cheapModelId: String = "claude-haiku-4-5-20251001",
         var cheapOllamaBaseUrl: String = "http://localhost:11434",
         var cheapTemperature: Double = 0.1,
-        var cheapMaxTokens: Int = 16384
+        var cheapMaxTokens: Int = 16384,
+
+        // ===== Claude Code (CLI mode) =====
+        var claudeCodePath: String = "claude",
+        var claudeCodeExtraArgs: String = "",
+        var claudeCodeModel: String = "",
+        var claudeCodeEffortLevel: String = "",
+        var claudeCodeMaxOutputTokens: Int = 64000,
+        var claudeCodeThinkingBudget: Int = 0,
+        var claudeCodeReadTimeoutSec: Int = 120,
+        var claudeCodeStartTimeoutSec: Int = 30
     )
 
     private var myState = State()
@@ -54,55 +64,132 @@ class MaxVibesSettings : PersistentStateComponent<MaxVibesSettings.State> {
 
     var provider: String
         get() = myState.provider
-        set(value) { myState.provider = value }
+        set(value) {
+            myState.provider = value
+        }
 
     var modelId: String
         get() = myState.modelId
-        set(value) { myState.modelId = value }
+        set(value) {
+            myState.modelId = value
+        }
 
     var ollamaBaseUrl: String
         get() = myState.ollamaBaseUrl
-        set(value) { myState.ollamaBaseUrl = value }
+        set(value) {
+            myState.ollamaBaseUrl = value
+        }
 
     var temperature: Double
         get() = myState.temperature
-        set(value) { myState.temperature = value }
+        set(value) {
+            myState.temperature = value
+        }
 
     var maxTokens: Int
         get() = myState.maxTokens
-        set(value) { myState.maxTokens = value }
+        set(value) {
+            myState.maxTokens = value
+        }
 
     var enableMockFallback: Boolean
         get() = myState.enableMockFallback
-        set(value) { myState.enableMockFallback = value }
+        set(value) {
+            myState.enableMockFallback = value
+        }
 
     // ===== Interaction Mode =====
 
     var interactionMode: String
         get() = myState.interactionMode
-        set(value) { myState.interactionMode = value }
+        set(value) {
+            myState.interactionMode = value
+        }
 
     // ===== Cheap LLM =====
 
     var cheapProvider: String
         get() = myState.cheapProvider
-        set(value) { myState.cheapProvider = value }
+        set(value) {
+            myState.cheapProvider = value
+        }
 
     var cheapModelId: String
         get() = myState.cheapModelId
-        set(value) { myState.cheapModelId = value }
+        set(value) {
+            myState.cheapModelId = value
+        }
 
     var cheapOllamaBaseUrl: String
         get() = myState.cheapOllamaBaseUrl
-        set(value) { myState.cheapOllamaBaseUrl = value }
+        set(value) {
+            myState.cheapOllamaBaseUrl = value
+        }
 
     var cheapTemperature: Double
         get() = myState.cheapTemperature
-        set(value) { myState.cheapTemperature = value }
+        set(value) {
+            myState.cheapTemperature = value
+        }
 
     var cheapMaxTokens: Int
         get() = myState.cheapMaxTokens
-        set(value) { myState.cheapMaxTokens = value }
+        set(value) {
+            myState.cheapMaxTokens = value
+        }
+
+    // ===== Claude Code =====
+
+    var claudeCodePath: String
+        get() = myState.claudeCodePath
+        set(value) {
+            myState.claudeCodePath = value
+        }
+
+    var claudeCodeExtraArgs: String
+        get() = myState.claudeCodeExtraArgs
+        set(value) {
+            myState.claudeCodeExtraArgs = value
+        }
+
+    /** Model for the Claude Code CLI. Blank = Auto (CLI default). Aliases sonnet/opus/haiku or a full model name. */
+    var claudeCodeModel: String
+        get() = myState.claudeCodeModel
+        set(value) {
+            myState.claudeCodeModel = value
+        }
+
+    /** Reasoning effort for the Claude Code CLI, exported as CLAUDE_CODE_EFFORT_LEVEL. Blank = Auto (model default). */
+    var claudeCodeEffortLevel: String
+        get() = myState.claudeCodeEffortLevel
+        set(value) {
+            myState.claudeCodeEffortLevel = value
+        }
+
+    /** Per-response output cap, exported as CLAUDE_CODE_MAX_OUTPUT_TOKENS on the child process. 0 = CLI default. */
+    var claudeCodeMaxOutputTokens: Int
+        get() = myState.claudeCodeMaxOutputTokens
+        set(value) {
+            myState.claudeCodeMaxOutputTokens = value
+        }
+
+    /** Reasoning budget per turn, exported as MAX_THINKING_TOKENS on the child process. 0 = CLI default. */
+    var claudeCodeThinkingBudget: Int
+        get() = myState.claudeCodeThinkingBudget
+        set(value) {
+            myState.claudeCodeThinkingBudget = value
+        }
+    var claudeCodeReadTimeoutSec: Int
+        get() = myState.claudeCodeReadTimeoutSec
+        set(value) {
+            myState.claudeCodeReadTimeoutSec = value
+        }
+
+    var claudeCodeStartTimeoutSec: Int
+        get() = myState.claudeCodeStartTimeoutSec
+        set(value) {
+            myState.claudeCodeStartTimeoutSec = value
+        }
 
     // ========== Secure API Key Storage ==========
 
@@ -245,7 +332,8 @@ class MaxVibesSettings : PersistentStateComponent<MaxVibesSettings.State> {
         val INTERACTION_MODES = listOf(
             "API" to "\uD83D\uDD0C API (Direct, pay-per-token)",
             "CLIPBOARD" to "\uD83D\uDCCB Clipboard (Copy-paste, subscription)",
-            "CHEAP_API" to "\uD83D\uDCB0 Cheap API (Budget model)"
+            "CHEAP_API" to "\uD83D\uDCB0 Cheap API (Budget model)",
+            "CLAUDE_CODE" to "\uD83E\uDD16 Claude Code (Local CLI)"
         )
     }
 }

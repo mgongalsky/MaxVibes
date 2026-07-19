@@ -1,0 +1,328 @@
+package com.maxvibes.application.service
+
+import com.maxvibes.application.port.output.*
+import com.maxvibes.domain.model.code.*
+import com.maxvibes.domain.model.context.*
+import com.maxvibes.domain.model.interaction.*
+import com.maxvibes.domain.model.modification.Modification
+import com.maxvibes.domain.model.modification.ModificationResult
+import com.maxvibes.shared.result.Result
+import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.Test
+import com.maxvibes.domain.model.modification.ModificationError
+import io.mockk.mockk
+
+/**
+ * Verifies the minimal-mode payload policy introduced in [ClipboardInteractionService].
+ *
+ * When [ClipboardInteractionService.continueDialog] is called with `addHistory = false`,
+ * the produced [ClipboardRequest] must NOT contain heavy context fields because the LLM
+ * already has all that information in its current chat window.
+ *
+ * When `addHistory = true`, or on the very first [ClipboardInteractionService.startTask]
+ * call, the full context must be present.
+ *
+ * These tests run in the `maxvibes-application` module without any IntelliJ Platform SDK.
+ */
+class ClipboardMinimalModeTest {
+
+    /** Shared session ID used across all test scenarios. */
+    private val SESSION_ID = "test-session"
+
+    // ── Fake ports ────────────────────────────────────────────────────
+
+    /** Captures every [ClipboardRequest] passed to the clipboard for inspection. */
+    private val capturedRequests = mutableListOf<ClipboardRequest>()
+
+    private val clipboardPort = object : ClipboardPort {
+        override fun copyRequestToClipboard(request: ClipboardRequest): Boolean {
+            capturedRequests.add(request)
+            return true
+        }
+
+        override fun copyRawText(text: String): Boolean = true
+
+        override fun parseResponse(rawText: String): InteractionResponse? = null
+    }
+
+    /** Returns a minimal but valid [ProjectContext] with a non-blank file tree. */
+    private val projectContextPort = object : ProjectContextPort {
+        override suspend fun getProjectContext(): Result<ProjectContext, ContextError> {
+            val root = FileNode(name = "TestProject", path = "/", isDirectory = true)
+            val fileTree = FileTree(root = root, totalFiles = 2, totalDirectories = 1)
+            return Result.Success(
+                ProjectContext(name = "TestProject", rootPath = "/test", fileTree = fileTree)
+            )
+        }
+
+        override suspend fun getFileTree(
+            maxDepth: Int,
+            excludePatterns: List<String>
+        ): Result<FileTree, ContextError> {
+            val root = FileNode("root", "/", isDirectory = true)
+            return Result.Success(FileTree(root, 0, 0))
+        }
+
+        /** Returns dummy file contents so allGatheredFiles gets populated. */
+        override suspend fun gatherFiles(
+            paths: List<String>,
+            maxTotalSize: Long
+        ): Result<GatheredContext, ContextError> {
+            val contents = paths.associateWith { path -> "// content of $path" }
+            return Result.Success(GatheredContext(files = contents, totalTokensEstimate = 10))
+        }
+
+        override suspend fun findDescriptionFiles(): Result<Map<String, String>, ContextError> =
+            Result.Success(emptyMap())
+    }
+
+    private val notificationPort = object : NotificationPort {
+        override fun showProgress(message: String, fraction: Double?) {}
+        override fun showSuccess(message: String) {}
+        override fun showError(message: String) {}
+        override fun showWarning(message: String) {}
+        override suspend fun askConfirmation(title: String, message: String) = true
+    }
+
+    private val codeRepository = object : CodeRepository {
+        override suspend fun getFileContent(path: ElementPath): Result<String, CodeRepositoryError> =
+            Result.Failure(CodeRepositoryError.NotFound(path.toString()))
+
+        override suspend fun getElement(path: ElementPath): Result<CodeElement, CodeRepositoryError> =
+            Result.Failure(CodeRepositoryError.NotFound(path.toString()))
+
+        override suspend fun findElements(
+            basePath: ElementPath,
+            kinds: Set<ElementKind>?,
+            namePattern: Regex?
+        ): Result<List<CodeElement>, CodeRepositoryError> = Result.Success(emptyList())
+
+        override suspend fun applyModification(modification: Modification): ModificationResult =
+            ModificationResult.Failure(
+                modification = modification,
+                error = ModificationError.InvalidOperation("test fake")
+            )
+
+        override suspend fun applyModifications(
+            modifications: List<Modification>
+        ): List<ModificationResult> = emptyList()
+
+        override suspend fun exists(path: ElementPath): Boolean = false
+        override suspend fun validateSyntax(content: String): Result<Unit, CodeRepositoryError> =
+            Result.Success(Unit)
+
+        override suspend fun getCodeView(request: CodeViewRequest): CodeView {
+            TODO("Not yet implemented")
+        }
+    }
+
+    /** Returns non-blank prompts so full-context assertions can detect them. */
+    private val promptPort = object : PromptPort {
+        override fun getPrompts() = PromptTemplates(
+            chatSystem = "CHAT_SYSTEM_PROMPT",
+            planningSystem = "PLANNING_SYSTEM_PROMPT"
+        )
+
+        override fun hasCustomPrompts() = false
+        override fun openOrCreatePrompts() {}
+    }
+
+    private lateinit var service: ClipboardInteractionService
+
+    @BeforeEach
+    fun setup() {
+        capturedRequests.clear()
+        // Relaxed mock: all transitions succeed silently; statusFor returns IDLE by default.
+        // continueDialog is called directly in these tests so statusFor routing is not exercised.
+        val sessionManager = mockk<ClipboardSessionManager>(relaxed = true)
+        service = ClipboardInteractionService(
+            contextProvider = projectContextPort,
+            clipboardPort = clipboardPort,
+            codeRepository = codeRepository,
+            notificationPort = notificationPort,
+            promptPort = promptPort,
+            sessionManager = sessionManager,
+            chatSessionRepository = mockk(relaxed = true)
+        )
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────
+
+    /** Starts a session with a context file and returns the initial [ClipboardRequest]. */
+    private fun startSessionWithContextFile(): ClipboardRequest {
+        val result = runBlocking {
+            service.startTask(
+                sessionId = SESSION_ID,
+                currentMessage = "initial task",
+                globalContextFiles = listOf("docs/README.md")
+            )
+        }
+        return (result as ClipboardStepResult.WaitingForResponse).jsonRequest
+    }
+
+    // ── Tests: startTask (first message) ─────────────────────────────
+
+    @Test
+    fun `startTask always sends full context regardless of addHistory`() {
+        val req = startSessionWithContextFile()
+
+        assertTrue(
+            req.systemInstruction.isNotBlank(),
+            "startTask must include systemInstruction"
+        )
+        assertTrue(
+            req.fileTree.isNotBlank(),
+            "startTask must include fileTree"
+        )
+        assertTrue(
+            req.currentMessage.isNotBlank(),
+            "startTask must include a non-blank currentMessage"
+        )
+    }
+
+    // ── Tests: continueDialog – minimal mode (addHistory = false) ─────
+
+    @Test
+    fun `continueDialog without addHistory produces minimal ClipboardRequest`() {
+        startSessionWithContextFile()
+
+        val result = runBlocking {
+            service.continueDialog(
+                sessionId = SESSION_ID,
+                message = "fix the bug",
+                globalContextFiles = listOf("docs/README.md"),
+                addHistory = false
+            )
+        }
+
+        assertTrue(
+            result is ClipboardStepResult.WaitingForResponse,
+            "expected WaitingForResponse but got $result"
+        )
+        val req = (result as ClipboardStepResult.WaitingForResponse).jsonRequest
+
+        // Heavy fields must be blank/empty so JsonClipboardProtocolCodec omits them from JSON
+        assertTrue(req.systemInstruction.isBlank(), "systemInstruction must be blank in minimal mode")
+        assertTrue(req.fileTree.isBlank(), "fileTree must be blank in minimal mode")
+        assertTrue(req.chatHistory.isEmpty(), "chatHistory must be empty in minimal mode")
+        assertNull(req.attachedContext, "attachedContext must be null in minimal mode")
+        assertFalse(req.planOnly, "planOnly must be false in minimal mode")
+
+        // Global context file must NOT leak into previouslyGatheredPaths when addHistory=false
+        assertFalse(
+            req.previouslyGatheredPaths.contains("docs/README.md"),
+            "global context file must not appear in previouslyGatheredPaths with addHistory=false"
+        )
+        assertTrue(
+            req.previouslyGatheredPaths.isEmpty(),
+            "previouslyGatheredPaths must be empty when addHistory=false"
+        )
+        assertTrue(
+            req.currentMessage.contains("fix the bug"),
+            "currentMessage must contain the user's follow-up message"
+        )
+    }
+
+    @Test
+    fun `continueDialog minimal mode omits heavy fields across multiple turns`() {
+        startSessionWithContextFile()
+
+        val result1 = runBlocking {
+            service.continueDialog(sessionId = SESSION_ID, message = "turn 2", addHistory = false)
+        }
+        val result2 = runBlocking {
+            service.continueDialog(sessionId = SESSION_ID, message = "turn 3", addHistory = false)
+        }
+
+        listOf(result1, result2).forEach { result ->
+            assertTrue(result is ClipboardStepResult.WaitingForResponse)
+            val req = (result as ClipboardStepResult.WaitingForResponse).jsonRequest
+            assertTrue(req.systemInstruction.isBlank(), "systemInstruction must always be blank in minimal mode")
+            assertTrue(req.fileTree.isBlank(), "fileTree must always be blank in minimal mode")
+            assertTrue(req.chatHistory.isEmpty(), "chatHistory must always be empty in minimal mode")
+        }
+    }
+
+    // ── Tests: continueDialog – full context mode (addHistory = true) ─
+
+    @Test
+    fun `continueDialog with addHistory sends full context`() {
+        startSessionWithContextFile()
+
+        val result = runBlocking {
+            service.continueDialog(
+                sessionId = SESSION_ID,
+                message = "fix the bug",
+                globalContextFiles = listOf("docs/README.md"),
+                addHistory = true
+            )
+        }
+
+        assertTrue(result is ClipboardStepResult.WaitingForResponse)
+        val req = (result as ClipboardStepResult.WaitingForResponse).jsonRequest
+
+        assertTrue(req.systemInstruction.isNotBlank(), "systemInstruction must be present when addHistory=true")
+        assertTrue(req.fileTree.isNotBlank(), "fileTree must be present when addHistory=true")
+        assertTrue(req.chatHistory.isNotEmpty(), "chatHistory must be present when addHistory=true")
+    }
+
+    @Test
+    fun `continueDialog with addHistory populates previouslyGatheredPaths`() {
+        startSessionWithContextFile()  // gathers docs/README.md into allGatheredFiles
+
+        val result = runBlocking {
+            service.continueDialog(
+                sessionId = SESSION_ID,
+                message = "continue with history",
+                addHistory = true
+            )
+        }
+
+        assertTrue(result is ClipboardStepResult.WaitingForResponse)
+        val req = (result as ClipboardStepResult.WaitingForResponse).jsonRequest
+
+        assertTrue(
+            req.previouslyGatheredPaths.contains("docs/README.md"),
+            "previouslyGatheredPaths must include files gathered in previous turns"
+        )
+    }
+
+    // ── Tests: edge cases ─────────────────────────────────────────────
+
+    @Test
+    fun `continueDialog without active session returns Error`() {
+        val result = runBlocking {
+            service.continueDialog(sessionId = SESSION_ID, message = "orphan message", addHistory = false)
+        }
+        assertTrue(
+            result is ClipboardStepResult.Error,
+            "continueDialog without active session must return Error"
+        )
+    }
+
+    @Test
+    fun `ideErrors are always included even in minimal mode`() {
+        startSessionWithContextFile()
+
+        val result = runBlocking {
+            service.continueDialog(
+                sessionId = SESSION_ID,
+                message = "fix errors",
+                ideErrors = "CompileError: unresolved reference 'foo'",
+                addHistory = false
+            )
+        }
+
+        assertTrue(result is ClipboardStepResult.WaitingForResponse)
+        val req = (result as ClipboardStepResult.WaitingForResponse).jsonRequest
+
+        assertNotNull(req.ideErrors, "ideErrors must always be included, even in minimal mode")
+        assertTrue(req.ideErrors!!.contains("unresolved reference"))
+
+        // But heavy fields are still blank
+        assertTrue(req.systemInstruction.isBlank())
+        assertTrue(req.fileTree.isBlank())
+    }
+}
