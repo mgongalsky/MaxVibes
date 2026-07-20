@@ -21,6 +21,7 @@ import javax.swing.Action
 import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JPanel
+import com.intellij.ui.JBColor
 
 /**
  * Non-modal window that renders a [PlanDiagram] of the task plan.
@@ -125,34 +126,66 @@ class DiagramViewerDialog(
      * jar: resource URLs without a custom scheme handler), diagram source HTML-escaped
      * inside <pre class="mermaid"> (Mermaid reads its textContent). Render errors are
      * surfaced into the #err div instead of a blank page.
+     *
+     * Readability: `useMaxWidth: false` renders the SVG at natural size (the default
+     * squeezes a wide graph into the window width, making labels unreadable) — the page
+     * scrolls instead. A zoom bar (−/+/1:1) plus Ctrl+wheel scales the diagram 0.2x–8x.
+     * Mermaid theme and page background follow the IDE theme via [JBColor.isBright].
      */
     private fun buildHtml(mermaidSource: String, js: String): String {
+        val dark = !JBColor.isBright()
+        val bg = if (dark) "#2b2b2b" else "#ffffff"
+        val fg = if (dark) "#bbbbbb" else "#000000"
+        val theme = if (dark) "dark" else "default"
         val escaped = mermaidSource
             .replace("&", "&amp;")
             .replace("<", "&lt;")
             .replace(">", "&gt;")
         return """
-            <!DOCTYPE html>
-            <html><head><meta charset="utf-8">
-            <style>
-              body { margin: 0; padding: 8px; background: #ffffff; }
-              #err { color: #b00020; font-family: monospace; white-space: pre-wrap; }
-            </style>
-            </head><body>
-            <pre class="mermaid">$escaped</pre>
-            <div id="err"></div>
-            <script>$js</script>
-            <script>
-              try {
-                mermaid.initialize({ startOnLoad: true, securityLevel: 'strict' });
-              } catch (e) {
-                document.getElementById('err').textContent = String(e);
-              }
-              window.addEventListener('error', function (e) {
-                document.getElementById('err').textContent = String(e.message || e);
-              });
-            </script>
-            </body></html>
-        """.trimIndent()
+        <!DOCTYPE html>
+        <html><head><meta charset="utf-8">
+        <style>
+          body { margin: 0; padding: 8px; background: $bg; color: $fg; }
+          #zoombar { position: fixed; top: 8px; right: 16px; z-index: 10; user-select: none; }
+          #zoombar button { font-size: 15px; width: 36px; height: 30px; margin-left: 4px; }
+          #wrap { transform-origin: 0 0; width: max-content; }
+          #err { color: #e05555; font-family: monospace; white-space: pre-wrap; }
+        </style>
+        </head><body>
+        <div id="zoombar">
+          <button onclick="zoomBy(0.8)" title="Zoom out (Ctrl+wheel)">&minus;</button>
+          <button onclick="zoomBy(1.25)" title="Zoom in (Ctrl+wheel)">+</button>
+          <button onclick="zoomReset()" title="Reset zoom">1:1</button>
+        </div>
+        <div id="wrap"><pre class="mermaid">$escaped</pre></div>
+        <div id="err"></div>
+        <script>$js</script>
+        <script>
+          var scale = 1;
+          function applyZoom() { document.getElementById('wrap').style.transform = 'scale(' + scale + ')'; }
+          function zoomBy(f) { scale = Math.min(8, Math.max(0.2, scale * f)); applyZoom(); }
+          function zoomReset() { scale = 1; applyZoom(); }
+          window.addEventListener('wheel', function (e) {
+            if (!e.ctrlKey) return;
+            e.preventDefault();
+            zoomBy(e.deltaY < 0 ? 1.15 : 0.87);
+          }, { passive: false });
+          try {
+            mermaid.initialize({
+              startOnLoad: true,
+              securityLevel: 'strict',
+              theme: '$theme',
+              flowchart: { useMaxWidth: false },
+              themeVariables: { fontSize: '16px' }
+            });
+          } catch (e) {
+            document.getElementById('err').textContent = String(e);
+          }
+          window.addEventListener('error', function (e) {
+            document.getElementById('err').textContent = String(e.message || e);
+          });
+        </script>
+        </body></html>
+    """.trimIndent()
     }
 }
