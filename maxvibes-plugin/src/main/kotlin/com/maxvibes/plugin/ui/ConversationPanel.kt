@@ -1024,4 +1024,23 @@ class ConversationPanel(
             }
         })
     }
+
+    /**
+     * Adds a small "Схема" button block under the last message bubble.
+     * Rendered only for assistant turns whose response carried a plan diagram;
+     * clicking invokes [onOpen] (the panel knows nothing about the diagram itself).
+     */
+    fun addDiagramButton(onOpen: () -> Unit) {
+        val panel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
+            background = JBColor.background()
+            border = JBUI.Borders.empty(0, 14, 6, 0)
+        }
+        panel.add(JButton("\uD83D\uDDFA Схема").apply {
+            font = font.deriveFont(11f)
+            isFocusPainted = false
+            toolTipText = "Открыть схему плана в отдельном окне"
+            addActionListener { onOpen() }
+        })
+        addComp(panel)
+    }
 }

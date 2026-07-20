@@ -682,7 +682,8 @@ class ClaudeCodeInteractionService(
                 llmReasoning = combinedReasoning,
                 durationMs = durationMs,
                 costUsd = costUsd,
-                numTurns = numTurns
+                numTurns = numTurns,
+                diagram = response.diagram
             )
         }
 
@@ -707,7 +708,8 @@ class ClaudeCodeInteractionService(
                 durationMs = durationMs,
                 skippedCommands = commands.size,
                 costUsd = costUsd,
-                numTurns = numTurns
+                numTurns = numTurns,
+                diagram = response.diagram
             )
         }
 
@@ -726,7 +728,8 @@ class ClaudeCodeInteractionService(
                 llmReasoning = combinedReasoning,
                 durationMs = durationMs,
                 costUsd = costUsd,
-                numTurns = numTurns
+                numTurns = numTurns,
+                diagram = response.diagram
             )
         }
 
@@ -753,7 +756,8 @@ class ClaudeCodeInteractionService(
             durationMs = durationMs,
             commands = commands,
             costUsd = costUsd,
-            numTurns = numTurns
+            numTurns = numTurns,
+            diagram = response.diagram
         )
     }
 

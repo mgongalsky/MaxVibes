@@ -5,6 +5,7 @@ import com.maxvibes.domain.model.command.CommandRequest
 import com.maxvibes.domain.model.interaction.InteractionModification
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.domain.model.interaction.InteractionQuestion
+import com.maxvibes.domain.model.planning.PlanDiagram
 
 /**
  * Outcome of a single step in the Claude Code interaction flow.
@@ -14,6 +15,10 @@ import com.maxvibes.domain.model.interaction.InteractionQuestion
  * suspends the flow until the user approves the next round, and a response with
  * modifications suspends in [AwaitingModApprove] until the user approves (apply)
  * or rejects (types a message).
+ *
+ * Every "content-bearing" variant carries an optional [PlanDiagram] — the structural
+ * plan diagram from the LLM response. Null = the response had no `diagram` field;
+ * the UI shows a diagram button only when non-null.
  */
 sealed class ClaudeCodeStepResult {
 
@@ -41,7 +46,8 @@ sealed class ClaudeCodeStepResult {
         val durationMs: Long = 0L,
         val skippedCommands: Int = 0,
         val costUsd: Double? = null,
-        val numTurns: Int? = null
+        val numTurns: Int? = null,
+        val diagram: PlanDiagram? = null
     ) : ClaudeCodeStepResult()
 
     /**
@@ -61,7 +67,8 @@ sealed class ClaudeCodeStepResult {
         val llmReasoning: String? = null,
         val durationMs: Long = 0L,
         val costUsd: Double? = null,
-        val numTurns: Int? = null
+        val numTurns: Int? = null,
+        val diagram: PlanDiagram? = null
     ) : ClaudeCodeStepResult()
 
     /**
@@ -78,7 +85,8 @@ sealed class ClaudeCodeStepResult {
         val llmReasoning: String? = null,
         val durationMs: Long = 0L,
         val costUsd: Double? = null,
-        val numTurns: Int? = null
+        val numTurns: Int? = null,
+        val diagram: PlanDiagram? = null
     ) : ClaudeCodeStepResult()
 
     /**
@@ -106,7 +114,8 @@ sealed class ClaudeCodeStepResult {
         val durationMs: Long = 0L,
         val commands: List<CommandRequest> = emptyList(),
         val costUsd: Double? = null,
-        val numTurns: Int? = null
+        val numTurns: Int? = null,
+        val diagram: PlanDiagram? = null
     ) : ClaudeCodeStepResult()
 
     /**

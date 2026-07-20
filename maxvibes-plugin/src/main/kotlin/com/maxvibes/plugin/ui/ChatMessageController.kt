@@ -29,6 +29,7 @@ import com.maxvibes.domain.model.modification.AppliedModInfo
 import com.maxvibes.domain.model.modification.toCategory
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancel
+import com.maxvibes.domain.model.planning.PlanDiagram
 
 interface ChatPanelCallbacks {
     fun appendToChat(text: String)
@@ -105,6 +106,9 @@ interface ChatPanelCallbacks {
 
     /** Shows/hides the one-shot editor-skill chip; null label hides it. */
     fun onOneShotChanged(label: String?)
+
+    /** Adds a "Схема" button under the last assistant bubble; opens the plan diagram viewer. */
+    fun showDiagramButton(diagram: PlanDiagram)
 }
 
 /**
@@ -954,6 +958,7 @@ class ChatMessageController(
                     requestedViews = result.requestedViews,
                     appliedModifications = emptyList()
                 )
+                result.diagram?.let { callbacks.showDiagramButton(it) }
                 if (result.skippedCommands > 0) {
                     callbacks.appendToChat(
                         "⚠️ ${result.skippedCommands} command(s) skipped — response mixed them with requestedViews"
@@ -997,6 +1002,7 @@ class ChatMessageController(
                     requestedViews = emptyList(),
                     appliedModifications = emptyList()
                 )
+                result.diagram?.let { callbacks.showDiagramButton(it) }
                 val proposal = result.proposedModifications.joinToString("\n") {
                     "  • ${it.type}  ${it.path}"
                 }
@@ -1076,6 +1082,7 @@ class ChatMessageController(
                         appliedModifications = emptyList()
                     )
                 }
+                result.diagram?.let { callbacks.showDiagramButton(it) }
                 presentQuestions(result.questions)
 
                 callbacks.setInputEnabled(true)
@@ -1137,6 +1144,7 @@ class ChatMessageController(
                     requestedViews = emptyList(),
                     appliedModifications = appliedMods
                 )
+                result.diagram?.let { callbacks.showDiagramButton(it) }
                 result.commitMessage?.let { message ->
                     callbacks.setCommitMessage(message)
                     callbacks.appendToChat("💬 Commit message set in IDE")

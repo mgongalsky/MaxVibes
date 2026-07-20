@@ -38,6 +38,8 @@ import java.awt.event.KeyEvent
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.*
+import com.maxvibes.domain.model.planning.PlanDiagram
+import com.maxvibes.plugin.diagram.DiagramViewerDialog
 
 class ChatPanel(
     private val project: Project,
@@ -1637,6 +1639,16 @@ class ChatPanel(
             attachmentsPanel.repaint()
         } else {
             render(buildState())
+        }
+    }
+
+    /**
+     * Adds a "Схема" button under the last assistant bubble; each click opens a fresh
+     * non-modal [DiagramViewerDialog] for the diagram carried by that turn's response.
+     */
+    override fun showDiagramButton(diagram: PlanDiagram) {
+        conversationPanel.addDiagramButton {
+            DiagramViewerDialog(project, diagram).show()
         }
     }
 }
