@@ -60,6 +60,11 @@ tasks {
     }
 
     register<org.jetbrains.intellij.tasks.RunIdeTask>("runIdePyCharm") {
+        // gradle-intellij-plugin 1.x cannot boot IDEs with the 2024.2+ distribution layout —
+        // it fails with a bare "Index: 1, Size: 1". Until the migration to IntelliJ Platform
+        // Gradle Plugin 2.x, this task only actually launches a 2023.x–2024.1 PyCharm;
+        // point PYCHARM_PATH at such an install to use it. To test the plugin in a modern
+        // PyCharm, install the buildPlugin zip via "Install Plugin from Disk" instead.
         val pyCharmPath: String =
             System.getenv("PYCHARM_PATH")
                 ?: when {
@@ -67,7 +72,7 @@ tasks {
                         "/Applications/PyCharm CE.app/Contents"
 
                     org.gradle.internal.os.OperatingSystem.current().isWindows ->
-                        "C:/Program Files/JetBrains/PyCharm Community Edition 2023.1.5"
+                        "C:/Program Files/JetBrains/PyCharm Community Edition 2025.2"
 
                     else -> "/opt/pycharm-community"
                 }
