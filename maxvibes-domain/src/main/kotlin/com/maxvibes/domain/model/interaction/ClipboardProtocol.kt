@@ -2,6 +2,7 @@ package com.maxvibes.domain.model.interaction
 
 import com.maxvibes.domain.model.code.CodeViewRequest
 import com.maxvibes.domain.model.planning.TaskPlan
+import com.maxvibes.domain.model.planning.PlanDiagram
 
 /**
  * Фаза clipboard-протокола — используется внутренне для трекинга.
@@ -97,7 +98,14 @@ data class InteractionResponse(
      * Null — поле отсутствовало в ответе, план сессии не меняется.
      * Non-null с пустым [TaskPlan.steps] — маркер очистки плана (обрабатывается сервисом).
      */
-    val plan: TaskPlan? = null
+    val plan: TaskPlan? = null,
+
+    /**
+     * Опциональная структурная диаграмма плана (nodes/edges/groups/seams).
+     * Null — поле отсутствовало в ответе: старое поведение, кнопка «Схема» в чате не показывается.
+     * Битая диаграмма никогда не роняет парсинг всего ответа — кодек возвращает null.
+     */
+    val diagram: PlanDiagram? = null
 )
 
 /**

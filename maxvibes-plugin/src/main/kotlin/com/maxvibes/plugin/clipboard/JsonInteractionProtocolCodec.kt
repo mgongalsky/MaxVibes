@@ -9,6 +9,13 @@ import com.maxvibes.domain.model.code.CodeViewRequest
 import com.maxvibes.domain.model.planning.TaskPlan
 import com.maxvibes.domain.model.planning.PlanStep
 import com.maxvibes.domain.model.planning.PlanStepStatus
+import com.maxvibes.domain.model.planning.PlanDiagram
+import com.maxvibes.domain.model.planning.DiagramNode
+import com.maxvibes.domain.model.planning.DiagramEdge
+import com.maxvibes.domain.model.planning.DiagramGroup
+import com.maxvibes.domain.model.planning.DiagramSeam
+import com.maxvibes.domain.model.planning.DiagramNodeKind
+import com.maxvibes.domain.model.planning.DiagramEdgeKind
 
 /**
  * Pure [InteractionProtocolCodec] implementation backed by kotlinx.serialization.
@@ -228,7 +235,8 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
                 ?.mapNotNull { parseCommand(it.jsonObject) } ?: emptyList(),
             questions = obj[InteractionRequestSchema.RESP_QUESTIONS]?.jsonArray
                 ?.mapNotNull { parseQuestion(it.jsonObject) } ?: emptyList(),
-            plan = parsePlan(obj)
+            plan = parsePlan(obj),
+            diagram = parseDiagram(obj)
         )
     }
 
@@ -323,6 +331,96 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
             steps = steps
         )
     }.getOrNull()
+
+    /**
+     * Parses the optional `diagram` response field into a [PlanDiagram].
+     *
+     * Tolerant by design (a malformed diagram must never fail the whole response):
+     * - nodes without a non-blank `id` or `name` are skipped;
+     * - edges without a non-blank `id`, `from` or `to` are skipped (seams reference edges by id);
+     * - unknown node `kind` → CLASS, unknown edge `kind` → USES;
+     * - a group without a `label` falls back to its id; groups without an `id` are skipped;
+     * - seams without both group ids are skipped;
+     * - any parsing error yields `null` (no diagram) instead of throwing.
+     *
+     * Returns `null` when the field is absent or not an object.
+     */
+    private fun parseDiagram(obj: JsonObject): PlanDiagram? {
+        val diagramObj = obj[InteractionRequestSchema.RESP_DIAGRAM] as? JsonObject ?: return null
+        return try {
+            fun JsonObject.str(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
+            fun JsonObject.strList(key: String): List<String> =
+                (this[key] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull } ?: emptyList()
+
+            fun JsonObject.objList(key: String): List<JsonObject> =
+                (this[key] as? JsonArray)?.mapNotNull { it as? JsonObject } ?: emptyList()
+
+            val nodes = diagramObj.objList(InteractionRequestSchema.DIAG_NODES).mapNotNull { o ->
+                val id = o.str(InteractionRequestSchema.DIAG_ID)?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val name =
+                    o.str(InteractionRequestSchema.DIAG_NAME)?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val kind = o.str(InteractionRequestSchema.DIAG_KIND)?.trim()?.uppercase()
+                    ?.let { k -> DiagramNodeKind.values().firstOrNull { it.name == k } } ?: DiagramNodeKind.CLASS
+                DiagramNode(
+                    id = id,
+                    kind = kind,
+                    name = name,
+                    signature = o.str(InteractionRequestSchema.DIAG_SIGNATURE),
+                    filePath = o.str(InteractionRequestSchema.DIAG_FILE_PATH),
+                    loc = o.str(InteractionRequestSchema.DIAG_LOC)?.toIntOrNull()
+                )
+            }
+
+            val edges = diagramObj.objList(InteractionRequestSchema.DIAG_EDGES).mapNotNull { o ->
+                val id = o.str(InteractionRequestSchema.DIAG_ID)?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val from =
+                    o.str(InteractionRequestSchema.DIAG_FROM)?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val to = o.str(InteractionRequestSchema.DIAG_TO)?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val kind = o.str(InteractionRequestSchema.DIAG_KIND)?.trim()?.uppercase()
+                    ?.let { k -> DiagramEdgeKind.values().firstOrNull { it.name == k } } ?: DiagramEdgeKind.USES
+                DiagramEdge(
+                    id = id,
+                    from = from,
+                    to = to,
+                    kind = kind,
+                    label = o.str(InteractionRequestSchema.DIAG_LABEL)
+                )
+            }
+
+            val groups = diagramObj.objList(InteractionRequestSchema.DIAG_GROUPS).mapNotNull { o ->
+                val id = o.str(InteractionRequestSchema.DIAG_ID)?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                DiagramGroup(
+                    id = id,
+                    label = o.str(InteractionRequestSchema.DIAG_LABEL)?.takeIf { it.isNotBlank() } ?: id,
+                    nodeIds = o.strList(InteractionRequestSchema.DIAG_NODE_IDS),
+                    parentId = o.str(InteractionRequestSchema.DIAG_PARENT_ID)?.takeIf { it.isNotBlank() }
+                )
+            }
+
+            val seams = diagramObj.objList(InteractionRequestSchema.DIAG_SEAMS).mapNotNull { o ->
+                val fromGroupId = o.str(InteractionRequestSchema.DIAG_FROM_GROUP_ID)?.takeIf { it.isNotBlank() }
+                    ?: return@mapNotNull null
+                val toGroupId = o.str(InteractionRequestSchema.DIAG_TO_GROUP_ID)?.takeIf { it.isNotBlank() }
+                    ?: return@mapNotNull null
+                DiagramSeam(
+                    fromGroupId = fromGroupId,
+                    toGroupId = toGroupId,
+                    rationale = o.str(InteractionRequestSchema.DIAG_RATIONALE),
+                    crossingEdgeIds = o.strList(InteractionRequestSchema.DIAG_CROSSING_EDGE_IDS)
+                )
+            }
+
+            PlanDiagram(
+                title = diagramObj.str(InteractionRequestSchema.DIAG_TITLE),
+                nodes = nodes,
+                edges = edges,
+                groups = groups,
+                seams = seams
+            )
+        } catch (e: Exception) {
+            null
+        }
+    }
 
     internal fun findEmbeddedJson(text: String): String? {
         // Look for the leftmost occurrence of any known indicator key

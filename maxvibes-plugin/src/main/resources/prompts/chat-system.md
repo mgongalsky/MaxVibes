@@ -164,6 +164,39 @@ Rules:
 - Send `"steps": []` to dismiss the plan.
 - `plan` combines freely with every other response field — it is metadata, not an action.
 
+## Plan diagram (`diagram` field)
+
+When your plan describes a structural cut of the code — future modules and the seams between them — attach an optional top-level `diagram` field. The IDE shows a "Схема" button on the message and renders the diagram in a separate window. Omit the field when there is nothing structural to show: absence = no button, old behavior.
+
+```json
+"diagram": {
+"title": "ChatMessageController cut",
+"nodes": [
+{ "id": "cmc", "kind": "CLASS", "name": "ChatMessageController", "signature": "class ChatMessageController(project, panel)", "filePath": "maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/ui/ChatMessageController.kt", "loc": 420 },
+{ "id": "svc", "kind": "CLASS", "name": "ClaudeCodeInteractionService", "loc": 310 }
+],
+"edges": [
+{ "id": "e1", "from": "cmc", "to": "svc", "kind": "CALLS", "label": "send" }
+],
+"groups": [
+{ "id": "g_ui", "label": "UI layer", "nodeIds": ["cmc"] },
+{ "id": "g_core", "label": "Interaction core", "nodeIds": ["svc"] }
+],
+"seams": [
+{ "fromGroupId": "g_ui", "toGroupId": "g_core", "rationale": "UI must not know the transport", "crossingEdgeIds": ["e1"] }
+]
+}
+```
+
+Rules:
+- You supply SEMANTICS ONLY. **Never specify coordinates, positions, sizes, colors or any layout** — the layout engine computes them.
+- `nodes[].kind`: `CLASS` | `INTERFACE` | `OBJECT` | `FUNCTION` | `PROPERTY` | `MODULE`. `edges[].kind`: `CALLS` | `USES` | `EXTENDS` | `IMPLEMENTS` | `OWNS`.
+- **Every edge MUST have a unique `id`** — seams reference edges by these ids.
+- Form `groups` by the meaning of the future modules after the cut (group = module-to-be), not by current file/folder layout. Optional `parentId` nests a group inside another.
+- **For every seam list in `crossingEdgeIds` the ids of ALL edges that cross the cut** — they are the future public contract between the modules and are highlighted on the graph.
+- Include `filePath` (project-relative) and `loc` on nodes when known; keep `signature` short.
+- `diagram` combines freely with `plan` and every other response field.
+
 ---
 
 ## Key rules

@@ -181,4 +181,69 @@ object InteractionRequestSchema {
 
     /** Plan step status: PENDING | IN_PROGRESS | DONE | SKIPPED. */
     const val PLAN_STEP_STATUS = "status"
+
+    // ── Plan diagram fields (response field `diagram`) ─────────────────
+
+    /** Response field: optional structural plan diagram. Absent = no diagram, no button in chat. */
+    const val RESP_DIAGRAM = "diagram"
+
+    /** Optional diagram title. */
+    const val DIAG_TITLE = "title"
+
+    /** Array of diagram nodes. */
+    const val DIAG_NODES = "nodes"
+
+    /** Array of diagram edges. */
+    const val DIAG_EDGES = "edges"
+
+    /** Array of semantic node groups (future modules). */
+    const val DIAG_GROUPS = "groups"
+
+    /** Array of seams — where the plan cuts between groups. */
+    const val DIAG_SEAMS = "seams"
+
+    /** Stable id of a node / edge / group entry. */
+    const val DIAG_ID = "id"
+
+    /** Node kind (CLASS | INTERFACE | OBJECT | FUNCTION | PROPERTY | MODULE) or edge kind (CALLS | USES | EXTENDS | IMPLEMENTS | OWNS). */
+    const val DIAG_KIND = "kind"
+
+    /** Display name of a node. */
+    const val DIAG_NAME = "name"
+
+    /** Optional short signature of a node. */
+    const val DIAG_SIGNATURE = "signature"
+
+    /** Optional project-relative file path of a node. */
+    const val DIAG_FILE_PATH = "filePath"
+
+    /** Optional lines-of-code count of a node. */
+    const val DIAG_LOC = "loc"
+
+    /** Source node id of an edge. */
+    const val DIAG_FROM = "from"
+
+    /** Target node id of an edge. */
+    const val DIAG_TO = "to"
+
+    /** Optional label of an edge; also the display label of a group. */
+    const val DIAG_LABEL = "label"
+
+    /** Node ids belonging to a group. */
+    const val DIAG_NODE_IDS = "nodeIds"
+
+    /** Optional id of the enclosing group (nested groups). */
+    const val DIAG_PARENT_ID = "parentId"
+
+    /** Group id on one side of a seam. */
+    const val DIAG_FROM_GROUP_ID = "fromGroupId"
+
+    /** Group id on the other side of a seam. */
+    const val DIAG_TO_GROUP_ID = "toGroupId"
+
+    /** Optional justification of a seam. */
+    const val DIAG_RATIONALE = "rationale"
+
+    /** Ids of edges the seam crosses — the future public contract between modules. */
+    const val DIAG_CROSSING_EDGE_IDS = "crossingEdgeIds"
 }
