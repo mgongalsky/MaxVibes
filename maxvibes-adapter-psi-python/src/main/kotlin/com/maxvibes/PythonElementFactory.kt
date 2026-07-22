@@ -2,6 +2,8 @@ package com.maxvibes.adapter.psi.python
 
 import com.intellij.openapi.project.Project
 import com.jetbrains.python.psi.*
+import com.intellij.psi.PsiFileFactory
+import com.jetbrains.python.PythonLanguage
 
 class PythonElementFactory(private val project: Project) {
 
@@ -24,5 +26,6 @@ class PythonElementFactory(private val project: Project) {
         gen.createFromText(level, PyStatement::class.java, sourceText)
 
     fun createFile(sourceText: String): PyFile =
-        gen.createFromText(level, PyFile::class.java, sourceText)
+        PsiFileFactory.getInstance(project)
+            .createFileFromText("dummy.py", PythonLanguage.getInstance(), sourceText) as PyFile
 }

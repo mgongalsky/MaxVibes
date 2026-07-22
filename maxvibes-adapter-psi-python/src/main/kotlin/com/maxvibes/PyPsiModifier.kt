@@ -9,6 +9,8 @@ import com.maxvibes.domain.model.code.ElementPath
 import com.maxvibes.domain.model.modification.*
 import com.maxvibes.shared.result.Result
 import com.jetbrains.python.codeInsight.imports.AddImportHelper
+import com.intellij.psi.PsiDocumentManager
+import com.intellij.openapi.util.text.StringUtil
 
 class PyPsiModifier(
     private val project: Project,
@@ -18,9 +20,11 @@ class PyPsiModifier(
 
     fun replaceFile(path: ElementPath, newContent: String): Result<Unit, String> = runWrite {
         val pyFile = navigator.findFile(path) ?: return@runWrite Result.Failure("File not found: ${path.filePath}")
-        val newFile = factory.createFile(newContent)
-        pyFile.children.forEach { it.delete() }
-        newFile.children.forEach { child -> pyFile.add(child.copy()) }
+        val documentManager = PsiDocumentManager.getInstance(project)
+        val document = documentManager.getDocument(pyFile)
+            ?: return@runWrite Result.Failure("No document for file: ${path.filePath}")
+        document.setText(StringUtil.convertLineSeparators(newContent))
+        documentManager.commitDocument(document)
         Result.Success(Unit)
     }
 
@@ -135,7 +139,15 @@ class PyPsiModifier(
     private fun <T> runWrite(action: () -> Result<T, String>): Result<T, String> {
         var result: Result<T, String> = Result.Failure("Not executed")
         val app = ApplicationManager.getApplication()
-        val run = { WriteCommandAction.runWriteCommandAction(project) { result = action() } }
+        val run = {
+            WriteCommandAction.runWriteCommandAction(project) {
+                result = try {
+                    action()
+                } catch (e: Exception) {
+                    Result.Failure("${e.javaClass.simpleName}: ${e.message ?: "no message"}")
+                }
+            }
+        }
         if (app.isDispatchThread) run() else app.invokeAndWait(run)
         return result
     }

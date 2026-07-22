@@ -30,6 +30,7 @@ import com.maxvibes.domain.model.modification.toCategory
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancel
 import com.maxvibes.domain.model.planning.PlanDiagram
+import com.intellij.openapi.progress.ProcessCanceledException
 
 interface ChatPanelCallbacks {
     fun appendToChat(text: String)
@@ -224,10 +225,22 @@ class ChatMessageController(
         ProgressManager.getInstance().run(object : Task.Backgroundable(project, "MaxVibes: $title", true) {
             override fun run(indicator: ProgressIndicator) {
                 service.notificationService.setProgressIndicator(indicator)
-                runBlocking {
-                    val result = action()
-                    ApplicationManager.getApplication().invokeLater { handleClipboardResult(result, session) }
+                val result = try {
+                    runBlocking { action() }
+                } catch (e: ProcessCanceledException) {
+                    throw e
+                } catch (e: Throwable) {
+                    // Safety net: an adapter exception must surface as an Error result,
+                    // otherwise the panel stays disabled forever (no handler runs).
+                    MaxVibesLogger.error(
+                        "Controller", "clipboard background action crashed",
+                        e as? Exception ?: RuntimeException(e)
+                    )
+                    ClipboardStepResult.Error(
+                        message = "Internal error: ${e.javaClass.simpleName}: ${e.message ?: "no message"}"
+                    )
                 }
+                ApplicationManager.getApplication().invokeLater { handleClipboardResult(result, session) }
             }
 
             override fun onCancel() {
@@ -269,11 +282,23 @@ class ChatMessageController(
             object : Task.Backgroundable(project, "MaxVibes: $title", true) {
                 override fun run(indicator: ProgressIndicator) {
                     service.notificationService.setProgressIndicator(indicator)
-                    runBlocking {
-                        val result = action()
-                        ApplicationManager.getApplication().invokeLater {
-                            handleClaudeCodeResult(result, session)
-                        }
+                    val result = try {
+                        runBlocking { action() }
+                    } catch (e: ProcessCanceledException) {
+                        throw e
+                    } catch (e: Throwable) {
+                        // Safety net: an adapter exception must surface as an Error result,
+                        // otherwise the panel stays disabled forever (no handler runs).
+                        MaxVibesLogger.error(
+                            "Controller", "claudeCode background action crashed",
+                            e as? Exception ?: RuntimeException(e)
+                        )
+                        ClaudeCodeStepResult.Error(
+                            message = "Internal error: ${e.javaClass.simpleName}: ${e.message ?: "no message"}"
+                        )
+                    }
+                    ApplicationManager.getApplication().invokeLater {
+                        handleClaudeCodeResult(result, session)
                     }
                 }
 

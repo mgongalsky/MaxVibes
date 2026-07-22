@@ -16,7 +16,12 @@ class IdeNotificationService(private val project: Project) : NotificationPort {
     override fun showProgress(message: String, fraction: Double?) {
         currentIndicator?.let { indicator ->
             indicator.text = message
-            fraction?.let { indicator.fraction = it }
+            fraction?.let {
+                // BackgroundableProcessIndicator starts indeterminate; setFraction on it
+                // triggers a logged IllegalStateException in the platform.
+                if (indicator.isIndeterminate) indicator.isIndeterminate = false
+                indicator.fraction = it
+            }
         }
     }
 

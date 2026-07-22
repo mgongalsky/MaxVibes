@@ -8,7 +8,7 @@ plugins {
 
 allprojects {
     group = "com.maxvibes"
-    version = "1.2.2"
+    version = "1.2.3"
 
     repositories {
         mavenCentral()
@@ -38,5 +38,15 @@ subprojects {
 
     tasks.withType<Test> {
         useJUnitPlatform()
+    }
+
+    // gradle-intellij-plugin 1.x: instrumentCode ищет macOS-layout ('<jdk>/Packages')
+    // на Windows-JDK и валит buildPlugin после clean. GUI Forms в проекте нет,
+    // инструментация не нужна — выключаем до миграции на IPGP 2.x
+    // (docs/TODOs/migrate-to-intellij-platform-gradle-plugin-2.md).
+    plugins.withId("org.jetbrains.intellij") {
+        extensions.configure<org.jetbrains.intellij.IntelliJPluginExtension> {
+            instrumentCode.set(false)
+        }
     }
 }
