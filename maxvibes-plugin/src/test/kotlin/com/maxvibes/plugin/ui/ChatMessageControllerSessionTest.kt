@@ -4,23 +4,27 @@ import com.intellij.openapi.project.Project
 import com.maxvibes.application.service.ChatTreeService
 import com.maxvibes.domain.model.chat.ChatSession
 import com.maxvibes.plugin.service.MaxVibesService
-import io.mockk.*
+import com.maxvibes.plugin.testsupport.FakeChatPanelCallbacks
+import io.mockk.every
+import io.mockk.mockk
+import io.mockk.verify
+import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.Assertions.*
 
 class ChatMessageControllerSessionTest {
 
     private val mockProject = mockk<Project>(relaxed = true)
     private val mockChatTreeService = mockk<ChatTreeService>(relaxed = true)
     private val mockService = mockk<MaxVibesService>(relaxed = true)
-    private val mockCallbacks = mockk<ChatPanelCallbacks>(relaxed = true)
+    private lateinit var callbacks: FakeChatPanelCallbacks
     private lateinit var controller: ChatMessageController
 
     @BeforeEach
     fun setup() {
         every { mockService.chatTreeService } returns mockChatTreeService
-        controller = ChatMessageController(mockProject, mockService, mockCallbacks)
+        callbacks = FakeChatPanelCallbacks()
+        controller = ChatMessageController(mockProject, mockService, callbacks)
     }
 
     @Test
@@ -40,7 +44,7 @@ class ChatMessageControllerSessionTest {
 
         controller.createNewSession()
 
-        verify { mockCallbacks.onSessionChanged(session) }
+        assertEquals(session, callbacks.sessionChanges.last())
     }
 
     @Test
@@ -60,7 +64,7 @@ class ChatMessageControllerSessionTest {
 
         controller.deleteCurrentSession("session-id")
 
-        verify { mockCallbacks.onSessionChanged(next) }
+        assertEquals(next, callbacks.sessionChanges.last())
     }
 
     @Test
@@ -79,7 +83,7 @@ class ChatMessageControllerSessionTest {
 
         controller.renameSession("session-id", "New Title")
 
-        verify { mockCallbacks.onSessionRenamed(renamed) }
+        assertEquals(renamed, callbacks.renamedSessions.last())
     }
 
     @Test
@@ -88,7 +92,7 @@ class ChatMessageControllerSessionTest {
 
         controller.renameSession("session-id", "New Title")
 
-        verify(exactly = 0) { mockCallbacks.onSessionRenamed(any()) }
+        assertTrue(callbacks.renamedSessions.isEmpty())
     }
 
     @Test
@@ -107,7 +111,7 @@ class ChatMessageControllerSessionTest {
 
         controller.branchSession("parent-id", "Branch Title")
 
-        verify { mockCallbacks.onSessionChanged(branch) }
+        assertEquals(branch, callbacks.sessionChanges.last())
     }
 
     @Test
@@ -118,7 +122,7 @@ class ChatMessageControllerSessionTest {
         controller.loadSession(session.id)
 
         verify { mockChatTreeService.setActiveSession(session.id) }
-        verify { mockCallbacks.onSessionChanged(session) }
+        assertEquals(session, callbacks.sessionChanges.last())
     }
 
     @Test
@@ -127,6 +131,6 @@ class ChatMessageControllerSessionTest {
 
         controller.loadSession("nonexistent-id")
 
-        verify(exactly = 0) { mockCallbacks.onSessionChanged(any()) }
+        assertTrue(callbacks.sessionChanges.isEmpty())
     }
 }

@@ -117,8 +117,9 @@ class InteractionRequestBuilderTest {
     }
 
     @Test
-    fun `minimal mode omits attachedContext`() {
-        // attachedContext is passed directly to build() — in minimal mode it must be dropped.
+    fun `minimal mode forwards attachedContext`() {
+        // attachedContext is a one-shot per-message payload (trace / editor attachment) —
+        // forwarded even in minimal mode, otherwise context attached mid-session is silently lost.
         val req = InteractionRequestBuilder.build(
             state = makeState(),
             freshFiles = emptyMap(),
@@ -126,7 +127,7 @@ class InteractionRequestBuilderTest {
             addHistory = false,
             attachedContext = "some trace"
         )
-        assertNull(req.attachedContext)
+        assertEquals("some trace", req.attachedContext)
     }
 
     @Test

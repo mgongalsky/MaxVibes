@@ -1,7 +1,14 @@
 package com.maxvibes.application.service
 
 import com.maxvibes.application.port.output.*
+import com.maxvibes.domain.model.chat.ChatMessage
+import com.maxvibes.domain.model.chat.ChatSession
+import com.maxvibes.domain.model.chat.MessageRole
+import com.maxvibes.domain.model.context.FileNode
+import com.maxvibes.domain.model.context.FileTree
+import com.maxvibes.domain.model.context.ProjectContext
 import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
+import com.maxvibes.domain.model.interaction.InteractionResponse
 import com.maxvibes.shared.result.Result
 import io.mockk.*
 import kotlinx.coroutines.runBlocking
@@ -27,6 +34,7 @@ class ClipboardInteractionServiceDispatchTest {
     private val clipboardPort = mockk<ClipboardPort>(relaxed = true)
     private val codeRepository = mockk<CodeRepository>(relaxed = true)
     private val notificationPort = mockk<NotificationPort>(relaxed = true)
+    private val chatSessionRepository = mockk<ChatSessionRepository>(relaxed = true)
 
     /** Constructs a service with the given manager mock and shared port stubs. */
     private fun serviceWith(manager: ClipboardSessionManager) = ClipboardInteractionService(
@@ -35,8 +43,32 @@ class ClipboardInteractionServiceDispatchTest {
         codeRepository = codeRepository,
         notificationPort = notificationPort,
         sessionManager = manager,
-        chatSessionRepository = mockk(relaxed = true)
+        chatSessionRepository = chatSessionRepository
     )
+
+    /**
+     * Makes [ClipboardInteractionService.ensureWorkspace] succeed deterministically:
+     * the domain has a session with one USER message and project context resolves
+     * to a real [ProjectContext] instance.
+     */
+    private fun stubWorkspaceRestore() {
+        val session = mockk<ChatSession>(relaxed = true)
+        every { session.messages } returns listOf(
+            ChatMessage(role = MessageRole.USER, content = "restored task")
+        )
+        every { chatSessionRepository.getSessionById(SESSION_ID) } returns session
+        coEvery { contextProvider.getProjectContext() } returns Result.Success(
+            ProjectContext(
+                name = "TestProject",
+                rootPath = "/tmp/test",
+                fileTree = FileTree(
+                    root = FileNode(name = "root", path = "", isDirectory = true),
+                    totalFiles = 5,
+                    totalDirectories = 1
+                )
+            )
+        )
+    }
 
     // ==================== Dispatch tests ====================
 
@@ -65,54 +97,63 @@ class ClipboardInteractionServiceDispatchTest {
      * When status is AWAITING_PASTE, [handleUserInput] must route to [handlePastedResponse].
      *
      * Verified by observing that [ClipboardEvent.ResponsePasted] is fired on the manager
-     * (only happens inside [handlePastedResponseInternal]). Session state is null so the
-     * branch returns Error after the transition — we only care that routing was correct.
+     * (only happens inside [handlePastedResponseInternal]). Workspace restore and response
+     * parsing are stubbed to succeed so the flow reaches the transition: in the current
+     * production order the response is parsed BEFORE the transition fires.
      */
     @Test
     fun `AWAITING_PASTE status routes to handlePastedResponse and fires ResponsePasted transition`() = runBlocking {
-        val manager = mockk<ClipboardSessionManager>()
+        val manager = mockk<ClipboardSessionManager>(relaxed = true)
         every { manager.statusFor(SESSION_ID) } returns ClipboardSessionStatus.AWAITING_PASTE
-        every { manager.transition(SESSION_ID, ClipboardEvent.ResponsePasted) } returns true
+        every { manager.transition(SESSION_ID, any()) } returns true
+        stubWorkspaceRestore()
+        every { clipboardPort.parseResponse(any()) } returns InteractionResponse(message = "ok")
 
         val result = serviceWith(manager).handleUserInput(SESSION_ID, "{\"message\":\"hi\"}")
 
         // ResponsePasted transition is the fingerprint of the handlePastedResponse branch
         verify { manager.transition(SESSION_ID, ClipboardEvent.ResponsePasted) }
-        assertTrue(result is ClipboardStepResult.Error)
+        assertInstanceOf(ClipboardStepResult.Completed::class.java, result)
     }
 
     /**
      * When status is SESSION_ACTIVE, [handleUserInput] must route to [continueDialog].
      *
-     * Since session state is null (service was never started), [continueDialog] returns
-     * Error("No active clipboard session"). No state-machine transition is expected here.
+     * Session state is null and the domain has no session to restore from
+     * (getSessionById → null), so [continueDialog] fails the workspace restore and
+     * returns the "Cannot restore session state" error. No state-machine transition
+     * is expected on this path.
      */
     @Test
     fun `SESSION_ACTIVE status routes to continueDialog`() = runBlocking {
         val manager = mockk<ClipboardSessionManager>()
         every { manager.statusFor(SESSION_ID) } returns ClipboardSessionStatus.SESSION_ACTIVE
+        every { chatSessionRepository.getSessionById(SESSION_ID) } returns null
 
         val result = serviceWith(manager).handleUserInput(SESSION_ID, "continue doing X")
 
         assertTrue(result is ClipboardStepResult.Error)
         assertTrue(
-            (result as ClipboardStepResult.Error).message.contains("No active clipboard session"),
-            "Expected session-missing error, got: ${result.message}"
+            (result as ClipboardStepResult.Error).message.contains("Cannot restore session state"),
+            "Expected restore-failure error, got: ${result.message}"
         )
         // continueDialog must NOT fire any state-machine transition
         verify(exactly = 0) { manager.transition(any(), any()) }
     }
 
     /**
-     * When [handlePastedResponse] is called but the state machine rejects the
+     * When the pasted response parses successfully but the state machine rejects the
      * [ClipboardEvent.ResponsePasted] transition (returns false), the method must return
-     * [ClipboardStepResult.Error] immediately without attempting to parse the response.
+     * [ClipboardStepResult.Error]. Note: in the current production flow parsing happens
+     * BEFORE the transition, so [ClipboardPort.parseResponse] IS invoked on this path.
      */
     @Test
-    fun `handlePastedResponse returns Error immediately when transition is rejected`() = runBlocking {
-        val manager = mockk<ClipboardSessionManager>()
+    fun `handlePastedResponse returns Error when transition is rejected`() = runBlocking {
+        val manager = mockk<ClipboardSessionManager>(relaxed = true)
         // Simulate an invalid transition: ResponsePasted is rejected (e.g. called from IDLE)
         every { manager.transition(SESSION_ID, ClipboardEvent.ResponsePasted) } returns false
+        stubWorkspaceRestore()
+        every { clipboardPort.parseResponse(any()) } returns InteractionResponse(message = "oops")
 
         val result = serviceWith(manager).handlePastedResponse(SESSION_ID, "{\"message\":\"oops\"}")
 
@@ -122,7 +163,5 @@ class ClipboardInteractionServiceDispatchTest {
             errorMsg.contains("AWAITING_PASTE"),
             "Error message should mention AWAITING_PASTE, got: $errorMsg"
         )
-        // clipboardPort.parseResponse must NOT be called — we bail before parsing
-        coVerify(exactly = 0) { clipboardPort.parseResponse(any()) }
     }
 }

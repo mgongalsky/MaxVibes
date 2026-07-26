@@ -13,6 +13,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import com.maxvibes.domain.model.context.FileNode
 
 /**
  * Regression test for the bug where IDE errors and trace text attached to one message
@@ -94,15 +95,17 @@ class IdeErrorsNotPersistedAcrossTurnsTest {
         notificationPort = mockk(relaxed = true)   // progress calls are irrelevant here
         codeRepository = mockk(relaxed = true)      // no modifications in this flow
 
-        // Stub a minimal project context so startTask/continueDialog don't fail.
-        val fileTree = mockk<FileTree> {
-            every { totalFiles } returns 5
-            every { toCompactString(any()) } returns "📁 project\n  📄 Foo.kt\n  📄 Bar.kt"
-        }
-        val projectContext = mockk<ProjectContext> {
-            every { name } returns "TestProject"
-            every { this@mockk.fileTree } returns fileTree
-        }
+        // Real domain objects instead of mocks: ProjectContext is pure data, and a strict mock
+        // breaks every time production starts reading a new field (e.g. techStack).
+        val projectContext = ProjectContext(
+            name = "TestProject",
+            rootPath = "/tmp/test",
+            fileTree = FileTree(
+                root = FileNode(name = "project", path = "", isDirectory = true),
+                totalFiles = 5,
+                totalDirectories = 1
+            )
+        )
         coEvery { contextProvider.getProjectContext() } returns Result.Success(projectContext)
         coEvery { contextProvider.gatherFiles(any(), any()) } returns
                 Result.Success(GatheredContext(files = emptyMap(), totalTokensEstimate = 0))

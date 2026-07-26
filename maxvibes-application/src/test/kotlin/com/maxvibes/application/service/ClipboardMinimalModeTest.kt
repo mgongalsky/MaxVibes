@@ -127,6 +127,7 @@ class ClipboardMinimalModeTest {
 
         override fun hasCustomPrompts() = false
         override fun openOrCreatePrompts() {}
+        override fun claudeCodeSystem() = "CLAUDE_CODE_SYSTEM_PROMPT"
     }
 
     private lateinit var service: ClipboardInteractionService

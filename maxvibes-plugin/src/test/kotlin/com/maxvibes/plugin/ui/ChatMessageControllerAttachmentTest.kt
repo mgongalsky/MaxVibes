@@ -2,7 +2,8 @@ package com.maxvibes.plugin.ui
 
 import com.intellij.openapi.project.Project
 import com.maxvibes.plugin.service.MaxVibesService
-import io.mockk.*
+import com.maxvibes.plugin.testsupport.FakeChatPanelCallbacks
+import io.mockk.mockk
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -11,11 +12,12 @@ class ChatMessageControllerAttachmentTest {
 
     private val mockProject = mockk<Project>(relaxed = true)
     private val mockService = mockk<MaxVibesService>(relaxed = true)
-    private val callbacks = mockk<ChatPanelCallbacks>(relaxed = true)
+    private lateinit var callbacks: FakeChatPanelCallbacks
     private lateinit var controller: ChatMessageController
 
     @BeforeEach
     fun setup() {
+        callbacks = FakeChatPanelCallbacks()
         controller = ChatMessageController(mockProject, mockService, callbacks)
     }
 
@@ -28,7 +30,7 @@ class ChatMessageControllerAttachmentTest {
     @Test
     fun `attachTrace calls onAttachmentsChanged`() {
         controller.attachTrace("some trace")
-        verify { callbacks.onAttachmentsChanged("some trace", null) }
+        assertEquals(Pair("some trace", null), callbacks.attachmentsChanges.last())
     }
 
     @Test
@@ -42,7 +44,7 @@ class ChatMessageControllerAttachmentTest {
     fun `clearTrace calls onAttachmentsChanged with null trace`() {
         controller.attachTrace("some trace")
         controller.clearTrace()
-        verify { callbacks.onAttachmentsChanged(null, null) }
+        assertEquals(Pair(null, null), callbacks.attachmentsChanges.last())
     }
 
     @Test
@@ -54,7 +56,7 @@ class ChatMessageControllerAttachmentTest {
     @Test
     fun `clearErrors calls onAttachmentsChanged`() {
         controller.clearErrors()
-        verify { callbacks.onAttachmentsChanged(null, null) }
+        assertEquals(Pair(null, null), callbacks.attachmentsChanges.last())
     }
 
     @Test
@@ -68,7 +70,7 @@ class ChatMessageControllerAttachmentTest {
     @Test
     fun `clearAttachmentsAfterSend calls onAttachmentsChanged with nulls`() {
         controller.clearAttachmentsAfterSend()
-        verify { callbacks.onAttachmentsChanged(null, null) }
+        assertEquals(Pair(null, null), callbacks.attachmentsChanges.last())
     }
 
     @Test
