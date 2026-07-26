@@ -38,6 +38,55 @@ class FakeChatPanelCallbacks : ChatPanelCallbacks {
     var inputEnabled: Boolean? = null
     var planOnlyMode: Boolean? = null
 
+    /** Rendered command block with its callbacks — tests drive [onRun]/[onDecline] directly. */
+    class RecordedCommandBubble(
+        val command: String,
+        val reason: String?,
+        val warnings: List<String>,
+        val onRun: () -> Unit,
+        val onDecline: (String?) -> Unit
+    ) : CommandBlockView {
+        val stateChanges = mutableListOf<String>()
+        var declineComment: String? = null
+        var resultHeadline: String? = null
+        var resultOk: Boolean? = null
+
+        override fun setRunning() {
+            stateChanges.add("running")
+        }
+
+        override fun setQueued() {
+            stateChanges.add("queued")
+        }
+
+        override fun setResult(headline: String, output: String, ok: Boolean) {
+            stateChanges.add("result")
+            resultHeadline = headline
+            resultOk = ok
+        }
+
+        override fun setDeclined(comment: String?) {
+            stateChanges.add("declined")
+            declineComment = comment
+        }
+    }
+
+    /** Rendered Run all / Decline all bar with its callbacks. */
+    class RecordedBatchBar(
+        val count: Int,
+        val onRunAll: () -> Unit,
+        val onDeclineAll: () -> Unit
+    ) : CommandBatchBarView {
+        var dismissed = false
+
+        override fun dismiss() {
+            dismissed = true
+        }
+    }
+
+    val commandBubbles = mutableListOf<RecordedCommandBubble>()
+    val batchBars = mutableListOf<RecordedBatchBar>()
+
     override fun appendToChat(text: String) {}
 
     override fun appendAssistantMessage(text: String) {
@@ -143,19 +192,20 @@ class FakeChatPanelCallbacks : ChatPanelCallbacks {
         warnings: List<String>,
         onRun: () -> Unit,
         onDecline: (String?) -> Unit
-    ): CommandBlockView = object : CommandBlockView {
-        override fun setRunning() {}
-        override fun setQueued() {}
-        override fun setResult(headline: String, output: String, ok: Boolean) {}
-        override fun setDeclined(comment: String?) {}
+    ): CommandBlockView {
+        val bubble = RecordedCommandBubble(command, reason, warnings, onRun, onDecline)
+        commandBubbles.add(bubble)
+        return bubble
     }
 
     override fun addCommandBatchBar(
         count: Int,
         onRunAll: () -> Unit,
         onDeclineAll: () -> Unit
-    ): CommandBatchBarView = object : CommandBatchBarView {
-        override fun dismiss() {}
+    ): CommandBatchBarView {
+        val bar = RecordedBatchBar(count, onRunAll, onDeclineAll)
+        batchBars.add(bar)
+        return bar
     }
 
     override fun onImagesChanged(images: List<AttachedImage>) {

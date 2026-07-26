@@ -47,10 +47,13 @@ subprojects {
             exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.SHORT
         }
 
-        // Per-module summary: "module: SUCCESS — N tests, N passed, N failed, N skipped"
+        // Per-module summary: "module: SUCCESS — N tests, N passed, N failed, N skipped".
+        // project.name is captured at configuration time — touching Task.project inside
+        // the closure at execution time breaks the configuration cache.
+        val moduleName = project.name
         afterSuite(KotlinClosure2({ desc: TestDescriptor, result: TestResult ->
             if (desc.parent == null) {
-                println("${project.name}: ${result.resultType} — ${result.testCount} tests, ${result.successfulTestCount} passed, ${result.failedTestCount} failed, ${result.skippedTestCount} skipped")
+                println("$moduleName: ${result.resultType} — ${result.testCount} tests, ${result.successfulTestCount} passed, ${result.failedTestCount} failed, ${result.skippedTestCount} skipped")
             }
         }))
     }

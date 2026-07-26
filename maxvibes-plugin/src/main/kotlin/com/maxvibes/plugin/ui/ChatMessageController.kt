@@ -13,9 +13,6 @@ import com.maxvibes.application.service.ClipboardStepResult
 import com.maxvibes.domain.model.chat.ChatMessage
 import com.maxvibes.domain.model.chat.ChatSession
 import com.maxvibes.domain.model.chat.MessageRole
-import com.maxvibes.domain.model.command.CommandExecution
-import com.maxvibes.domain.model.command.CommandRequest
-import com.maxvibes.domain.model.command.CommandStatus
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.plugin.service.MaxVibesLogger
 import com.maxvibes.plugin.service.MaxVibesService
@@ -56,7 +53,12 @@ interface ChatPanelCallbacks {
     )
 
     /** Renders a post-apply errors block with Send to model / Dismiss buttons. */
-    fun addPostApplyErrorsBubble(summary: String, details: String, onSend: () -> Unit, onDismiss: () -> Unit): PostApplyErrorsView
+    fun addPostApplyErrorsBubble(
+        summary: String,
+        details: String,
+        onSend: () -> Unit,
+        onDismiss: () -> Unit
+    ): PostApplyErrorsView
 
     /** Renders an interactive question block; returns a handle for freeze/status updates. */
     fun addQuestionBubble(
@@ -348,7 +350,7 @@ class ChatMessageController(
         }
     }
 
-    // ==================== Command Flow ====================
+    // ==================== Question Flow ====================
 
     /** One question awaiting the user's choice, with its rendered block handle. */
     private class QuestionItem(
@@ -364,48 +366,11 @@ class ChatMessageController(
     }
 
     private var questionTurn: QuestionTurn? = null
+    private val questionCoordinator = QuestionTurnCoordinator(callbacks)
 
-    /** One command of the current batch with its UI handle and resolution state. */
-    private class CommandItem(
-        val request: CommandRequest,
-        var view: CommandBlockView? = null,
-        var started: Boolean = false,
-        var resolved: Boolean = false
-    )
-
-    /** Accumulates Run/Decline outcomes for the current turn's command batch. */
-    private class CommandTurn(
-        val sessionId: String,
-        val mode: InteractionMode,
-        val items: MutableList<CommandItem> = mutableListOf(),
-        val executions: MutableList<CommandExecution> = mutableListOf(),
-        var runAllActive: Boolean = false,
-        var batchBar: CommandBatchBarView? = null
-    )
-
-    private var commandTurn: CommandTurn? = null
-
-    /**
-     * Renders interactive question blocks (option buttons + a free-form field). The main
-     * input stays enabled: typing a message instead is a valid answer and supersedes the
-     * blocks via [dismissQuestionTurn]. Once every block is answered, the composed answer
-     * is submitted through the panel's regular send path.
-     */
     private fun presentQuestions(
         questions: List<com.maxvibes.domain.model.interaction.InteractionQuestion>
-    ) {
-        if (questions.isEmpty()) return
-        MaxVibesLogger.info("Controller", "presentQuestions", mapOf("count" to questions.size))
-        val turn = QuestionTurn()
-        questionTurn = turn
-        questions.forEach { question ->
-            val item = QuestionItem(question)
-            turn.items.add(item)
-            item.view = callbacks.addQuestionBubble(question.question, question.options) { answer ->
-                answerQuestion(item, answer)
-            }
-        }
-    }
+    ) = questionCoordinator.presentQuestions(questions)
 
     private fun answerQuestion(item: QuestionItem, answer: String) {
         val turn = questionTurn ?: return
@@ -429,148 +394,42 @@ class ChatMessageController(
         callbacks.sendUserMessage(responseText)
     }
 
-    /** Freezes pending question blocks when the user answers by typing in the main input. */
-    private fun dismissQuestionTurn() {
-        val turn = questionTurn ?: return
-        questionTurn = null
-        turn.items
-            .filter { it.answer == null }
-            .forEach { it.view?.setDismissed() }
-    }
+    private fun dismissQuestionTurn() = questionCoordinator.dismissQuestionTurn()
+
+    // ==================== Command Flow ====================
 
     /**
-     * Renders command blocks (plus a Run all / Decline all bar for batches) and keeps
-     * input locked until every command is resolved. When the batch completes, results
-     * are automatically sent back to the LLM — see [recordExecution].
+     * Command-turn state machine lives in [CommandTurnCoordinator]; the controller only
+     * supplies threading (background execution + EDT callback) and batch continuation.
+     * Lazy so tests that never touch commands don't need [MaxVibesService.executeCommandUseCase].
      */
-    private fun presentCommands(commands: List<CommandRequest>, session: ChatSession, mode: InteractionMode) {
-        if (commands.isEmpty()) return
-        MaxVibesLogger.info("Controller", "presentCommands", mapOf("count" to commands.size, "mode" to mode.name))
-        val turn = CommandTurn(session.id, mode)
-        commandTurn = turn
-        callbacks.setInputEnabled(false)
-        callbacks.setStatus("\u26A1 ${commands.size} command(s) awaiting approval")
-        if (commands.size > 1) {
-            turn.batchBar = callbacks.addCommandBatchBar(
-                count = commands.size,
-                onRunAll = { startRunAll() },
-                onDeclineAll = { declineAllRemaining(null) }
-            )
-        }
-        commands.forEach { cmd ->
-            val item = CommandItem(cmd)
-            turn.items.add(item)
-            val warnings = service.executeCommandUseCase.warningsFor(cmd)
-            item.view = callbacks.addCommandBubble(
-                command = cmd.command,
-                reason = cmd.reason,
-                warnings = warnings,
-                onRun = { runCommand(item) },
-                onDecline = { comment -> declineItem(item, comment) }
-            )
-        }
-    }
-
-    /** Runs every unresolved command sequentially, stopping at the first non-zero exit code. */
-    private fun startRunAll() {
-        val turn = commandTurn ?: return
-        if (turn.runAllActive) return
-        turn.runAllActive = true
-        turn.batchBar?.dismiss()
-        turn.items.filter { !it.resolved && !it.started }.forEach { it.view?.setQueued() }
-        // If a manually started command is still running, its completion hook continues the chain.
-        if (turn.items.none { it.started && !it.resolved }) runNextQueued()
-    }
-
-    private fun runNextQueued() {
-        val turn = commandTurn ?: return
-        val next = turn.items.firstOrNull { !it.resolved && !it.started } ?: return
-        runCommand(next)
-    }
-
-    /** Declines every unresolved command; used by Decline all and by the run-all failure stop. */
-    private fun declineAllRemaining(comment: String?) {
-        val turn = commandTurn ?: return
-        turn.batchBar?.dismiss()
-        turn.items.filter { !it.resolved && !it.started }.toList().forEach { declineItem(it, comment) }
-    }
-
-    private fun declineItem(item: CommandItem, comment: String?) {
-        if (item.resolved) return
-        item.resolved = true
-        item.view?.setDeclined(comment)
-        chatTreeService.addMessage(
-            commandTurn?.sessionId ?: chatTreeService.getActiveSession().id, MessageRole.SYSTEM,
-            "\u2716 Declined: ${item.request.command}" + (comment?.let { " \u2014 $it" } ?: "")
-        )
-        recordExecution(
-            CommandExecution(request = item.request, status = CommandStatus.DECLINED, declineComment = comment)
-        )
-    }
-
-    /** Executes one approved command in a background task and records its outcome. */
-    private fun runCommand(item: CommandItem) {
-        if (item.resolved || item.started) return
-        item.started = true
-        item.view?.setRunning()
-        callbacks.setStatus("\u26A1 Running: ${item.request.command.take(50)}")
-        ProgressManager.getInstance().run(object : Task.Backgroundable(project, "MaxVibes: Running command...", false) {
-            override fun run(indicator: ProgressIndicator) {
-                val execution = runBlocking { service.executeCommandUseCase.execute(item.request) }
-                ApplicationManager.getApplication().invokeLater {
-                    val headline = when (execution.status) {
-                        CommandStatus.SUCCESS -> "\u2705 exit 0 \u00B7 ${execution.durationMs / 1000}s"
-                        CommandStatus.FAILED -> "\u274C exit ${execution.exitCode} \u00B7 ${execution.durationMs / 1000}s"
-                        CommandStatus.TIMEOUT -> "\u23F1 Timeout after ${item.request.timeoutSec}s"
-                        CommandStatus.ERROR -> "\u274C Failed to start"
-                        CommandStatus.DECLINED -> "\u2716 Declined"
-                    }
-                    item.resolved = true
-                    item.view?.setResult(headline, execution.output, execution.status == CommandStatus.SUCCESS)
-                    chatTreeService.addMessage(
-                        commandTurn?.sessionId ?: chatTreeService.getActiveSession().id,
-                        MessageRole.SYSTEM,
-                        "\u26A1 ${item.request.command} \u2192 $headline"
-                    )
-                    val turn = commandTurn
-                    recordExecution(execution)
-                    if (turn != null && turn.runAllActive && commandTurn === turn) {
-                        if (execution.status == CommandStatus.SUCCESS) {
-                            runNextQueued()
-                        } else {
-                            declineAllRemaining("skipped: previous command failed")
+    private val commandCoordinator by lazy {
+        CommandTurnCoordinator(
+            executeCommandUseCase = service.executeCommandUseCase,
+            callbacks = callbacks,
+            addSystemMessage = { sessionId, text -> chatTreeService.addMessage(sessionId, MessageRole.SYSTEM, text) },
+            activeSessionId = { chatTreeService.getActiveSession().id },
+            executeAsync = { request, onDone ->
+                ProgressManager.getInstance()
+                    .run(object : Task.Backgroundable(project, "MaxVibes: Running command...", false) {
+                        override fun run(indicator: ProgressIndicator) {
+                            val execution = runBlocking { service.executeCommandUseCase.execute(request) }
+                            ApplicationManager.getApplication().invokeLater { onDone(execution) }
                         }
-                    }
-                }
-            }
-        })
+                    })
+            },
+            onBatchComplete = { sessionId, mode, formatted -> handleCommandBatchComplete(sessionId, mode, formatted) }
+        )
     }
 
-    /** Records one resolved command; when the batch is complete, auto-continues the dialog. */
-    private fun recordExecution(execution: CommandExecution) {
-        val turn = commandTurn ?: return
-        turn.executions.add(execution)
-        val remaining = turn.items.size - turn.executions.size
-        if (remaining > 0) {
-            callbacks.setStatus("\u26A1 $remaining command(s) awaiting approval")
-            return
-        }
-        turn.batchBar?.dismiss()
-        commandTurn = null
-        val session = chatTreeService.getSessionById(turn.sessionId)
+    /** Continues the dialog after a command batch resolves, dispatching by interaction mode. */
+    private fun handleCommandBatchComplete(sessionId: String, mode: InteractionMode, formatted: String) {
+        val session = chatTreeService.getSessionById(sessionId)
         if (session == null) {
             callbacks.setInputEnabled(true)
             return
         }
-        val formatted = turn.executions.joinToString("\n\n---\n\n") {
-            service.executeCommandUseCase.formatForLlm(it)
-        }
-        MaxVibesLogger.info(
-            "Controller", "commandTurn complete",
-            mapOf("mode" to turn.mode.name, "n" to turn.executions.size)
-        )
-        callbacks.setStatus("\u26A1 Sending command results...")
-        when (turn.mode) {
+        when (mode) {
             InteractionMode.CLIPBOARD -> runClipboardBg("Sending command results...", session) {
                 service.clipboardService.submitCommandResults(session.id, formatted)
             }
@@ -753,7 +612,7 @@ class ChatMessageController(
                     callbacks.appendToChat("\u26A0\uFE0F ${result.commands.size} command(s) skipped \u2014 fix failed modifications first")
 
                 else -> {
-                    presentCommands(result.commands, updatedSession, InteractionMode.API)
+                    commandCoordinator.presentCommands(result.commands, updatedSession.id, InteractionMode.API)
                     callbacks.updateBreadcrumb()
                     return
                 }
@@ -906,7 +765,7 @@ class ChatMessageController(
                     }
 
                     if (result.commands.isNotEmpty()) {
-                        presentCommands(result.commands, session, InteractionMode.CLIPBOARD)
+                        commandCoordinator.presentCommands(result.commands, session.id, InteractionMode.CLIPBOARD)
                         callbacks.updateModeIndicator()
                         return
                     }
@@ -1176,7 +1035,7 @@ class ChatMessageController(
                 }
                 if (result.commands.isNotEmpty()) {
                     if (failures.isEmpty()) {
-                        presentCommands(result.commands, session, InteractionMode.CLAUDE_CODE)
+                        commandCoordinator.presentCommands(result.commands, session.id, InteractionMode.CLAUDE_CODE)
                         callbacks.updateModeIndicator()
                         callbacks.updateBreadcrumb()
                         return
