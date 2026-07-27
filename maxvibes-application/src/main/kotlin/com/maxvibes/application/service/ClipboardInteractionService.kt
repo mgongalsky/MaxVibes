@@ -696,30 +696,23 @@ class ClipboardInteractionService(
 
     private suspend fun gatherRequestedFiles(requestedPaths: List<String>): Map<String, String>? {
         val state = sessionState ?: return null
+        if (requestedPaths.isEmpty()) return emptyMap()
 
-        val newPaths = requestedPaths.filter { it !in state.allGatheredFiles }
-        val alreadyGathered = requestedPaths.filter { it in state.allGatheredFiles }
+        // Always re-read every requested path from the live project. The former
+        // per-session content cache served stale files after modifications and
+        // silently dropped re-requested paths when mixed with new ones.
+        // allGatheredFiles is kept as bookkeeping for previouslyGatheredPaths only.
+        log("Gathering ${requestedPaths.size} files (fresh read)...")
+        notificationPort.showProgress("Gathering ${requestedPaths.size} files...", 0.4)
 
-        if (alreadyGathered.isNotEmpty()) {
-            log("Already gathered (skipping): ${alreadyGathered.size} files")
-        }
-
-        if (newPaths.isEmpty()) {
-            log("All requested files already gathered, re-sending existing")
-            return requestedPaths.associateWith { state.allGatheredFiles[it] ?: "" }
-        }
-
-        log("Gathering ${newPaths.size} new files...")
-        notificationPort.showProgress("Gathering ${newPaths.size} files...", 0.4)
-
-        val gatherResult = contextProvider.gatherFiles(newPaths)
+        val gatherResult = contextProvider.gatherFiles(requestedPaths)
         if (gatherResult is Result.Failure) {
             log("ERROR: Failed to gather files: ${gatherResult.error.message}")
             return null
         }
         val gathered = (gatherResult as Result.Success).value
         state.allGatheredFiles.putAll(gathered.files)
-        log("Gathered ${gathered.files.size} files, total cached: ${state.allGatheredFiles.size}")
+        log("Gathered ${gathered.files.size} files, total tracked: ${state.allGatheredFiles.size}")
         return gathered.files
     }
 

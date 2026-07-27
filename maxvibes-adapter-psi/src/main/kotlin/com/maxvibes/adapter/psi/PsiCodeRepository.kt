@@ -30,6 +30,7 @@ import org.jetbrains.kotlin.psi.KtNamedDeclaration
 import java.io.File
 import com.maxvibes.adapter.psi.operation.PsiUsagesFinder
 import org.jetbrains.kotlin.psi.KtNamedFunction
+import com.intellij.openapi.fileEditor.FileDocumentManager
 
 /**
  * Implementation of [CodeRepository] backed by the IntelliJ PSI API.
@@ -118,7 +119,14 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
     }
 
     override suspend fun applyModifications(modifications: List<Modification>): List<ModificationResult> {
-        return modifications.map { applyModification(it) }
+        val results = modifications.map { applyModification(it) }
+        // Flush PSI/Document changes to disk right away so that shell commands,
+        // greps and external tools attached to this turn see the applied state
+        // instead of the stale pre-edit files.
+        if (results.any { it is ModificationResult.Success }) {
+            flushDocumentsToDisk()
+        }
+        return results
     }
 
     override suspend fun exists(path: ElementPath): Boolean {
@@ -626,5 +634,10 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
         }
 
         return currentDir
+    }
+    private fun flushDocumentsToDisk() {
+        ApplicationManager.getApplication().invokeAndWait {
+            FileDocumentManager.getInstance().saveAllDocuments()
+        }
     }
 }
