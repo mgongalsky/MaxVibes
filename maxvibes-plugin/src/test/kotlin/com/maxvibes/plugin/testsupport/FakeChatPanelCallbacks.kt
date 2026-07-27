@@ -84,8 +84,26 @@ class FakeChatPanelCallbacks : ChatPanelCallbacks {
         }
     }
 
+    /** Recording handle for a question block; exposes the answer callback for tests. */
+    class RecordedQuestionBubble(
+        val question: String,
+        val options: List<String>,
+        val onAnswer: (String) -> Unit
+    ) : QuestionBlockView {
+        var answeredWith: String? = null
+        var dismissed = false
+        override fun setAnswered(answer: String) {
+            answeredWith = answer
+        }
+
+        override fun setDismissed() {
+            dismissed = true
+        }
+    }
+
     val commandBubbles = mutableListOf<RecordedCommandBubble>()
     val batchBars = mutableListOf<RecordedBatchBar>()
+    val questionBubbles = mutableListOf<RecordedQuestionBubble>()
 
     override fun appendToChat(text: String) {}
 
@@ -141,9 +159,10 @@ class FakeChatPanelCallbacks : ChatPanelCallbacks {
         question: String,
         options: List<String>,
         onAnswer: (String) -> Unit
-    ): QuestionBlockView = object : QuestionBlockView {
-        override fun setAnswered(answer: String) {}
-        override fun setDismissed() {}
+    ): QuestionBlockView {
+        val bubble = RecordedQuestionBubble(question, options, onAnswer)
+        questionBubbles.add(bubble)
+        return bubble
     }
 
     override fun sendUserMessage(text: String) {

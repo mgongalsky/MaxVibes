@@ -352,47 +352,11 @@ class ChatMessageController(
 
     // ==================== Question Flow ====================
 
-    /** One question awaiting the user's choice, with its rendered block handle. */
-    private class QuestionItem(
-        val question: com.maxvibes.domain.model.interaction.InteractionQuestion
-    ) {
-        var view: QuestionBlockView? = null
-        var answer: String? = null
-    }
-
-    /** In-flight questions turn. Null when no questions are pending. */
-    private class QuestionTurn {
-        val items = mutableListOf<QuestionItem>()
-    }
-
-    private var questionTurn: QuestionTurn? = null
     private val questionCoordinator = QuestionTurnCoordinator(callbacks)
 
     private fun presentQuestions(
         questions: List<com.maxvibes.domain.model.interaction.InteractionQuestion>
     ) = questionCoordinator.presentQuestions(questions)
-
-    private fun answerQuestion(item: QuestionItem, answer: String) {
-        val turn = questionTurn ?: return
-        if (item.answer != null) return
-        item.answer = answer
-        item.view?.setAnswered(answer)
-        val remaining = turn.items.count { it.answer == null }
-        if (remaining > 0) {
-            callbacks.setStatus("\u2753 $remaining question(s) left")
-            return
-        }
-
-        questionTurn = null
-        val responseText = if (turn.items.size == 1) {
-            turn.items.first().answer.orEmpty()
-        } else {
-            turn.items.joinToString("\n") { questionItem ->
-                "${questionItem.question.id}: ${questionItem.answer}"
-            }
-        }
-        callbacks.sendUserMessage(responseText)
-    }
 
     private fun dismissQuestionTurn() = questionCoordinator.dismissQuestionTurn()
 
