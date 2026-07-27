@@ -6,8 +6,6 @@ import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.maxvibes.application.port.input.ContextAwareRequest
-import com.maxvibes.application.port.input.ContextAwareResult
-import com.maxvibes.application.port.output.ChatMessageDTO
 import com.maxvibes.application.service.ClaudeCodeStepResult
 import com.maxvibes.application.service.ClipboardStepResult
 import com.maxvibes.domain.model.chat.ChatMessage
@@ -18,12 +16,9 @@ import com.maxvibes.plugin.service.MaxVibesLogger
 import com.maxvibes.plugin.service.MaxVibesService
 import kotlinx.coroutines.runBlocking
 import com.maxvibes.shared.result.Result
-import com.maxvibes.adapter.llm.dto.toChatMessageDTO
 import com.maxvibes.domain.model.interaction.InteractionMode
 import com.maxvibes.domain.model.interaction.AttachedImage
-import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 import com.maxvibes.domain.model.modification.AppliedModInfo
-import com.maxvibes.domain.model.modification.toCategory
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancel
 import com.maxvibes.domain.model.planning.PlanDiagram
@@ -132,15 +127,6 @@ class ChatMessageController(
 
     private val chatTreeService get() = service.chatTreeService
 
-    private data class ApiRequestContext(
-        val isDryRun: Boolean,
-        val isPlanOnly: Boolean,
-        val globalContextFiles: List<String>,
-        val ideErrors: String?
-    )
-
-    private var lastApiContext: ApiRequestContext? = null
-    private var autoRetryCount = 0
     var attachedTrace: String? = null
         private set
     var attachedErrors: String? = null
@@ -150,8 +136,6 @@ class ChatMessageController(
     private val attachedImages = mutableListOf<AttachedImage>()
 
     companion object {
-        private const val MAX_AUTO_RETRIES = 1
-
         fun buildTaskWithContext(task: String, trace: String?, errs: String?): String {
             return buildString {
                 append(task)
@@ -163,59 +147,7 @@ class ChatMessageController(
 
     // ==================== API Mode ====================
 
-    fun sendApiMessage(
-        task: String,
-        session: ChatSession,
-        history: List<ChatMessageDTO>,
-        isDryRun: Boolean,
-        isPlanOnly: Boolean,
-        globalContextFiles: List<String>,
-        ideErrors: String? = null
-    ) {
-        lastApiContext = ApiRequestContext(isDryRun, isPlanOnly, globalContextFiles, ideErrors)
-        autoRetryCount = 0
-        runApiRequest(task, session, history, isDryRun, isPlanOnly, globalContextFiles, ideErrors, "Processing")
-    }
-
     // ==================== Cheap API Mode ====================
-
-    fun sendCheapApiMessage(
-        task: String,
-        session: ChatSession,
-        history: List<ChatMessageDTO>,
-        isDryRun: Boolean,
-        isPlanOnly: Boolean,
-        globalContextFiles: List<String>,
-        ideErrors: String? = null
-    ) {
-        lastApiContext = ApiRequestContext(isDryRun, isPlanOnly, globalContextFiles, ideErrors)
-        autoRetryCount = 0
-        ProgressManager.getInstance()
-            .run(object : Task.Backgroundable(project, "MaxVibes: Processing (budget)...", true) {
-                override fun run(indicator: ProgressIndicator) {
-                    service.notificationService.setProgressIndicator(indicator)
-                    runBlocking {
-                        val req = ContextAwareRequest(
-                            currentMessage = task, history = history, dryRun = isDryRun,
-                            planOnly = isPlanOnly, globalContextFiles = globalContextFiles,
-                            ideErrors = ideErrors
-                        )
-                        val uc = service.cheapContextAwareModifyUseCase ?: service.contextAwareModifyUseCase
-                        val result = uc.execute(req)
-                        ApplicationManager.getApplication().invokeLater { handleApiResult(result, session, isPlanOnly) }
-                    }
-                }
-
-                override fun onCancel() {
-                    ApplicationManager.getApplication().invokeLater {
-                        chatTreeService.addMessage(session.id, MessageRole.SYSTEM, "Cancelled")
-                        callbacks.appendToChat("\u26A0\uFE0F Cancelled")
-                        callbacks.setInputEnabled(true)
-                        callbacks.setStatus("Cancelled")
-                    }
-                }
-            })
-    }
 
     // ==================== Clipboard Mode ====================
 
@@ -242,7 +174,7 @@ class ChatMessageController(
                         message = "Internal error: ${e.javaClass.simpleName}: ${e.message ?: "no message"}"
                     )
                 }
-                ApplicationManager.getApplication().invokeLater { handleClipboardResult(result, session) }
+                ApplicationManager.getApplication().invokeLater { clipboardDispatcher.handleResult(result, session) }
             }
 
             override fun onCancel() {
@@ -258,18 +190,11 @@ class ChatMessageController(
 
     /**
      * Re-generates and copies the clipboard JSON for the current active session.
-     *
-     * Runs in a background task — re-gathers project files and rebuilds the full JSON payload via
-     * [ClipboardInteractionService.redoLastRequest]. Does NOT add a new user message to history.
+     * Flushes editor buffers first, then delegates to [ClipboardDispatcher.redoLastRequest].
      */
     fun redoClipboardJson() {
         saveAllDocuments()
-        val session = chatTreeService.getActiveSession()
-        val globalContextFiles = chatTreeService.getGlobalContextFiles()
-        callbacks.setInputEnabled(false)
-        runClipboardBg("Re-generating JSON...", session) {
-            service.clipboardService.redoLastRequest(session.id, globalContextFiles)
-        }
+        clipboardDispatcher.redoLastRequest()
     }
 
     // ==================== Claude Code Mode ====================
@@ -314,6 +239,42 @@ class ChatMessageController(
                 }
             }
         )
+    }
+
+    private fun runApiBg(
+        progressTitle: String,
+        session: ChatSession,
+        isPlanOnly: Boolean,
+        useCheap: Boolean,
+        request: ContextAwareRequest
+    ) {
+        ProgressManager.getInstance()
+            .run(object : Task.Backgroundable(project, "MaxVibes: $progressTitle...", true) {
+                override fun run(indicator: ProgressIndicator) {
+                    service.notificationService.setProgressIndicator(indicator)
+                    runBlocking {
+                        val uc = if (useCheap) {
+                            service.cheapContextAwareModifyUseCase ?: service.contextAwareModifyUseCase
+                        } else {
+                            service.contextAwareModifyUseCase
+                        }
+                        val result = uc.execute(request)
+                        ApplicationManager.getApplication().invokeLater {
+                            apiDispatcher.handleResult(result, session, isPlanOnly)
+                        }
+                    }
+                }
+
+                override fun onCancel() {
+                    ApplicationManager.getApplication().invokeLater {
+                        chatTreeService.addMessage(session.id, MessageRole.SYSTEM, "Cancelled")
+                        callbacks.appendToChat("\u26A0\uFE0F Cancelled")
+                        callbacks.setInputEnabled(true)
+                        callbacks.setStatus("Cancelled")
+                        MaxVibesLogger.warn("Controller", "cancelled by user")
+                    }
+                }
+            })
     }
 
     /**
@@ -382,6 +343,34 @@ class ChatMessageController(
             executeAsync = { title, session, action -> runClaudeCodeBg(title, session, action) }
         )
     }
+    private val clipboardDispatcher by lazy {
+        ClipboardDispatcher(
+            clipboardService = { service.clipboardService },
+            resolveSpecificPrompt = { name -> service.specificPromptService.resolvePromptContent(name) },
+            chatTreeService = chatTreeService,
+            callbacks = callbacks,
+            presentCommands = { commands, sessionId, mode ->
+                commandCoordinator.presentCommands(commands, sessionId, mode)
+            },
+            executeAsync = { title, session, action -> runClipboardBg(title, session, action) }
+        )
+    }
+    private val apiDispatcher by lazy {
+        ApiDispatcher(
+            chatTreeService = chatTreeService,
+            callbacks = callbacks,
+            ensureCheapService = {
+                @Suppress("DEPRECATION")
+                service.ensureCheapLLMService()
+            },
+            presentCommands = { commands, sessionId, mode ->
+                commandCoordinator.presentCommands(commands, sessionId, mode)
+            },
+            executeAsync = { progressTitle, session, isPlanOnly, useCheap, request ->
+                runApiBg(progressTitle, session, isPlanOnly, useCheap, request)
+            }
+        )
+    }
 
     /** Continues the dialog after a command batch resolves, dispatching by interaction mode. */
     private fun handleCommandBatchComplete(sessionId: String, mode: InteractionMode, formatted: String) {
@@ -399,409 +388,15 @@ class ChatMessageController(
                 service.claudeCodeService.submitCommandResults(session.id, formatted)
             }
 
-            InteractionMode.API, InteractionMode.CHEAP_API -> {
-                val task = "=== COMMAND RESULTS ===\n$formatted\n\nReact to these results and continue the task."
-                val history = session.messages.map { it.toChatMessageDTO() }
-                val updated = chatTreeService.addMessage(session.id, MessageRole.USER, task)
-                runApiRequest(
-                    task = task, session = updated, history = history,
-                    isDryRun = false, isPlanOnly = false,
-                    globalContextFiles = lastApiContext?.globalContextFiles
-                        ?: chatTreeService.getGlobalContextFiles(),
-                    ideErrors = null,
-                    progressTitle = "Processing command results"
-                )
-            }
+            InteractionMode.API, InteractionMode.CHEAP_API -> apiDispatcher.submitCommandResults(session, formatted)
         }
     }
 
     // ==================== Auto-Retry Logic ====================
 
-    private fun triggerAutoRetry(
-        failures: List<ModificationResult.Failure>,
-        session: ChatSession,
-        ctx: ApiRequestContext
-    ) {
-        autoRetryCount++
-        val errorSummary = buildErrorSummary(failures)
-        val retryTask = buildApiRetryTask(failures)
-
-        MaxVibesLogger.warn(
-            "Controller", "autoRetry",
-            data = mapOf("attempt" to autoRetryCount, "failures" to failures.size)
-        )
-
-        val feedbackMsg =
-            "\uD83D\uDD04 Auto-fix: ${failures.size} modification(s) failed \u2014 asking LLM to correct:\n$errorSummary"
-        callbacks.appendToChat(feedbackMsg)
-        callbacks.setStatus("Auto-fixing...")
-
-        val history = session.messages.map { it.toChatMessageDTO() }
-        val retrySession = chatTreeService.addMessage(session.id, MessageRole.USER, retryTask)
-
-        runApiRequest(
-            task = retryTask,
-            session = retrySession,
-            history = history,
-            isDryRun = ctx.isDryRun,
-            isPlanOnly = false,
-            globalContextFiles = ctx.globalContextFiles,
-            ideErrors = ctx.ideErrors,
-            progressTitle = "Auto-fixing"
-        )
-    }
-
-    private fun runApiRequest(
-        task: String,
-        session: ChatSession,
-        history: List<ChatMessageDTO>,
-        isDryRun: Boolean,
-        isPlanOnly: Boolean,
-        globalContextFiles: List<String>,
-        ideErrors: String?,
-        progressTitle: String
-    ) {
-        ProgressManager.getInstance()
-            .run(object : Task.Backgroundable(project, "MaxVibes: $progressTitle...", true) {
-                override fun run(indicator: ProgressIndicator) {
-                    service.notificationService.setProgressIndicator(indicator)
-                    runBlocking {
-                        val req = ContextAwareRequest(
-                            currentMessage = task, history = history, dryRun = isDryRun,
-                            planOnly = isPlanOnly, globalContextFiles = globalContextFiles,
-                            ideErrors = ideErrors
-                        )
-                        val result = service.contextAwareModifyUseCase.execute(req)
-                        ApplicationManager.getApplication().invokeLater { handleApiResult(result, session, isPlanOnly) }
-                    }
-                }
-
-                override fun onCancel() {
-                    ApplicationManager.getApplication().invokeLater {
-                        chatTreeService.addMessage(session.id, MessageRole.SYSTEM, "Cancelled")
-                        callbacks.appendToChat("\u26A0\uFE0F Cancelled")
-                        callbacks.setInputEnabled(true)
-                        callbacks.setStatus("Cancelled")
-                        MaxVibesLogger.warn("Controller", "cancelled by user")
-                    }
-                }
-            })
-    }
-
     // ==================== Result Handlers ====================
 
-    private fun handleApiResult(result: ContextAwareResult, session: ChatSession, wasPlanOnly: Boolean = false) {
-        callbacks.registerElementPaths(result.modifications)
-
-        var updatedSession =
-            chatTreeService.addPlanningTokens(session.id, result.planningInputTokens, result.planningOutputTokens)
-        updatedSession =
-            chatTreeService.addChatTokens(updatedSession.id, result.chatInputTokens, result.chatOutputTokens)
-
-        val failures = result.modifications.filterIsInstance<ModificationResult.Failure>()
-
-        MaxVibesLogger.info(
-            "Controller", "apiResult", mapOf(
-                "success" to result.success,
-                "mods" to result.modifications.size,
-                "failures" to failures.size,
-                "planIn" to result.planningInputTokens,
-                "planOut" to result.planningOutputTokens,
-                "chatIn" to result.chatInputTokens,
-                "chatOut" to result.chatOutputTokens,
-                "hasCommitMsg" to (result.commitMessage != null),
-                "autoRetryCount" to autoRetryCount
-            )
-        )
-
-        val mainText = result.message
-
-        val tokenInfo = buildTokenInfo(
-            result.planningInputTokens, result.planningOutputTokens,
-            result.chatInputTokens, result.chatOutputTokens
-        )
-        val appliedPaths = result.modifications
-            .filterIsInstance<ModificationResult.Success>()
-            .map { it.affectedPath.toString() }
-
-        val appliedMods = result.modifications
-            .filterIsInstance<ModificationResult.Success>()
-            .map { AppliedModInfo(path = it.affectedPath.toString(), category = it.modification.toCategory()) }
-
-        updatedSession = chatTreeService.addMessage(
-            updatedSession.id, MessageRole.ASSISTANT, mainText,
-            appliedModificationPaths = appliedPaths,
-            tokenInfo = tokenInfo,
-            appliedModifications = appliedMods,
-            requestedViews = result.requestedViews
-        )
-        callbacks.updateTokenDisplay()
-
-        callbacks.addAssistantMessageBubble(
-            text = callbacks.formatMarkdown(mainText),
-            tokenInfo = tokenInfo,
-            modifications = result.modifications,
-            metaFiles = emptyList(),
-            reasoning = null,
-            requestedViews = result.requestedViews,
-            appliedModifications = appliedMods
-        )
-
-        result.commitMessage?.let { msg ->
-            callbacks.setCommitMessage(msg)
-            callbacks.appendToChat("\uD83D\uDCAC Commit message set in IDE")
-        }
-
-        if (wasPlanOnly) {
-            callbacks.setPlanOnlyMode(false)
-        }
-
-        if (failures.isNotEmpty() && autoRetryCount < MAX_AUTO_RETRIES) {
-            val ctx = lastApiContext
-            if (ctx != null) {
-                triggerAutoRetry(failures, updatedSession, ctx)
-                return
-            }
-        }
-
-        if (result.commands.isNotEmpty()) {
-            when {
-                wasPlanOnly ->
-                    callbacks.appendToChat("\u26A0\uFE0F ${result.commands.size} command(s) skipped \u2014 plan-only mode")
-
-                failures.isNotEmpty() ->
-                    callbacks.appendToChat("\u26A0\uFE0F ${result.commands.size} command(s) skipped \u2014 fix failed modifications first")
-
-                else -> {
-                    commandCoordinator.presentCommands(result.commands, updatedSession.id, InteractionMode.API)
-                    callbacks.updateBreadcrumb()
-                    return
-                }
-            }
-        }
-
-        callbacks.setInputEnabled(true)
-        if (failures.isNotEmpty()) {
-            callbacks.setStatus("Done \u2014 ${failures.size} modification(s) failed (retry exhausted)")
-        } else {
-            callbacks.setStatus(if (result.success) "Ready" else "Errors")
-        }
-        callbacks.updateBreadcrumb()
-    }
-
-    private fun handleClipboardResult(result: ClipboardStepResult, session: ChatSession) {
-        when (result) {
-            is ClipboardStepResult.WaitingForResponse -> {
-                MaxVibesLogger.info(
-                    "Controller", "clipboard waiting", mapOf(
-                        "phase" to result.phase.name,
-                        "estimatedTokens" to result.estimatedInputTokens,
-                        "freshFiles" to result.freshFileNames.size
-                    )
-                )
-                var updatedSession = chatTreeService.addChatTokens(session.id, result.estimatedInputTokens, 0)
-
-                val assistantText = result.assistantMessage
-
-                val tokenInfo: String? = if (!assistantText.isNullOrBlank()) {
-                    val parts = mutableListOf<String>()
-                    if (result.estimatedInputTokens > 0) parts += "~${fmt(result.estimatedInputTokens)} tokens"
-                    if (result.freshFileNames.isNotEmpty()) parts += "${result.freshFileNames.size} files"
-                    parts += result.phase.name.lowercase()
-                    parts.joinToString("  \u00B7  ")
-                } else null
-
-                if (!assistantText.isNullOrBlank()) {
-                    updatedSession = chatTreeService.addMessage(
-                        updatedSession.id, MessageRole.ASSISTANT, assistantText,
-                        attachedFiles = result.freshFileNames,
-                        tokenInfo = tokenInfo,
-                        reasoning = result.llmReasoning,
-                        requestedViews = result.requestedViews
-                    )
-                }
-                callbacks.updateTokenDisplay()
-
-                if (!assistantText.isNullOrBlank()) {
-                    callbacks.addAssistantMessageBubble(
-                        text = callbacks.formatMarkdown(assistantText),
-                        tokenInfo = tokenInfo,
-                        modifications = emptyList(),
-                        metaFiles = result.freshFileNames,
-                        reasoning = result.llmReasoning,
-                        requestedViews = result.requestedViews,
-                        appliedModifications = emptyList()
-                    )
-                } else {
-                    callbacks.appendIconToLastBubble("\uD83D\uDCCB")
-                }
-
-                callbacks.appendToChat(result.statusMessage)
-                callbacks.setInputEnabled(true)
-                callbacks.updateModeIndicator()
-                callbacks.setStatus("Waiting for LLM response...")
-            }
-
-            is ClipboardStepResult.Completed -> {
-                val failures = result.modifications.filterIsInstance<ModificationResult.Failure>()
-                MaxVibesLogger.info(
-                    "Controller", "clipboard completed", mapOf(
-                        "success" to result.success,
-                        "mods" to result.modifications.size,
-                        "failures" to failures.size,
-                        "outputTokens" to result.outputTokens,
-                        "hasCommitMsg" to (result.commitMessage != null)
-                    )
-                )
-                callbacks.registerElementPaths(result.modifications)
-
-                var updatedSession = chatTreeService.addChatTokens(session.id, 0, result.outputTokens)
-                val text = result.message.trim().ifBlank { "Done." }
-                val tokenInfo = if (result.outputTokens > 0) "\u2193${fmt(result.outputTokens)}" else null
-
-                val appliedPaths = result.modifications
-                    .filterIsInstance<ModificationResult.Success>()
-                    .map { it.affectedPath.toString() }
-
-                val appliedMods = result.modifications
-                    .filterIsInstance<ModificationResult.Success>()
-                    .map { AppliedModInfo(path = it.affectedPath.toString(), category = it.modification.toCategory()) }
-
-                updatedSession = chatTreeService.addMessage(
-                    updatedSession.id, MessageRole.ASSISTANT, text,
-                    appliedModificationPaths = appliedPaths,
-                    tokenInfo = tokenInfo,
-                    reasoning = result.llmReasoning,
-                    appliedModifications = appliedMods
-                )
-
-                if (failures.isNotEmpty()) {
-                    val errorSummary = buildErrorSummary(failures)
-                    val feedbackMsg = buildString {
-                        appendLine("\u274C ${failures.size} modification(s) failed to apply:")
-                        appendLine(errorSummary)
-                        appendLine()
-                        appendLine("\uD83D\uDCCB A retry prompt has been prepared. Paste it into your LLM and paste the response back here.")
-                    }
-                    chatTreeService.addMessage(updatedSession.id, MessageRole.SYSTEM, feedbackMsg)
-                    callbacks.updateTokenDisplay()
-
-                    callbacks.addAssistantMessageBubble(
-                        text = callbacks.formatMarkdown(text),
-                        tokenInfo = tokenInfo,
-                        modifications = result.modifications,
-                        metaFiles = emptyList(),
-                        reasoning = result.llmReasoning,
-                        requestedViews = emptyList(),
-                        appliedModifications = appliedMods
-                    )
-                    result.commitMessage?.let { msg ->
-                        callbacks.setCommitMessage(msg)
-                        callbacks.appendToChat("\uD83D\uDCAC Commit message set in IDE")
-                    }
-                    callbacks.appendToChat(feedbackMsg)
-                    if (result.commands.isNotEmpty()) callbacks.appendToChat("\u26A0\uFE0F ${result.commands.size} command(s) skipped \u2014 fix failed modifications first")
-
-                    val retryTask = buildClipboardRetryTask(failures)
-                    copyToClipboard(retryTask)
-
-                    callbacks.setInputEnabled(true)
-                    callbacks.updateModeIndicator()
-                    callbacks.setStatus("\u26A0\uFE0F ${failures.size} failed \u2014 retry prompt copied, paste LLM response")
-                } else {
-                    callbacks.updateTokenDisplay()
-
-                    callbacks.addAssistantMessageBubble(
-                        text = callbacks.formatMarkdown(text),
-                        tokenInfo = tokenInfo,
-                        modifications = result.modifications,
-                        metaFiles = emptyList(),
-                        reasoning = result.llmReasoning,
-                        requestedViews = emptyList(),
-                        appliedModifications = appliedMods
-                    )
-                    result.commitMessage?.let { msg ->
-                        callbacks.setCommitMessage(msg)
-                        callbacks.appendToChat("\uD83D\uDCAC Commit message set in IDE")
-                    }
-
-                    if (result.commands.isNotEmpty()) {
-                        commandCoordinator.presentCommands(result.commands, session.id, InteractionMode.CLIPBOARD)
-                        callbacks.updateModeIndicator()
-                        return
-                    }
-
-                    callbacks.setInputEnabled(true)
-                    callbacks.updateModeIndicator()
-                    val isSessionActive = service.clipboardService.status(session.id) != ClipboardSessionStatus.IDLE
-                    val hint = if (isSessionActive) " \u2022 Session active" else ""
-                    callbacks.setStatus((if (result.success) "Ready" else "Errors") + hint)
-                    callbacks.updateBreadcrumb()
-                }
-            }
-
-            is ClipboardStepResult.ParseError -> {
-                MaxVibesLogger.warn(
-                    "Controller", "clipboard parse error", data = mapOf(
-                        "reason" to result.errorDetail.take(80),
-                        "clipboardCopied" to result.clipboardCopySucceeded
-                    )
-                )
-                chatTreeService.addMessage(session.id, MessageRole.SYSTEM, "Parse error: ${result.errorDetail}")
-                callbacks.appendToChat("\u26A0\uFE0F ${result.humanMessage}")
-                if (result.errorDetail.isNotBlank()) {
-                    callbacks.appendToChat("Details: ${result.errorDetail}")
-                }
-                callbacks.setInputEnabled(true)
-                callbacks.updateModeIndicator()
-                callbacks.setStatus("\u26A0\uFE0F Parse error \u2014 paste corrected LLM response")
-            }
-
-            is ClipboardStepResult.Error -> {
-                MaxVibesLogger.warn("Controller", "clipboard error", data = mapOf("msg" to result.message))
-                chatTreeService.addMessage(session.id, MessageRole.SYSTEM, "Error: ${result.message}")
-                callbacks.appendToChat("\u274C ${result.message}")
-                callbacks.setInputEnabled(true)
-                callbacks.updateModeIndicator()
-                callbacks.setStatus("Error")
-            }
-        }
-    }
-
     // ==================== Helpers ====================
-
-    private fun buildErrorSummary(failures: List<ModificationResult.Failure>): String =
-        failures.joinToString("\n") { f -> "  \u2022 ${f.error.message}" }
-
-    private fun buildApiRetryTask(failures: List<ModificationResult.Failure>): String {
-        val errorLines = buildErrorSummary(failures)
-        return """
-The following modifications from your last response FAILED to apply:
-$errorLines
-
-Please provide CORRECTED modifications only for the ones that failed.
-Common causes:
-- Wrong element path (class/function name mismatch or wrong nesting)
-- Element doesn't exist yet \u2014 use CREATE_ELEMENT instead of REPLACE_ELEMENT
-- For CREATE_ELEMENT, path must point to parent, not the new element itself
-
-Respond with a JSON containing only the corrected modifications.
-""".trimIndent()
-    }
-
-    private fun buildClipboardRetryTask(failures: List<ModificationResult.Failure>): String {
-        val errorLines = buildErrorSummary(failures)
-        return """
-The following modifications FAILED to apply in the IDE:
-$errorLines
-
-Please provide CORRECTED modifications for the ones that failed.
-Check:
-- Element path must match exactly (class name, function name, nesting)
-- Use CREATE_ELEMENT if element doesn't exist yet
-- Parent path must exist for CREATE_ELEMENT
-""".trimIndent()
-    }
 
     /**
      * Flushes all unsaved editor Documents to disk. The plugin reads project files
@@ -816,28 +411,6 @@ Check:
             MaxVibesLogger.warn("Controller", "saveAllDocuments failed", data = mapOf("msg" to (e.message ?: "?")))
         }
     }
-
-    private fun copyToClipboard(text: String) {
-        try {
-            val clipboard = java.awt.Toolkit.getDefaultToolkit().systemClipboard
-            val selection = java.awt.datatransfer.StringSelection(text)
-            clipboard.setContents(selection, selection)
-        } catch (e: Exception) {
-            MaxVibesLogger.error("Controller", "copyToClipboard failed", e)
-        }
-    }
-
-    private fun buildTokenInfo(planIn: Int, planOut: Int, chatIn: Int, chatOut: Int): String? {
-        if (planIn + planOut + chatIn + chatOut == 0) return null
-        val parts = mutableListOf<String>()
-        if (planIn + planOut > 0) parts += "plan \u2191${fmt(planIn)} \u2193${fmt(planOut)}"
-        if (chatIn + chatOut > 0) parts += "chat \u2191${fmt(chatIn)} \u2193${fmt(chatOut)}"
-        val cost = (planIn + chatIn) / 1_000_000.0 * 3.0 + (planOut + chatOut) / 1_000_000.0 * 15.0
-        parts += "~\$${String.format("%.3f", cost)}"
-        return parts.joinToString("  \u00B7  ")
-    }
-
-    private fun fmt(n: Int) = if (n >= 1000) "${n / 1000}k" else n.toString()
 
     fun attachTrace(traceContent: String) {
         attachedTrace = traceContent
@@ -1032,21 +605,8 @@ Check:
         }
     }
 
-    private fun dispatchApiMessage(msg: String, trace: String?, errs: String?, isPlanOnly: Boolean, isDryRun: Boolean) {
-        var session = chatTreeService.getActiveSession()
-        val fullTask = buildString {
-            append(msg)
-            if (!trace.isNullOrBlank()) append("\n[trace: ${trace.lines().size} lines]")
-            if (!errs.isNullOrBlank()) append("\n[attached ide errors]")
-            if (isPlanOnly) append("\n[plan-only]")
-        }
-        val history = session.messages.map { it.toChatMessageDTO() }
-        session = chatTreeService.addMessage(session.id, MessageRole.USER, fullTask)
-        callbacks.addUserMessageBubble(msg)
-        callbacks.setInputEnabled(false)
-        callbacks.setStatus(if (isPlanOnly) "Planning..." else "Thinking...")
-        sendApiMessage(fullTask, session, history, isDryRun, isPlanOnly, chatTreeService.getGlobalContextFiles(), errs)
-    }
+    private fun dispatchApiMessage(msg: String, trace: String?, errs: String?, isPlanOnly: Boolean, isDryRun: Boolean) =
+        apiDispatcher.dispatchMessage(msg, trace, errs, isPlanOnly, isDryRun)
 
     private fun dispatchClipboardMessage(
         userInput: String,
@@ -1055,61 +615,7 @@ Check:
         isPlanOnly: Boolean,
         addHistory: Boolean = false,
         selectedSpecificPromptName: String? = null
-    ) {
-        val cs = service.clipboardService
-        var session = chatTreeService.getActiveSession()
-        val globalContextFiles = chatTreeService.getGlobalContextFiles()
-        val currentStatus = session.clipboardStatus
-
-        // Capture history BEFORE mutating session.
-        val history = session.messages.map { it.toChatMessageDTO() }
-
-        // Resolve prompt content from the name already captured in the UI state snapshot —
-        // avoids a second repository read that could race with a just-saved selectSpecificPrompt.
-        val specificPromptContent = service.specificPromptService.resolvePromptContent(selectedSpecificPromptName)
-
-        when (currentStatus) {
-            ClipboardSessionStatus.AWAITING_PASTE -> {
-                callbacks.appendIconToLastBubble("\uD83D\uDCE5")
-            }
-
-            else -> {
-                val fullMsg = buildString {
-                    append(userInput)
-                    if (!trace.isNullOrBlank()) append("\n[trace: ${trace.lines().size} lines]")
-                    if (!errs.isNullOrBlank()) append("\n[attached ide errors]")
-                    if (isPlanOnly) append("\n[plan-only]")
-                }
-                session = chatTreeService.addMessage(session.id, MessageRole.USER, fullMsg)
-                callbacks.addUserMessageBubble(userInput)
-            }
-        }
-
-        callbacks.setInputEnabled(false)
-        val statusText = when (currentStatus) {
-            ClipboardSessionStatus.AWAITING_PASTE -> "Processing response..."
-            ClipboardSessionStatus.SESSION_ACTIVE -> "Continuing..."
-            ClipboardSessionStatus.IDLE -> "Generating JSON..."
-            // Clipboard mode should never see AWAITING_APPROVE (Claude Code-only); fall back gracefully.
-            ClipboardSessionStatus.AWAITING_APPROVE -> "Awaiting approval..."
-        }
-        callbacks.setStatus(statusText)
-
-        val capturedSession = session
-        runClipboardBg(statusText, capturedSession) {
-            cs.handleUserInput(
-                sessionId = capturedSession.id,
-                userInput = userInput,
-                history = history,
-                attachedContext = trace,
-                planOnly = isPlanOnly,
-                ideErrors = errs,
-                globalContextFiles = globalContextFiles,
-                addHistory = addHistory,
-                specificPromptContent = specificPromptContent
-            )
-        }
-    }
+    ) = clipboardDispatcher.dispatchMessage(userInput, trace, errs, isPlanOnly, addHistory, selectedSpecificPromptName)
 
     private fun dispatchCheapApiMessage(
         msg: String,
@@ -1117,26 +623,7 @@ Check:
         errs: String?,
         isPlanOnly: Boolean,
         isDryRun: Boolean
-    ) {
-        var session = chatTreeService.getActiveSession()
-        val fullTask = buildTaskWithContext(msg, trace, errs)
-        val history = session.messages.map { it.toChatMessageDTO() }
-        session = chatTreeService.addMessage(session.id, MessageRole.USER, fullTask)
-        callbacks.addUserMessageBubble(msg)
-        callbacks.setInputEnabled(false)
-        callbacks.setStatus("Thinking (cheap)...")
-        @Suppress("DEPRECATION")
-        service.ensureCheapLLMService()
-        sendCheapApiMessage(
-            fullTask,
-            session,
-            history,
-            isDryRun,
-            isPlanOnly,
-            chatTreeService.getGlobalContextFiles(),
-            errs
-        )
-    }
+    ) = apiDispatcher.dispatchCheapMessage(msg, trace, errs, isPlanOnly, isDryRun)
 
     private fun dispatchClaudeCodeMessage(
         userInput: String,
