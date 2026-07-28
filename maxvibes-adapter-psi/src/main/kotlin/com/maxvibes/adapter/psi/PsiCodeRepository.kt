@@ -243,20 +243,33 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
         println("[PsiCodeRepository] Creating file: ${mod.targetPath.value}")
         return try {
             var resultContent: String? = null
+            var errorMessage: String? = null
             val app = ApplicationManager.getApplication()
             val action = {
                 WriteCommandAction.runWriteCommandAction(project) {
-                    val filePath = mod.targetPath.filePath
-                    val directory = findOrCreateDirectory(filePath)
-                    if (directory == null) {
-                        println("[PsiCodeRepository] ERROR: Could not find/create directory for $filePath")
-                        return@runWriteCommandAction
-                    }
-                    val fileName = File(filePath).name
-                    val psiFile = modifier.createFile(directory, fileName, mod.content)
-                    if (psiFile != null) {
-                        resultContent = psiFile.text
-                        println("[PsiCodeRepository] File created: ${psiFile.virtualFile?.path}")
+                    // Exceptions must be caught here: invokeAndWait does not
+                    // propagate them to the calling thread, so the outer catch
+                    // never sees failures from inside the write command.
+                    try {
+                        val filePath = mod.targetPath.filePath
+                        val directory = findOrCreateDirectory(filePath)
+                        if (directory == null) {
+                            errorMessage = "Could not find or create directory for $filePath"
+                            println("[PsiCodeRepository] ERROR: $errorMessage")
+                            return@runWriteCommandAction
+                        }
+                        val fileName = File(filePath).name
+                        val psiFile = modifier.createFile(directory, fileName, mod.content)
+                        if (psiFile != null) {
+                            resultContent = psiFile.text
+                            println("[PsiCodeRepository] File created: ${psiFile.virtualFile?.path}")
+                        } else {
+                            errorMessage = "PSI file creation returned null for $filePath"
+                            println("[PsiCodeRepository] ERROR: $errorMessage")
+                        }
+                    } catch (e: Exception) {
+                        errorMessage = "${e.javaClass.simpleName}: ${e.message}"
+                        println("[PsiCodeRepository] ERROR creating file: $errorMessage")
                     }
                 }
             }
@@ -270,7 +283,7 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
             } else {
                 ModificationResult.Failure(
                     modification = mod,
-                    error = ModificationError.IOError("Failed to create file")
+                    error = ModificationError.IOError(errorMessage ?: "Failed to create file")
                 )
             }
         } catch (e: Exception) {
@@ -592,34 +605,16 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
         val projectBasePath = project.basePath ?: return null
         val psiManager = PsiManager.getInstance(project)
 
-        val file = File(filePath)
-        val dirPath = file.parent ?: ""
+        val dirPath = File(filePath).parent?.replace("\\", "/") ?: ""
 
-        val possiblePaths = listOf(
-            "$projectBasePath/$dirPath",
-            "$projectBasePath/src/main/kotlin",
-            "$projectBasePath/src",
-            projectBasePath
-        )
-
-        for (path in possiblePaths) {
-            val normalizedPath = path.replace("\\", "/").trimEnd('/')
-            val virtualFile = VfsUtil.findFileByIoFile(File(normalizedPath), true)
-            if (virtualFile != null && virtualFile.isDirectory) {
-                val psiDir = psiManager.findDirectory(virtualFile)
-                if (psiDir != null) return psiDir
-            }
+        val existing = VfsUtil.findFileByIoFile(File("$projectBasePath/$dirPath"), true)
+        if (existing != null && existing.isDirectory) {
+            return psiManager.findDirectory(existing)
         }
 
-        val baseDir = VfsUtil.findFileByIoFile(File(projectBasePath), true)
-        if (baseDir != null) {
-            val basePsiDir = psiManager.findDirectory(baseDir)
-            if (basePsiDir != null) {
-                return createDirectoryPath(basePsiDir, dirPath)
-            }
-        }
-
-        return null
+        val baseDir = VfsUtil.findFileByIoFile(File(projectBasePath), true) ?: return null
+        val basePsiDir = psiManager.findDirectory(baseDir) ?: return null
+        return createDirectoryPath(basePsiDir, dirPath)
     }
 
     private fun createDirectoryPath(baseDir: PsiDirectory, relativePath: String): PsiDirectory {
