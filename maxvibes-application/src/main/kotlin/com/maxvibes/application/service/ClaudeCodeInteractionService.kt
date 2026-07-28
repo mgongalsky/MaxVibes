@@ -591,163 +591,98 @@ class ClaudeCodeInteractionService(
     ): ClaudeCodeStepResult {
         val state = sessionState ?: return error("No active workspace")
 
-        val hasViews = response.codeViewRequests.isNotEmpty()
-        val hasMods = response.modifications.isNotEmpty()
-        val hasQuestions = response.questions.isNotEmpty()
-        val commands: List<CommandRequest> = response.commands.mapNotNull { ProtocolConverter.convertCommand(it) }
         log(
-            "Processing response: hasViews=$hasViews, hasMods=$hasMods, hasQuestions=$hasQuestions, " +
-                    "commands=${commands.size}, msg=${response.message.take(60)}"
+            "Processing response: hasViews=${response.codeViewRequests.isNotEmpty()}, " +
+                    "hasMods=${response.modifications.isNotEmpty()}, hasQuestions=${response.questions.isNotEmpty()}, " +
+                    "commands=${response.commands.size}, msg=${response.message.take(60)}"
         )
         sessionLog?.event(
             "response",
             mapOf(
-                "hasViews" to hasViews,
-                "hasMods" to hasMods,
+                "hasViews" to response.codeViewRequests.isNotEmpty(),
+                "hasMods" to response.modifications.isNotEmpty(),
                 "questions" to response.questions.size,
-                "commands" to commands.size,
+                "commands" to response.commands.size,
                 "msgLen" to response.message.length,
                 "thinkingLen" to (thinkingText?.length ?: 0)
             )
         )
 
-        // Plan snapshot: full-replacement semantics, orthogonal to the approve cycle.
-        // Absent field = plan unchanged; present with empty steps = explicit clear.
-        response.plan?.let { snapshot ->
-            chatSessionRepository.getSessionById(sessionId)?.let { current ->
-                val newPlan = snapshot.takeIf { it.steps.isNotEmpty() }
-                chatSessionRepository.saveSession(current.withPlan(newPlan))
-                log(if (newPlan != null) "Plan updated: ${newPlan.steps.size} step(s), done=${newPlan.doneCount}" else "Plan cleared")
-                sessionLog?.event("plan updated", mapOf("steps" to snapshot.steps.size))
-            }
-        }
-
-        val combinedReasoning = listOfNotNull(
-            thinkingText?.takeIf { it.isNotBlank() },
-            response.reasoning?.takeIf { it.isNotBlank() }
-        ).joinToString("\n\n").takeIf { it.isNotBlank() }
-
-        if (response.message.isNotBlank()) {
-            addToHistory(ChatRole.ASSISTANT, response.message)
-        }
-
-        val holdMods = hasMods && !state.planOnly
-
-        if (hasViews && !holdMods) {
-            persistRequestedViewsIntoDomain(sessionId, response.codeViewRequests)
-        }
-
-        sessionManager.transition(
-            sessionId,
-            ClipboardEvent.ResponseReceived(hasRequestedViews = hasViews || holdMods)
+        val outcome = ClaudeCodeResponseProcessor.process(
+            response,
+            ClaudeCodeResponseProcessor.Context(
+                planOnly = state.planOnly,
+                inputTokens = inputTokens,
+                outputTokens = outputTokens,
+                thinkingText = thinkingText,
+                durationMs = durationMs,
+                costUsd = costUsd,
+                numTurns = numTurns
+            )
         )
 
-        if (holdMods) {
-            if (hasViews) {
-                log("WARN: response mixed modifications with ${response.codeViewRequests.size} view request(s) — views skipped per protocol")
-                sessionLog?.event(
-                    "views skipped (mixed with modifications)",
-                    mapOf("count" to response.codeViewRequests.size)
-                )
+        outcome.intents.forEach { intent ->
+            when (intent) {
+                is ClaudeCodeResponseProcessor.Intent.SavePlan ->
+                    chatSessionRepository.getSessionById(sessionId)?.let { current ->
+                        chatSessionRepository.saveSession(current.withPlan(intent.plan))
+                        log(if (intent.plan != null) "Plan updated: ${intent.plan.steps.size} step(s), done=${intent.plan.doneCount}" else "Plan cleared")
+                        sessionLog?.event("plan updated", mapOf("steps" to (intent.plan?.steps?.size ?: 0)))
+                    }
+
+                is ClaudeCodeResponseProcessor.Intent.AppendAssistantHistory ->
+                    addToHistory(ChatRole.ASSISTANT, intent.message)
+
+                is ClaudeCodeResponseProcessor.Intent.PersistRequestedViews ->
+                    persistRequestedViewsIntoDomain(sessionId, intent.views)
+
+                is ClaudeCodeResponseProcessor.Intent.Transition ->
+                    sessionManager.transition(
+                        sessionId,
+                        ClipboardEvent.ResponseReceived(hasRequestedViews = intent.hasRequestedViews)
+                    )
+
+                is ClaudeCodeResponseProcessor.Intent.HoldPending -> {
+                    pendingStore.hold(
+                        sessionId = sessionId,
+                        modifications = intent.modifications,
+                        commands = intent.commands,
+                        commitMessage = intent.commitMessage
+                    )
+                    log("Holding ${intent.modifications.size} modification(s) and ${intent.commands.size} command(s) for user approval")
+                    sessionLog?.event(
+                        "modifications held for approval",
+                        mapOf("mods" to intent.modifications.size, "commands" to intent.commands.size)
+                    )
+                }
             }
-            pendingStore.hold(
-                sessionId = sessionId,
-                modifications = response.modifications,
-                commands = commands,
-                commitMessage = response.commitMessage?.takeIf { it.isNotBlank() }
-            )
-            log("Holding ${response.modifications.size} modification(s) and ${commands.size} command(s) for user approval")
-            sessionLog?.event(
-                "modifications held for approval",
-                mapOf("mods" to response.modifications.size, "commands" to commands.size)
-            )
-            return ClaudeCodeStepResult.AwaitingModApprove(
-                assistantMessage = response.message,
-                proposedModifications = response.modifications,
-                heldCommands = commands.size,
-                skippedViews = if (hasViews) response.codeViewRequests.size else 0,
-                inputTokens = inputTokens,
-                outputTokens = outputTokens,
-                llmReasoning = combinedReasoning,
-                durationMs = durationMs,
-                costUsd = costUsd,
-                numTurns = numTurns,
-                diagram = response.diagram
-            )
         }
 
-        if (hasViews) {
-            if (commands.isNotEmpty()) {
-                log("WARN: response mixed requestedViews with ${commands.size} command(s) — commands skipped per protocol")
-                sessionLog?.event("commands skipped (mixed with requestedViews)", mapOf("count" to commands.size))
+        when (val r = outcome.result) {
+            is ClaudeCodeStepResult.AwaitingModApprove ->
+                if (r.skippedViews > 0) {
+                    log("WARN: response mixed modifications with ${r.skippedViews} view request(s) — views skipped per protocol")
+                    sessionLog?.event("views skipped (mixed with modifications)", mapOf("count" to r.skippedViews))
+                }
+
+            is ClaudeCodeStepResult.WaitingForApprove ->
+                if (r.skippedCommands > 0) {
+                    log("WARN: response mixed requestedViews with ${r.skippedCommands} command(s) — commands skipped per protocol")
+                    sessionLog?.event(
+                        "commands skipped (mixed with requestedViews)",
+                        mapOf("count" to r.skippedCommands)
+                    )
+                }
+
+            is ClaudeCodeStepResult.AwaitingQuestions -> {
+                log("LLM asked ${r.questions.size} question(s) - awaiting user answer")
+                sessionLog?.event("questions received", mapOf("count" to r.questions.size))
             }
-            val requestedViewInfos = response.codeViewRequests.map {
-                RequestedViewInfo(
-                    path = it.filePath,
-                    granularity = it.granularity,
-                    elementPath = it.elementPath
-                )
-            }
-            return ClaudeCodeStepResult.WaitingForApprove(
-                assistantMessage = response.message,
-                requestedViews = requestedViewInfos,
-                inputTokens = inputTokens,
-                outputTokens = outputTokens,
-                llmReasoning = combinedReasoning,
-                durationMs = durationMs,
-                skippedCommands = commands.size,
-                costUsd = costUsd,
-                numTurns = numTurns,
-                diagram = response.diagram
-            )
+
+            else -> Unit
         }
 
-        if (hasQuestions) {
-            if (commands.isNotEmpty()) {
-                log("WARN: response mixed questions with ${commands.size} command(s) - commands skipped per protocol")
-                sessionLog?.event("commands skipped (mixed with questions)", mapOf("count" to commands.size))
-            }
-            log("LLM asked ${response.questions.size} question(s) - awaiting user answer")
-            sessionLog?.event("questions received", mapOf("count" to response.questions.size))
-            return ClaudeCodeStepResult.AwaitingQuestions(
-                assistantMessage = response.message,
-                questions = response.questions,
-                inputTokens = inputTokens,
-                outputTokens = outputTokens,
-                llmReasoning = combinedReasoning,
-                durationMs = durationMs,
-                costUsd = costUsd,
-                numTurns = numTurns,
-                diagram = response.diagram
-            )
-        }
-
-        val modResults: List<ModificationResult> = if (hasMods && state.planOnly) {
-            log("plan-only mode: skipping ${response.modifications.size} modifications")
-            emptyList()
-        } else {
-            emptyList()
-        }
-
-        val messageText = buildString {
-            if (response.message.isNotBlank()) append(response.message)
-            if (isEmpty()) append("Done.")
-        }
-
-        return ClaudeCodeStepResult.Completed(
-            message = messageText.trim(),
-            modifications = modResults,
-            success = true,
-            inputTokens = inputTokens,
-            outputTokens = outputTokens,
-            llmReasoning = combinedReasoning,
-            commitMessage = response.commitMessage?.takeIf { it.isNotBlank() },
-            durationMs = durationMs,
-            commands = commands,
-            costUsd = costUsd,
-            numTurns = numTurns,
-            diagram = response.diagram
-        )
+        return outcome.result
     }
 
     /**
