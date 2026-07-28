@@ -14,7 +14,6 @@ import com.maxvibes.application.port.output.ProjectContextPort
 import com.maxvibes.application.port.output.PromptPort
 import com.maxvibes.application.port.output.PromptTemplates
 import com.maxvibes.domain.model.chat.MessageRole
-import com.maxvibes.domain.model.code.CodeGranularity
 import com.maxvibes.domain.model.code.CodeViewRequest
 import com.maxvibes.domain.model.code.RequestedViewInfo
 import com.maxvibes.domain.model.command.CommandRequest
@@ -106,17 +105,16 @@ class ClaudeCodeInteractionService(
 
     /** Modification sets proposed by the LLM, held until the user approves or rejects them. In-memory only. */
     private val pendingStore = PendingModificationsStore()
+    private val viewResolver = ClaudeCodeViewResolver(
+        contextProvider = contextProvider,
+        codeRepository = codeRepository,
+        specificPromptService = specificPromptService,
+        notificationPort = notificationPort,
+        logger = logger
+    )
 
     // ==================== Public API ====================
 
-    /**
-     * Unified entry point — routes by current [ClipboardSessionStatus] and dispatches
-     * to either a fresh task start or a continuation of an existing dialog.
-     *
-     * When the session is AWAITING_APPROVE with pending modifications, typing a new
-     * message is interpreted as a rejection: the pending set is cleared and the message
-     * is forwarded to the LLM with a prefix stating nothing was applied.
-     */
     suspend fun handleUserInput(
         sessionId: String,
         userInput: String,
@@ -127,60 +125,71 @@ class ClaudeCodeInteractionService(
         globalContextFiles: List<String> = emptyList(),
         specificPromptContent: String? = null,
         attachedImages: List<AttachedImage> = emptyList()
+    ): ClaudeCodeStepResult = handleUserInputCommand(
+        UserInputCommand(
+            sessionId = sessionId,
+            userInput = userInput,
+            history = history,
+            attachedContext = attachedContext,
+            planOnly = planOnly,
+            ideErrors = ideErrors,
+            globalContextFiles = globalContextFiles,
+            specificPromptContent = specificPromptContent,
+            attachedImages = attachedImages
+        )
+    )
+
+    private suspend fun handleUserInputCommand(
+        command: UserInputCommand
     ): ClaudeCodeStepResult {
-        // Switch the per-dialog transcript to this session BEFORE any transport call —
-        // the adapter logs raw I/O without knowing the chat session id (see port contract).
-        sessionLog?.begin(sessionId)
+        sessionLog?.begin(command.sessionId)
         sessionLog?.event(
             "handleUserInput",
             mapOf(
-                "status" to sessionManager.statusFor(sessionId).name,
-                "planOnly" to planOnly,
-                "inputLen" to userInput.length
+                "status" to sessionManager.statusFor(command.sessionId).name,
+                "planOnly" to command.planOnly,
+                "inputLen" to command.userInput.length
             )
         )
-        return when (sessionManager.statusFor(sessionId)) {
+
+        return when (sessionManager.statusFor(command.sessionId)) {
             ClipboardSessionStatus.IDLE,
             ClipboardSessionStatus.SESSION_ACTIVE ->
-                startOrContinue(
-                    sessionId = sessionId,
-                    userInput = userInput,
-                    history = history,
-                    attachedContext = attachedContext,
-                    planOnly = planOnly,
-                    ideErrors = ideErrors,
-                    globalContextFiles = globalContextFiles,
-                    specificPromptContent = specificPromptContent,
-                    attachedImages = attachedImages
-                )
+                startOrContinue(command)
 
             ClipboardSessionStatus.AWAITING_APPROVE -> {
-                // Typing while modifications await approval = reject with feedback.
-                val rejectedSet = pendingStore.take(sessionId)
+                val rejectedSet = pendingStore.take(command.sessionId)
                 if (rejectedSet != null) {
                     val rejected = rejectedSet.modifications.size
                     val hadCommands = rejectedSet.commands.size
-                    sessionManager.transition(sessionId, ClipboardEvent.Approved)
+                    sessionManager.transition(command.sessionId, ClipboardEvent.Approved)
                     log("User rejected $rejected pending modification(s) by typing a new message")
                     sessionLog?.event(
                         "pending modifications rejected",
-                        mapOf("mods" to rejected, "heldCommands" to hadCommands)
+                        mapOf(
+                            "mods" to rejected,
+                            "heldCommands" to hadCommands
+                        )
                     )
+
+                    val rejectionMessage = buildString {
+                        append("[USER REJECTED your ")
+                        append(rejected)
+                        append(" proposed modification(s) — nothing was applied")
+                        if (hadCommands > 0) {
+                            append(", the ")
+                            append(hadCommands)
+                            append(" held command(s) were not run")
+                        }
+                        appendLine(". New instruction follows.]")
+                        appendLine()
+                        append(command.userInput)
+                    }
+
                     startOrContinue(
-                        sessionId = sessionId,
-                        userInput = "[USER REJECTED your $rejected proposed modification(s) — nothing was applied" +
-                                (if (hadCommands > 0) ", the $hadCommands held command(s) were not run" else "") +
-                                ". New instruction follows.]\n\n$userInput",
-                        history = history,
-                        attachedContext = attachedContext,
-                        planOnly = planOnly,
-                        ideErrors = ideErrors,
-                        globalContextFiles = globalContextFiles,
-                        specificPromptContent = specificPromptContent,
-                        attachedImages = attachedImages
+                        command.copy(userInput = rejectionMessage)
                     )
                 } else {
-                    // Legacy: AWAITING_APPROVE with requestedViews (e.g. restored after IDE restart).
                     ClaudeCodeStepResult.Error(
                         "Session is awaiting approve. Press Approve or Reset before sending a new message."
                     )
@@ -194,17 +203,6 @@ class ClaudeCodeInteractionService(
         }
     }
 
-    /**
-     * Confirms an [ClipboardSessionStatus.AWAITING_APPROVE] response.
-     *
-     * When pending modifications exist, Approve applies them (and releases any held
-     * commands). Otherwise the legacy requestedViews-gathering flow runs: gathers the
-     * files the LLM requested in its last assistant message, transitions the session
-     * back to [ClipboardSessionStatus.SESSION_ACTIVE], and sends a minimal-context
-     * follow-up to the same Claude Code process.
-     *
-     * @return a new [ClaudeCodeStepResult] describing the post-approve state.
-     */
     suspend fun approve(
         sessionId: String,
         attachedContext: String? = null,
@@ -212,19 +210,18 @@ class ClaudeCodeInteractionService(
         specificPromptContent: String? = null
     ): ClaudeCodeStepResult {
         sessionLog?.begin(sessionId)
-        sessionLog?.event("approve", mapOf("status" to sessionManager.statusFor(sessionId).name))
+        sessionLog?.event(
+            "approve",
+            mapOf("status" to sessionManager.statusFor(sessionId).name)
+        )
         if (sessionManager.statusFor(sessionId) != ClipboardSessionStatus.AWAITING_APPROVE) {
             return error("Approve is only valid in AWAITING_APPROVE state")
         }
 
-        // New semantics: Approve applies pending modifications when present. Checked BEFORE
-        // workspace restore and requestedViews reading below — pending modifications have no
-        // requestedViews, so the legacy path would fail with "No assistant message to approve".
         if (pendingStore.hasPendingFor(sessionId)) {
             return approvePendingModifications(sessionId)
         }
 
-        // Recover workspace if the IDE was restarted between turns.
         if (sessionState == null || sessionStateOwner != sessionId) {
             log("sessionState missing or owned by another session in approve — restoring for $sessionId")
             if (!ensureWorkspace(sessionId)) {
@@ -233,91 +230,54 @@ class ClaudeCodeInteractionService(
         }
         val state = sessionState ?: return error("No active workspace — cannot approve")
 
-        // Read the last assistant message and its requestedViews.
         val session = chatSessionRepository.getSessionById(sessionId)
             ?: return error("Session not found: $sessionId")
-        val lastAssistant = session.messages.lastOrNull { it.role == MessageRole.ASSISTANT }
-            ?: return error("No assistant message to approve")
+        val lastAssistant = session.messages.lastOrNull {
+            it.role == MessageRole.ASSISTANT
+        } ?: return error("No assistant message to approve")
         if (lastAssistant.requestedViews.isEmpty()) {
             return error("Last assistant message has no requestedViews to approve")
         }
 
-        // Convert RequestedViewInfo back into CodeViewRequest for rendering.
-        val viewRequests = lastAssistant.requestedViews.map { rv ->
+        val viewRequests = lastAssistant.requestedViews.map { requestedView ->
             CodeViewRequest(
-                filePath = rv.path,
-                granularity = rv.granularity,
-                elementPath = rv.elementPath
+                filePath = requestedView.path,
+                granularity = requestedView.granularity,
+                elementPath = requestedView.elementPath
             )
         }
+        val freshFiles = viewResolver.resolve(viewRequests, state)
+            ?: return error("Failed to gather requested files")
 
-        // Render views: SKILL comes from the skill repository, FULL through
-        // gatherRequestedFiles, everything else through codeRepository.getCodeView.
-        val skillRequests = viewRequests.filter { it.granularity == CodeGranularity.SKILL }
-        val fullPaths = viewRequests
-            .filter { it.granularity == CodeGranularity.FULL }
-            .map { it.filePath }
-        val partialRequests = viewRequests.filter {
-            it.granularity != CodeGranularity.FULL && it.granularity != CodeGranularity.SKILL
-        }
-
-        val fullFilesMap: Map<String, String> = if (fullPaths.isNotEmpty()) {
-            gatherRequestedFiles(fullPaths) ?: return error("Failed to gather requested files")
-        } else emptyMap()
-
-        val partialFilesMap: Map<String, String> = partialRequests.associate { req ->
-            try {
-                val view = codeRepository.getCodeView(req)
-                log("Rendered ${req.granularity} view for ${req.filePath} (${view.content.length} chars)")
-                req.filePath to view.content
-            } catch (e: Exception) {
-                log("ERROR: Failed to render ${req.granularity} view for ${req.filePath}: ${e.message}")
-                req.filePath to "// ERROR: Could not render ${req.granularity} view: ${e.message}"
-            }
-        }
-
-        val skillFilesMap: Map<String, String> = skillRequests.associate { req ->
-            val body = specificPromptService?.resolveSkillBody(req.filePath)
-            log(if (body != null) "Rendered skill '${req.filePath}' (${body.length} chars)" else "Unknown skill '${req.filePath}'")
-            "skill:${req.filePath}" to (body
-                ?: "// ERROR: Unknown skill '${req.filePath}'. Use one of the names from the Skills section.")
-        }
-
-        val freshFiles = fullFilesMap + partialFilesMap + skillFilesMap
-        // Echo the assistant message into history so the LLM sees its own previous request when
-        // we send the minimal follow-up (it still has its own context, but this keeps history symmetric).
-        if (lastAssistant.content.isNotBlank() &&
+        if (
+            lastAssistant.content.isNotBlank() &&
             state.dialogHistory.lastOrNull()?.content != lastAssistant.content
         ) {
             addToHistory(ChatRole.ASSISTANT, lastAssistant.content)
         }
 
-        // Drive the state machine: AWAITING_APPROVE → SESSION_ACTIVE before sending the next request.
         sessionManager.transition(sessionId, ClipboardEvent.Approved)
 
         return doSend(
-            sessionId = sessionId,
-            freshFiles = freshFiles,
-            isFirstMessage = false,
-            attachedContext = attachedContext,
-            ideErrors = ideErrors,
-            specificPromptContent = specificPromptContent
+            ClaudeCodeTurnCommand(
+                sessionId = sessionId,
+                freshFiles = freshFiles,
+                attachedContext = attachedContext,
+                ideErrors = ideErrors,
+                specificPromptContent = specificPromptContent
+            )
         )
     }
 
-    /**
-     * Sends the outcomes of the current turn's shell commands (execution results or user
-     * declines) back to Claude Code as an automatic minimal-context follow-up. Called by
-     * the UI layer once ALL command blocks of the turn are resolved (Run or Decline).
-     *
-     * No new user message is involved — this is a protocol continuation, analogous to the
-     * post-approve file delivery. Valid only in [ClipboardSessionStatus.SESSION_ACTIVE]:
-     * commands never coexist with AWAITING_APPROVE, because mixed responses get their
-     * commands skipped in [processResponse].
-     */
-    suspend fun submitCommandResults(sessionId: String, resultsForLlm: String): ClaudeCodeStepResult {
+    suspend fun submitCommandResults(
+        sessionId: String,
+        resultsForLlm: String
+    ): ClaudeCodeStepResult {
         sessionLog?.begin(sessionId)
-        sessionLog?.event("submitCommandResults", mapOf("len" to resultsForLlm.length))
+        sessionLog?.event(
+            "submitCommandResults",
+            mapOf("len" to resultsForLlm.length)
+        )
         if (sessionManager.statusFor(sessionId) != ClipboardSessionStatus.SESSION_ACTIVE) {
             return error("Command results can only be submitted in SESSION_ACTIVE state")
         }
@@ -328,10 +288,10 @@ class ClaudeCodeInteractionService(
             }
         }
         return doSend(
-            sessionId = sessionId,
-            freshFiles = emptyMap(),
-            isFirstMessage = false,
-            commandResults = resultsForLlm
+            ClaudeCodeTurnCommand(
+                sessionId = sessionId,
+                commandResults = resultsForLlm
+            )
         )
     }
 
@@ -359,20 +319,13 @@ class ClaudeCodeInteractionService(
     // ==================== Internal flow ====================
 
     private suspend fun startOrContinue(
-        sessionId: String,
-        userInput: String,
-        history: List<ChatMessageDTO>,
-        attachedContext: String?,
-        planOnly: Boolean,
-        ideErrors: String?,
-        globalContextFiles: List<String>,
-        specificPromptContent: String?,
-        attachedImages: List<AttachedImage> = emptyList()
+        command: UserInputCommand
     ): ClaudeCodeStepResult {
+        val sessionId = command.sessionId
         val isFirst = sessionManager.statusFor(sessionId) == ClipboardSessionStatus.IDLE
 
         if (isFirst) {
-            log("Starting new Claude Code session (sessionId=$sessionId, planOnly=$planOnly)")
+            log("Starting new Claude Code session (sessionId=$sessionId, planOnly=${command.planOnly})")
             sessionManager.transition(sessionId, ClipboardEvent.StartSession)
 
             notificationPort.showProgress("Gathering project context...", 0.1)
@@ -381,9 +334,6 @@ class ClaudeCodeInteractionService(
                 return error("Failed to get project context: ${projectContextResult.error.message}")
             }
             val projectContext = (projectContextResult as Result.Success).value
-
-            // Strategy A: replace state.prompts with one whose chatSystem == claudeCodeSystem.
-            // InteractionRequestBuilder reads from state.prompts directly — no special-casing required.
             val claudeSystem = promptPort.claudeCodeSystem()
             val claudePrompts = PromptTemplates(
                 chatSystem = claudeSystem,
@@ -393,101 +343,88 @@ class ClaudeCodeInteractionService(
             workspace.install(
                 sessionId,
                 ClipboardSessionState(
-                    currentMessage = userInput,
+                    currentMessage = command.userInput,
                     projectContext = projectContext,
-                    dialogHistory = history.toMutableList(),
+                    dialogHistory = command.history.toMutableList(),
                     prompts = claudePrompts,
                     allGatheredFiles = mutableMapOf(),
-                    planOnly = planOnly
+                    planOnly = command.planOnly
                 )
             )
-            addToHistory(ChatRole.USER, userInput)
+            addToHistory(ChatRole.USER, command.userInput)
         } else {
             log("Continuing Claude Code session (sessionId=$sessionId)")
-            if (!workspace.isOwnedBy(sessionId)) {
-                if (!ensureWorkspace(sessionId)) {
-                    return error("Cannot restore session state for session $sessionId. Please start a new task.")
-                }
+            if (!workspace.isOwnedBy(sessionId) && !ensureWorkspace(sessionId)) {
+                return error("Cannot restore session state for session $sessionId. Please start a new task.")
             }
             val state = sessionState ?: return error("No active workspace")
-            // Reflect the new user message in workspace state.
             workspace.install(
                 sessionId,
                 state.copy(
-                    currentMessage = userInput,
-                    planOnly = planOnly
+                    currentMessage = command.userInput,
+                    planOnly = command.planOnly
                 )
             )
-            addToHistory(ChatRole.USER, userInput)
+            addToHistory(ChatRole.USER, command.userInput)
         }
 
+        val state = sessionState ?: return error("No active workspace")
         val freshFiles = if (isFirst) {
-            gatherRequestedFiles(globalContextFiles) ?: emptyMap()
-        } else emptyMap()
+            viewResolver.gatherFullFiles(
+                command.globalContextFiles,
+                state
+            ) ?: emptyMap()
+        } else {
+            emptyMap()
+        }
 
         return doSend(
-            sessionId = sessionId,
-            freshFiles = freshFiles,
-            isFirstMessage = isFirst,
-            attachedContext = attachedContext,
-            ideErrors = ideErrors,
-            specificPromptContent = specificPromptContent,
-            attachedImages = attachedImages
+            ClaudeCodeTurnCommand(
+                sessionId = sessionId,
+                freshFiles = freshFiles,
+                firstMessage = isFirst,
+                attachedContext = command.attachedContext,
+                ideErrors = command.ideErrors,
+                specificPromptContent = command.specificPromptContent,
+                attachedImages = command.attachedImages
+            )
         )
     }
 
     private suspend fun doSend(
-        sessionId: String,
-        freshFiles: Map<String, String>,
-        isFirstMessage: Boolean,
-        attachedContext: String? = null,
-        ideErrors: String? = null,
-        specificPromptContent: String? = null,
-        commandResults: String? = null,
-        attachedImages: List<AttachedImage> = emptyList()
+        command: ClaudeCodeTurnCommand
     ): ClaudeCodeStepResult {
+        val sessionId = command.sessionId
         streamHub?.begin(sessionId)
         val state = sessionState ?: return error("No active workspace")
         var session = chatSessionRepository.getSessionById(sessionId)
             ?: return error("Session not found: $sessionId")
 
-        // Full context is sent on the first message OR when a previous resume failed.
-        val needsFull = isFirstMessage || session.claudeCodeNeedsFullContext
+        val needsFull = command.firstMessage || session.claudeCodeNeedsFullContext
         var request = ClaudeCodeRequestFactory.create(
             state = state,
-            freshFiles = freshFiles,
+            freshFiles = command.freshFiles,
             fullContext = needsFull,
-            attachedContext = attachedContext,
-            ideErrors = ideErrors,
-            specificPromptContent = specificPromptContent,
-            commandResults = commandResults,
-            attachedImages = attachedImages,
+            attachedContext = command.attachedContext,
+            ideErrors = command.ideErrors,
+            specificPromptContent = command.specificPromptContent,
+            commandResults = command.commandResults,
+            attachedImages = command.attachedImages,
             currentPlan = session.plan
         )
 
-        // Pass the system prompt unconditionally on the first ensureStarted call:
-        //   - fresh start (resumeId == null) — process is spawned now; it MUST receive the
-        //     prompt or the model has no idea it is talking to MaxVibes and will respond as
-        //     a vanilla Claude Code session (asking the user how to access PSI, etc.).
-        //   - resume (resumeId != null) — process may have died between IDE sessions and
-        //     will be respawned here, in which case the same need applies. If the process
-        //     is already alive, the adapter's ensureStarted short-circuits before the prompt
-        //     ever reaches the CLI (see ClaudeCodeProcessAdapter.ensureStarted), so passing
-        //     it costs nothing.
         val resumeId = session.claudeCodeSessionId
         var ensureResult = claudeCodePort.ensureStarted(
             resumeSessionId = resumeId,
             systemPrompt = state.prompts.chatSystem
         )
 
-        // Resume failed → start fresh. Mark needsFullContext, rebuild the request with
-        // full context, and pass the system prompt for the brand-new process.
         if (ensureResult is Result.Failure && ensureResult.error is ClaudeCodeError.ResumeFailed) {
-            val rf = ensureResult.error as ClaudeCodeError.ResumeFailed
-            log("Resume failed for sessionId=${rf.sessionId}; falling back to fresh start.")
+            val resumeFailure = ensureResult.error as ClaudeCodeError.ResumeFailed
+            log("Resume failed for sessionId=${resumeFailure.sessionId}; falling back to fresh start.")
             sessionLog?.event(
                 "resume failed — falling back to fresh start",
-                mapOf("claudeSessionId" to rf.sessionId)
+                mapOf("claudeSessionId" to resumeFailure.sessionId)
             )
             session = session.copy(
                 claudeCodeSessionId = null,
@@ -497,13 +434,13 @@ class ClaudeCodeInteractionService(
 
             request = ClaudeCodeRequestFactory.create(
                 state = state,
-                freshFiles = freshFiles,
+                freshFiles = command.freshFiles,
                 fullContext = true,
-                attachedContext = attachedContext,
-                ideErrors = ideErrors,
-                specificPromptContent = specificPromptContent,
-                commandResults = commandResults,
-                attachedImages = attachedImages,
+                attachedContext = command.attachedContext,
+                ideErrors = command.ideErrors,
+                specificPromptContent = command.specificPromptContent,
+                commandResults = command.commandResults,
+                attachedImages = command.attachedImages,
                 currentPlan = session.plan
             )
             ensureResult = claudeCodePort.ensureStarted(
@@ -513,47 +450,44 @@ class ClaudeCodeInteractionService(
         }
 
         if (ensureResult is Result.Failure) {
-            return ClaudeCodeStepResult.TransportError(transportErrorMessage(ensureResult.error))
+            return ClaudeCodeStepResult.TransportError(
+                transportErrorMessage(ensureResult.error)
+            )
         }
 
-        // Token estimation for the UI/usage tracker.
         val totalTokens = estimateTokens(request)
         state.lastInputTokens = totalTokens
 
         log(
-            "Sending: tokens≈$totalTokens, freshFiles=${freshFiles.size}, " +
+            "Sending: tokens≈$totalTokens, freshFiles=${command.freshFiles.size}, " +
                     "history=${request.chatHistory.size}, fullCtx=$needsFull"
         )
         sessionLog?.event(
             "sending request",
             mapOf(
                 "tokensApprox" to totalTokens,
-                "freshFiles" to freshFiles.size,
+                "freshFiles" to command.freshFiles.size,
                 "history" to request.chatHistory.size,
                 "fullContext" to needsFull
             )
         )
         notificationPort.showProgress("Sending to Claude Code...", 0.5)
 
-        // Wall-clock timer for UI "this took Ns" feedback. Distinct from the adapter's
-        // internal elapsed timer — that one only covers the send() call's I/O, this one
-        // covers the same span but is propagated up to the UI layer via the step result.
         val sendStartedAt = System.currentTimeMillis()
-        // Live progress flows through AgentStreamHub (adapter -> hub -> UI); nothing to plumb here.
         val sendResult = claudeCodePort.send(request)
         val durationMs = System.currentTimeMillis() - sendStartedAt
 
         return when (sendResult) {
             is Result.Success -> {
                 val payload: ClaudeCodeSendResult = sendResult.value
-                // Persist observed session id and clear the fallback flag.
                 val observedId = payload.observedSessionId
                 if (observedId != null || session.claudeCodeNeedsFullContext) {
-                    val updated = session.copy(
-                        claudeCodeSessionId = observedId ?: session.claudeCodeSessionId,
-                        claudeCodeNeedsFullContext = false
+                    chatSessionRepository.saveSession(
+                        session.copy(
+                            claudeCodeSessionId = observedId ?: session.claudeCodeSessionId,
+                            claudeCodeNeedsFullContext = false
+                        )
                     )
-                    chatSessionRepository.saveSession(updated)
                 }
                 val stats = payload.stats
                 processResponse(
@@ -573,9 +507,14 @@ class ClaudeCodeInteractionService(
                 log("Send failed: ${sendResult.error} (after ${durationMs}ms)")
                 sessionLog?.event(
                     "send failed",
-                    mapOf("error" to sendResult.error.toString(), "elapsedMs" to durationMs)
+                    mapOf(
+                        "error" to sendResult.error.toString(),
+                        "elapsedMs" to durationMs
+                    )
                 )
-                ClaudeCodeStepResult.TransportError(transportErrorMessage(sendResult.error))
+                ClaudeCodeStepResult.TransportError(
+                    transportErrorMessage(sendResult.error)
+                )
             }
         }
     }
@@ -780,28 +719,6 @@ class ClaudeCodeInteractionService(
         )
         log("Workspace restored from domain: sessionId=$sessionId, messages=${session.messages.size}")
         return true
-    }
-
-    private suspend fun gatherRequestedFiles(requestedPaths: List<String>): Map<String, String>? {
-        val state = sessionState ?: return null
-        if (requestedPaths.isEmpty()) return emptyMap()
-
-        // Always re-read every requested path from the live project. The former
-        // per-session content cache served stale files after modifications and
-        // silently dropped re-requested paths when mixed with new ones.
-        // allGatheredFiles is kept as bookkeeping for previouslyGatheredPaths only.
-        log("Gathering ${requestedPaths.size} files (fresh read)...")
-        notificationPort.showProgress("Gathering ${requestedPaths.size} files...", 0.4)
-
-        val gatherResult = contextProvider.gatherFiles(requestedPaths)
-        if (gatherResult is Result.Failure) {
-            log("ERROR: Failed to gather files: ${gatherResult.error.message}")
-            return null
-        }
-        val gathered = (gatherResult as Result.Success).value
-        state.allGatheredFiles.putAll(gathered.files)
-        log("Gathered ${gathered.files.size} files, total tracked: ${state.allGatheredFiles.size}")
-        return gathered.files
     }
 
     private suspend fun applyModifications(claudeMods: List<InteractionModification>): List<ModificationResult> {
