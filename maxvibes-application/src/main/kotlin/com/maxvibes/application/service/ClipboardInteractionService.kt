@@ -1,12 +1,8 @@
 package com.maxvibes.application.service
 
 import com.maxvibes.application.port.output.*
-import com.maxvibes.domain.model.code.ElementKind
-import com.maxvibes.domain.model.code.ElementPath
 import com.maxvibes.domain.model.command.CommandRequest
 import com.maxvibes.domain.model.interaction.*
-import com.maxvibes.domain.model.modification.InsertPosition
-import com.maxvibes.domain.model.modification.Modification
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.shared.result.Result
 import com.maxvibes.application.port.output.LoggerPort
@@ -431,7 +427,7 @@ class ClipboardInteractionService(
         val hasFiles = response.codeViewRequests.isNotEmpty()
         val hasMods = response.modifications.isNotEmpty()
         val hasMessage = response.message.isNotBlank()
-        val commands = response.commands.mapNotNull { convertCommand(it) }
+        val commands = response.commands.mapNotNull { ProtocolConverter.convertCommand(it) }
 
         log("Processing: hasFiles=$hasFiles, hasMods=$hasMods, hasMessage=$hasMessage, commands=${commands.size}")
 
@@ -719,7 +715,7 @@ class ClipboardInteractionService(
     // ==================== Modifications ====================
 
     private suspend fun applyModifications(clipboardMods: List<InteractionModification>): List<ModificationResult> {
-        val modifications = clipboardMods.mapNotNull { convertModification(it) }
+        val modifications = clipboardMods.mapNotNull { ProtocolConverter.convertModification(it) }
         if (modifications.isEmpty()) return emptyList()
 
         log("Applying ${modifications.size} modifications...")
@@ -798,72 +794,6 @@ class ClipboardInteractionService(
         println("[MaxVibes Clipboard] ERROR: $message")
         logger?.error("Clipboard", message)
         return ClipboardStepResult.Error(message)
-    }
-
-    private fun convertModification(mod: InteractionModification): Modification? {
-        if (mod.type.isBlank() || mod.path.isBlank()) return null
-        val elementPath = ElementPath(mod.path)
-        val elementKind = try {
-            ElementKind.valueOf(mod.elementKind.uppercase())
-        } catch (_: Exception) {
-            ElementKind.FILE
-        }
-        val position = try {
-            InsertPosition.valueOf(mod.position.uppercase())
-        } catch (_: Exception) {
-            InsertPosition.LAST_CHILD
-        }
-
-        return when (mod.type.uppercase()) {
-            "CREATE_FILE" -> Modification.CreateFile(targetPath = elementPath, content = mod.content)
-            "REPLACE_FILE" -> Modification.ReplaceFile(targetPath = elementPath, newContent = mod.content)
-            "DELETE_FILE" -> Modification.DeleteFile(targetPath = elementPath)
-            "CREATE_ELEMENT" -> Modification.CreateElement(
-                targetPath = elementPath, elementKind = elementKind,
-                content = mod.content, position = position
-            )
-
-            "REPLACE_ELEMENT" -> Modification.ReplaceElement(targetPath = elementPath, newContent = mod.content)
-            "DELETE_ELEMENT" -> Modification.DeleteElement(targetPath = elementPath)
-            "ADD_IMPORT" -> {
-                val fqn = mod.importPath.ifBlank { mod.content.removePrefix("import ").trim() }
-                if (fqn.isBlank()) null else Modification.AddImport(targetPath = elementPath, importPath = fqn)
-            }
-
-            "REMOVE_IMPORT" -> {
-                val fqn = mod.importPath.ifBlank { mod.content.removePrefix("import ").trim() }
-                if (fqn.isBlank()) null else Modification.RemoveImport(targetPath = elementPath, importPath = fqn)
-            }
-
-            "RENAME_ELEMENT" -> {
-                val newName = mod.newName.trim()
-                if (newName.isBlank()) null
-                else Modification.RenameElement(targetPath = elementPath, newName = newName)
-            }
-
-            "SAFE_DELETE" -> Modification.SafeDelete(targetPath = elementPath)
-
-            "MOVE_ELEMENT" -> {
-                val destination = mod.destination.trim()
-                if (destination.isBlank()) null
-                else Modification.MoveElement(targetPath = elementPath, destination = destination)
-            }
-
-            else -> null
-        }
-    }
-
-    /**
-     * Converts an LLM-protocol [InteractionCommand] into a domain [CommandRequest].
-     * Skips entries with a blank command line.
-     */
-    private fun convertCommand(cmd: InteractionCommand): CommandRequest? {
-        if (cmd.command.isBlank()) return null
-        return CommandRequest(
-            command = cmd.command,
-            reason = cmd.reason.takeIf { it.isNotBlank() },
-            timeoutSec = cmd.timeoutSec.coerceIn(1, 3600)
-        )
     }
 
     companion object {

@@ -16,17 +16,12 @@ import com.maxvibes.application.port.output.PromptTemplates
 import com.maxvibes.domain.model.chat.MessageRole
 import com.maxvibes.domain.model.code.CodeGranularity
 import com.maxvibes.domain.model.code.CodeViewRequest
-import com.maxvibes.domain.model.code.ElementKind
-import com.maxvibes.domain.model.code.ElementPath
 import com.maxvibes.domain.model.code.RequestedViewInfo
 import com.maxvibes.domain.model.command.CommandRequest
 import com.maxvibes.domain.model.interaction.ClipboardRequest
 import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
-import com.maxvibes.domain.model.interaction.InteractionCommand
 import com.maxvibes.domain.model.interaction.InteractionModification
 import com.maxvibes.domain.model.interaction.InteractionResponse
-import com.maxvibes.domain.model.modification.InsertPosition
-import com.maxvibes.domain.model.modification.Modification
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.shared.result.Result
 import com.maxvibes.domain.model.interaction.AttachedImage
@@ -108,17 +103,8 @@ class ClaudeCodeInteractionService(
     /** ID of the session that owns the current [sessionState]. Guards against cross-session misuse. */
     private var sessionStateOwner: String? = null
 
-    /** Modifications proposed by the LLM, held until the user approves or rejects them. In-memory only. */
-    private var pendingModifications: List<InteractionModification> = emptyList()
-
-    /** Commands that arrived alongside the pending modifications — presented after approve+apply. */
-    private var pendingCommands: List<CommandRequest> = emptyList()
-
-    /** Commit message that accompanied the pending modifications. */
-    private var pendingCommitMessage: String? = null
-
-    /** Session that owns the pending modifications. */
-    private var pendingOwner: String? = null
+    /** Modification sets proposed by the LLM, held until the user approves or rejects them. In-memory only. */
+    private val pendingStore = PendingModificationsStore()
 
     // ==================== Public API ====================
 
@@ -167,12 +153,12 @@ class ClaudeCodeInteractionService(
                     attachedImages = attachedImages
                 )
 
-            ClipboardSessionStatus.AWAITING_APPROVE ->
-                if (pendingOwner == sessionId && pendingModifications.isNotEmpty()) {
-                    // Typing while modifications await approval = reject with feedback.
-                    val rejected = pendingModifications.size
-                    val hadCommands = pendingCommands.size
-                    clearPending()
+            ClipboardSessionStatus.AWAITING_APPROVE -> {
+                // Typing while modifications await approval = reject with feedback.
+                val rejectedSet = pendingStore.take(sessionId)
+                if (rejectedSet != null) {
+                    val rejected = rejectedSet.modifications.size
+                    val hadCommands = rejectedSet.commands.size
                     sessionManager.transition(sessionId, ClipboardEvent.Approved)
                     log("User rejected $rejected pending modification(s) by typing a new message")
                     sessionLog?.event(
@@ -198,6 +184,7 @@ class ClaudeCodeInteractionService(
                         "Session is awaiting approve. Press Approve or Reset before sending a new message."
                     )
                 }
+            }
 
             ClipboardSessionStatus.AWAITING_PASTE ->
                 ClaudeCodeStepResult.Error(
@@ -232,7 +219,7 @@ class ClaudeCodeInteractionService(
         // New semantics: Approve applies pending modifications when present. Checked BEFORE
         // workspace restore and requestedViews reading below — pending modifications have no
         // requestedViews, so the legacy path would fail with "No assistant message to approve".
-        if (pendingOwner == sessionId && pendingModifications.isNotEmpty()) {
+        if (pendingStore.hasPendingFor(sessionId)) {
             return approvePendingModifications(sessionId)
         }
 
@@ -360,7 +347,7 @@ class ClaudeCodeInteractionService(
         sessionLog?.event("reset requested", mapOf("sessionId" to sessionId))
         sessionState = null
         sessionStateOwner = null
-        clearPending()
+        pendingStore.clear()
         sessionManager.transition(sessionId, ClipboardEvent.Reset)
         try {
             claudeCodePort.shutdown()
@@ -607,7 +594,7 @@ class ClaudeCodeInteractionService(
         val hasViews = response.codeViewRequests.isNotEmpty()
         val hasMods = response.modifications.isNotEmpty()
         val hasQuestions = response.questions.isNotEmpty()
-        val commands: List<CommandRequest> = response.commands.mapNotNull { convertCommand(it) }
+        val commands: List<CommandRequest> = response.commands.mapNotNull { ProtocolConverter.convertCommand(it) }
         log(
             "Processing response: hasViews=$hasViews, hasMods=$hasMods, hasQuestions=$hasQuestions, " +
                     "commands=${commands.size}, msg=${response.message.take(60)}"
@@ -663,14 +650,16 @@ class ClaudeCodeInteractionService(
                     mapOf("count" to response.codeViewRequests.size)
                 )
             }
-            pendingModifications = response.modifications
-            pendingCommands = commands
-            pendingCommitMessage = response.commitMessage?.takeIf { it.isNotBlank() }
-            pendingOwner = sessionId
-            log("Holding ${pendingModifications.size} modification(s) and ${commands.size} command(s) for user approval")
+            pendingStore.hold(
+                sessionId = sessionId,
+                modifications = response.modifications,
+                commands = commands,
+                commitMessage = response.commitMessage?.takeIf { it.isNotBlank() }
+            )
+            log("Holding ${response.modifications.size} modification(s) and ${commands.size} command(s) for user approval")
             sessionLog?.event(
                 "modifications held for approval",
-                mapOf("mods" to pendingModifications.size, "commands" to commands.size)
+                mapOf("mods" to response.modifications.size, "commands" to commands.size)
             )
             return ClaudeCodeStepResult.AwaitingModApprove(
                 assistantMessage = response.message,
@@ -767,18 +756,16 @@ class ClaudeCodeInteractionService(
      * rendered at proposal time, so the completed message stays terse.
      */
     private suspend fun approvePendingModifications(sessionId: String): ClaudeCodeStepResult {
-        val mods = pendingModifications
-        val commands = pendingCommands
-        val commitMessage = pendingCommitMessage
-        clearPending()
+        val pending = pendingStore.take(sessionId)
+            ?: return error("No pending modifications to approve")
         sessionManager.transition(sessionId, ClipboardEvent.Approved)
-        log("Applying ${mods.size} approved modification(s), ${commands.size} held command(s)")
+        log("Applying ${pending.modifications.size} approved modification(s), ${pending.commands.size} held command(s)")
         sessionLog?.event(
             "pending modifications approved",
-            mapOf("mods" to mods.size, "commands" to commands.size)
+            mapOf("mods" to pending.modifications.size, "commands" to pending.commands.size)
         )
 
-        val modResults = applyModifications(mods)
+        val modResults = applyModifications(pending.modifications)
         val successCount = modResults.count { it is ModificationResult.Success }
         val failCount = modResults.size - successCount
         if (failCount > 0) notificationPort.showWarning("Applied $successCount changes, $failCount failed")
@@ -788,16 +775,9 @@ class ClaudeCodeInteractionService(
             message = "Applied approved modifications.",
             modifications = modResults,
             success = failCount == 0,
-            commitMessage = commitMessage,
-            commands = commands
+            commitMessage = pending.commitMessage,
+            commands = pending.commands
         )
-    }
-
-    private fun clearPending() {
-        pendingModifications = emptyList()
-        pendingCommands = emptyList()
-        pendingCommitMessage = null
-        pendingOwner = null
     }
 
     // ==================== Helpers ====================
@@ -916,7 +896,7 @@ class ClaudeCodeInteractionService(
     }
 
     private suspend fun applyModifications(claudeMods: List<InteractionModification>): List<ModificationResult> {
-        val modifications = claudeMods.mapNotNull { convertModification(it) }
+        val modifications = claudeMods.mapNotNull { ProtocolConverter.convertModification(it) }
         if (modifications.isEmpty()) return emptyList()
 
         log("Applying ${modifications.size} modifications...")
@@ -929,104 +909,14 @@ class ClaudeCodeInteractionService(
         return results
     }
 
-    /**
-     * Converts an LLM-protocol [InteractionModification] into a domain [Modification].
-     * Mirrors [ClipboardInteractionService.convertModification] — kept duplicated by
-     * conscious decision until both services stabilise (see Step 5 "Что НЕ делать").
-     */
-    private fun convertModification(mod: InteractionModification): Modification? {
-        if (mod.type.isBlank() || mod.path.isBlank()) return null
-        val elementPath = ElementPath(mod.path)
-        val elementKind = try {
-            ElementKind.valueOf(mod.elementKind.uppercase())
-        } catch (_: Exception) {
-            ElementKind.FILE
-        }
-        val position = try {
-            InsertPosition.valueOf(mod.position.uppercase())
-        } catch (_: Exception) {
-            InsertPosition.LAST_CHILD
-        }
-
-        return when (mod.type.uppercase()) {
-            "CREATE_FILE" -> Modification.CreateFile(targetPath = elementPath, content = mod.content)
-            "REPLACE_FILE" -> Modification.ReplaceFile(targetPath = elementPath, newContent = mod.content)
-            "DELETE_FILE" -> Modification.DeleteFile(targetPath = elementPath)
-            "CREATE_ELEMENT" -> Modification.CreateElement(
-                targetPath = elementPath, elementKind = elementKind,
-                content = mod.content, position = position
-            )
-
-            "REPLACE_ELEMENT" -> Modification.ReplaceElement(targetPath = elementPath, newContent = mod.content)
-            "DELETE_ELEMENT" -> Modification.DeleteElement(targetPath = elementPath)
-            "ADD_IMPORT" -> {
-                val fqn = mod.importPath.ifBlank { mod.content.removePrefix("import ").trim() }
-                if (fqn.isBlank()) null else Modification.AddImport(targetPath = elementPath, importPath = fqn)
-            }
-
-            "REMOVE_IMPORT" -> {
-                val fqn = mod.importPath.ifBlank { mod.content.removePrefix("import ").trim() }
-                if (fqn.isBlank()) null else Modification.RemoveImport(targetPath = elementPath, importPath = fqn)
-            }
-
-            "RENAME_ELEMENT" -> {
-                val newName = mod.newName.trim()
-                if (newName.isBlank()) null
-                else Modification.RenameElement(targetPath = elementPath, newName = newName)
-            }
-
-            "SAFE_DELETE" -> Modification.SafeDelete(targetPath = elementPath)
-
-            "MOVE_ELEMENT" -> {
-                val destination = mod.destination.trim()
-                if (destination.isBlank()) null
-                else Modification.MoveElement(targetPath = elementPath, destination = destination)
-            }
-
-            else -> null
-        }
-    }
-
-    /**
-     * Converts an LLM-protocol [InteractionCommand] into a domain [CommandRequest].
-     * Mirrors [ClipboardInteractionService.convertCommand] — kept duplicated by the same
-     * conscious decision as [convertModification] until both services stabilise.
-     */
-    private fun convertCommand(cmd: InteractionCommand): CommandRequest? {
-        if (cmd.command.isBlank()) return null
-        return CommandRequest(
-            command = cmd.command,
-            reason = cmd.reason.takeIf { it.isNotBlank() },
-            timeoutSec = cmd.timeoutSec.coerceIn(1, 3600)
-        )
-    }
-
     private fun addToHistory(role: ChatRole, content: String) {
         val state = sessionState ?: return
         state.dialogHistory.add(ChatMessageDTO(role = role, content = content))
     }
 
-    private fun estimateTokens(request: ClipboardRequest): Int {
-        val textSize = request.systemInstruction.length +
-                request.fileTree.length +
-                request.freshFiles.values.sumOf { it.length } +
-                request.chatHistory.sumOf { it.content.length } +
-                request.currentMessage.length +
-                (request.attachedContext?.length ?: 0) +
-                (request.specificPrompt?.length ?: 0) +
-                (request.ideErrors?.length ?: 0) +
-                (request.commandResults?.length ?: 0)
-        val imageTokens = request.attachedImages.size * 1100 // rough: a ≤1568px screenshot ≈ 1.1–1.6k tokens
-        return textSize / 4 + imageTokens
-    }
+    private fun estimateTokens(request: ClipboardRequest): Int = TokenEstimator.estimateTokens(request)
 
-    private fun estimateOutputTokens(response: InteractionResponse): Int {
-        val text = response.message.length +
-                (response.reasoning?.length ?: 0) +
-                (response.commitMessage?.length ?: 0) +
-                response.modifications.sumOf { it.content.length }
-        return text / 4
-    }
+    private fun estimateOutputTokens(response: InteractionResponse): Int = TokenEstimator.estimateOutputTokens(response)
 
     private fun transportErrorMessage(error: ClaudeCodeError): String = when (error) {
         is ClaudeCodeError.BinaryNotFound ->
