@@ -97,11 +97,12 @@ class ClaudeCodeInteractionService(
     private val streamHub: AgentStreamHub? = null
 ) {
 
-    /** In-memory workspace: messages, gathered files, prompts, project context. */
-    private var sessionState: ClipboardSessionState? = null
+    /** In-memory workspace of the active session — read-only view over [workspace]. */
+    private val sessionState: ClipboardSessionState? get() = workspace.state
 
     /** ID of the session that owns the current [sessionState]. Guards against cross-session misuse. */
-    private var sessionStateOwner: String? = null
+    private val sessionStateOwner: String? get() = workspace.owner
+    private val workspace = ClaudeCodeWorkspaceHolder()
 
     /** Modification sets proposed by the LLM, held until the user approves or rejects them. In-memory only. */
     private val pendingStore = PendingModificationsStore()
@@ -345,8 +346,7 @@ class ClaudeCodeInteractionService(
     fun reset(sessionId: String) {
         log("Session reset (sessionId=$sessionId)")
         sessionLog?.event("reset requested", mapOf("sessionId" to sessionId))
-        sessionState = null
-        sessionStateOwner = null
+        workspace.clear()
         pendingStore.clear()
         sessionManager.transition(sessionId, ClipboardEvent.Reset)
         try {
@@ -390,30 +390,34 @@ class ClaudeCodeInteractionService(
                 planningSystem = claudeSystem
             )
 
-            sessionState = ClipboardSessionState(
-                currentMessage = userInput,
-                projectContext = projectContext,
-                dialogHistory = history.toMutableList(),
-                prompts = claudePrompts,
-                allGatheredFiles = mutableMapOf(),
-                planOnly = planOnly
+            workspace.install(
+                sessionId,
+                ClipboardSessionState(
+                    currentMessage = userInput,
+                    projectContext = projectContext,
+                    dialogHistory = history.toMutableList(),
+                    prompts = claudePrompts,
+                    allGatheredFiles = mutableMapOf(),
+                    planOnly = planOnly
+                )
             )
-            sessionStateOwner = sessionId
             addToHistory(ChatRole.USER, userInput)
         } else {
             log("Continuing Claude Code session (sessionId=$sessionId)")
-            if (sessionState == null || sessionStateOwner != sessionId) {
+            if (!workspace.isOwnedBy(sessionId)) {
                 if (!ensureWorkspace(sessionId)) {
                     return error("Cannot restore session state for session $sessionId. Please start a new task.")
                 }
             }
             val state = sessionState ?: return error("No active workspace")
             // Reflect the new user message in workspace state.
-            sessionState = state.copy(
-                currentMessage = userInput,
-                planOnly = planOnly
+            workspace.install(
+                sessionId,
+                state.copy(
+                    currentMessage = userInput,
+                    planOnly = planOnly
+                )
             )
-            sessionStateOwner = sessionId
             addToHistory(ChatRole.USER, userInput)
         }
 
@@ -449,12 +453,10 @@ class ClaudeCodeInteractionService(
 
         // Full context is sent on the first message OR when a previous resume failed.
         val needsFull = isFirstMessage || session.claudeCodeNeedsFullContext
-        var addHistory = needsFull
-        var request = buildRequest(
+        var request = ClaudeCodeRequestFactory.create(
             state = state,
             freshFiles = freshFiles,
-            isFirstMessage = needsFull,
-            addHistory = addHistory,
+            fullContext = needsFull,
             attachedContext = attachedContext,
             ideErrors = ideErrors,
             specificPromptContent = specificPromptContent,
@@ -493,11 +495,10 @@ class ClaudeCodeInteractionService(
             )
             chatSessionRepository.saveSession(session)
 
-            request = buildRequest(
+            request = ClaudeCodeRequestFactory.create(
                 state = state,
                 freshFiles = freshFiles,
-                isFirstMessage = true,
-                addHistory = true,
+                fullContext = true,
                 attachedContext = attachedContext,
                 ideErrors = ideErrors,
                 specificPromptContent = specificPromptContent,
@@ -717,35 +718,6 @@ class ClaudeCodeInteractionService(
 
     // ==================== Helpers ====================
 
-    private fun buildRequest(
-        state: ClipboardSessionState,
-        freshFiles: Map<String, String>,
-        isFirstMessage: Boolean,
-        addHistory: Boolean,
-        attachedContext: String?,
-        ideErrors: String?,
-        specificPromptContent: String?,
-        commandResults: String? = null,
-        attachedImages: List<AttachedImage> = emptyList(),
-        currentPlan: TaskPlan? = null
-    ): ClipboardRequest = InteractionRequestBuilder.build(
-        state = state,
-        freshFiles = freshFiles,
-        isFirstMessage = isFirstMessage,
-        addHistory = addHistory,
-        planOnlySuffix = PLAN_ONLY_SUFFIX,
-        ideErrors = ideErrors,
-        attachedContext = attachedContext,
-        specificPromptContent = specificPromptContent,
-        // Claude Code transport delivers the system instruction via the CLI's
-        // --append-system-prompt flag at process spawn — embedding it in the
-        // JSON payload would trip Claude Code's prompt-injection classifier.
-        omitSystemInstruction = true,
-        commandResults = commandResults,
-        attachedImages = attachedImages,
-        currentPlan = currentPlan
-    )
-
     /**
      * Persists [codeViewRequests] from the LLM response into the last ASSISTANT message
      * of the domain session as typed [RequestedViewInfo] entries. No-op if the session
@@ -787,23 +759,25 @@ class ClaudeCodeInteractionService(
         val claudeSystem = promptPort.claudeCodeSystem()
         val prompts = PromptTemplates(chatSystem = claudeSystem, planningSystem = claudeSystem)
 
-        sessionState = ClipboardSessionState(
-            currentMessage = lastUserMessage,
-            projectContext = projectContext,
-            dialogHistory = session.messages
-                .filter { it.role == MessageRole.USER || it.role == MessageRole.ASSISTANT }
-                .map {
-                    ChatMessageDTO(
-                        role = if (it.role == MessageRole.USER) ChatRole.USER else ChatRole.ASSISTANT,
-                        content = it.content
-                    )
-                }
-                .toMutableList(),
-            prompts = prompts,
-            allGatheredFiles = mutableMapOf(),
-            planOnly = false
+        workspace.install(
+            sessionId,
+            ClipboardSessionState(
+                currentMessage = lastUserMessage,
+                projectContext = projectContext,
+                dialogHistory = session.messages
+                    .filter { it.role == MessageRole.USER || it.role == MessageRole.ASSISTANT }
+                    .map {
+                        ChatMessageDTO(
+                            role = if (it.role == MessageRole.USER) ChatRole.USER else ChatRole.ASSISTANT,
+                            content = it.content
+                        )
+                    }
+                    .toMutableList(),
+                prompts = prompts,
+                allGatheredFiles = mutableMapOf(),
+                planOnly = false
+            )
         )
-        sessionStateOwner = sessionId
         log("Workspace restored from domain: sessionId=$sessionId, messages=${session.messages.size}")
         return true
     }
@@ -888,19 +862,4 @@ class ClaudeCodeInteractionService(
         return ClaudeCodeStepResult.Error(message)
     }
 
-    companion object {
-        // Duplicated from ClipboardInteractionService by design (see Step 5 "Что НЕ делать").
-        // Will be unified in a future refactor once both services stabilise.
-        private val PLAN_ONLY_SUFFIX = "\n\n" +
-                "## PLAN-ONLY MODE — DISCUSSION REQUIRED\n\n" +
-                "DO NOT generate any code changes in the modifications array.\n" +
-                "Keep modifications and commands empty.\n" +
-                "Your goal is to DISCUSS the plan with the user before any code is written.\n\n" +
-                "Instead of code, you must:\n" +
-                "1. Briefly explain what you understand from the task\n" +
-                "2. List which files you plan to touch and what changes you'll make in each\n" +
-                "3. Mention any architectural decisions or trade-offs\n" +
-                "4. Ask the user to confirm or suggest corrections\n\n" +
-                "Always output the JSON with empty modifications and put your discussion in message."
-    }
 }
