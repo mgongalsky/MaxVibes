@@ -1,6 +1,6 @@
 # Рефакторинг Claude Code ядра
 
-        План по итогам аудита кодовой базы (2026 - 07 - 26). Приоритет — режим Claude Code.
+План по итогам аудита кодовой базы (2026 - 07 - 26). Приоритет — режим Claude Code.
 
 ## Диагноз
 
@@ -33,8 +33,9 @@
 | 0 | Починить тесты (2 фикса +фундамент фейков) | [STEP_0_FixTests.md](STEP_0_FixTests.md) |
 | 1 | Распил `ChatMessageController` |[STEP_1_ChatMessageController.md](STEP_1_ChatMessageController.md) |
 | 2 | Распил `ClaudeCodeInteractionService` +общий `ProtocolConverter` |[STEP_2_ClaudeCodeInteractionService.md](
-    STEP_2_ClaudeCodeInteractionService.md
+STEP_2_ClaudeCodeInteractionService.md
 ) |
+| 2A | Глубокая нарезка `ClaudeCodeInteractionService` (971 → 865; ResponseProcessor, RequestFactory, WorkspaceHolder) — ВЫПОЛНЕН | [STEP_2A_ClaudeCodeInteractionService_DeepCut.md](STEP_2A_ClaudeCodeInteractionService_DeepCut.md) |
 | 3 | UI: `ChatPanel`, `ConversationPanel` | [STEP_3_UI.md](STEP_3_UI.md) |
 | 4 | Обновить `ARCHITETURE.md`, убрать println |[STEP_4_Docs.md](STEP_4_Docs.md) |
 
