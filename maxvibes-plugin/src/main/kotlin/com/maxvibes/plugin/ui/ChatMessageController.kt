@@ -127,13 +127,12 @@ class ChatMessageController(
 
     private val chatTreeService get() = service.chatTreeService
 
-    var attachedTrace: String? = null
-        private set
-    var attachedErrors: String? = null
-        private set
+    val attachedTrace: String?
+        get() = pendingContext.trace
+    val attachedErrors: String?
+        get() = pendingContext.errors
 
-    /** Attached images (Claude Code mode only) — one-shot, cleared after send. */
-    private val attachedImages = mutableListOf<AttachedImage>()
+    private val pendingContext = PendingTurnContext(ImageAttachments.MAX_IMAGES)
 
     companion object {
         fun buildTaskWithContext(task: String, trace: String?, errs: String?): String {
@@ -277,22 +276,21 @@ class ChatMessageController(
             })
     }
 
-    /**
-     * Approve the last Claude Code response. Applies pending modifications (if any) or
-     * gathers requested files, then continues. Called from [ChatPanel] on the Approve button.
-     */
     fun approve() {
         saveAllDocuments()
-        val trace = attachedTrace
-        val errs = attachedErrors
-        if (attachedImages.isNotEmpty()) {
-            callbacks.appendToChat("⚠️ ${attachedImages.size} attached image(s) dropped — attach them to a regular message, not to Approve")
+        val pending = pendingContext.snapshot()
+        if (pending.images.isNotEmpty()) {
+            callbacks.appendToChat(
+                "⚠️ ${pending.images.size} attached image(s) dropped — attach them to a regular message, not to Approve"
+            )
         }
-        if (pendingOneShot != null) {
-            callbacks.appendToChat("⚠️ One-shot editor skill dropped — invoke it with a regular message, not with Approve")
+        if (pending.oneShot != null) {
+            callbacks.appendToChat(
+                "⚠️ One-shot editor skill dropped — invoke it with a regular message, not with Approve"
+            )
         }
         clearAttachmentsAfterSend()
-        claudeCodeDispatcher.approve(trace, errs)
+        claudeCodeDispatcher.approve(pending.trace, pending.errors)
     }
 
     // ==================== Question Flow ====================
@@ -413,41 +411,39 @@ class ChatMessageController(
     }
 
     fun attachTrace(traceContent: String) {
-        attachedTrace = traceContent
+        pendingContext.attachTrace(traceContent)
         callbacks.onAttachmentsChanged(attachedTrace, attachedErrors)
     }
 
     fun clearTrace() {
-        attachedTrace = null
+        pendingContext.clearTrace()
         callbacks.onAttachmentsChanged(attachedTrace, attachedErrors)
     }
 
     fun clearErrors() {
-        attachedErrors = null
+        pendingContext.clearErrors()
         callbacks.onAttachmentsChanged(attachedTrace, attachedErrors)
     }
 
-    /** Attaches an image; enforces the per-message cap. Returns false when the cap is hit. */
     fun attachImage(image: AttachedImage): Boolean {
-        if (attachedImages.size >= ImageAttachments.MAX_IMAGES) {
+        if (!pendingContext.attachImage(image)) {
             callbacks.setStatus("🖼 Max ${ImageAttachments.MAX_IMAGES} images per message")
             return false
         }
-        attachedImages.add(image)
-        callbacks.onImagesChanged(attachedImages.toList())
-        callbacks.setStatus("🖼 Image attached (${attachedImages.size})")
+        val images = pendingContext.imagesSnapshot()
+        callbacks.onImagesChanged(images)
+        callbacks.setStatus("🖼 Image attached (${images.size})")
         return true
     }
 
     fun clearImages() {
-        attachedImages.clear()
+        pendingContext.clearImages()
         callbacks.onImagesChanged(emptyList())
     }
 
     fun removeImage(index: Int) {
-        if (index in attachedImages.indices) {
-            attachedImages.removeAt(index)
-            callbacks.onImagesChanged(attachedImages.toList())
+        if (pendingContext.removeImage(index)) {
+            callbacks.onImagesChanged(pendingContext.imagesSnapshot())
         }
     }
 
@@ -464,13 +460,19 @@ class ChatMessageController(
                                 if (errors.isEmpty()) {
                                     callbacks.setStatus("No IDE errors found in open files")
                                 } else {
-                                    attachedErrors = errors.joinToString("\n") { it.formatForLlm() }
+                                    pendingContext.attachErrors(
+                                        errors.joinToString(separator = System.lineSeparator()) {
+                                            it.formatForLlm()
+                                        }
+                                    )
                                     callbacks.setStatus("Attached ${errors.size} IDE errors")
                                     callbacks.onAttachmentsChanged(attachedTrace, attachedErrors)
                                 }
                             }
 
-                            is Result.Failure -> callbacks.onError("Failed to fetch IDE errors: ${result.error}")
+                            is Result.Failure -> callbacks.onError(
+                                "Failed to fetch IDE errors: ${result.error}"
+                            )
                         }
                     }
                 }
@@ -479,15 +481,9 @@ class ChatMessageController(
     }
 
     fun clearAttachmentsAfterSend() {
-        val hadOneShot = pendingOneShot != null
-        attachedTrace = null
-        attachedErrors = null
-        attachedImages.clear()
-        pendingOneShot = null
+        val hadOneShot = pendingContext.clearAll()
         callbacks.onAttachmentsChanged(null, null)
         callbacks.onImagesChanged(emptyList())
-        // Only notify when a one-shot was actually armed — onOneShotChanged(null)
-        // triggers a render() in the panel, redundant on every ordinary send.
         if (hadOneShot) callbacks.onOneShotChanged(null)
     }
 
@@ -539,68 +535,65 @@ class ChatMessageController(
     ) {
         saveAllDocuments()
         dismissQuestionTurn()
-        val trace = attachedTrace
-        val errs = attachedErrors
-        val imgs = attachedImages.toList()
-        // Snapshot the one-shot editor skill BEFORE clearing — clearAttachmentsAfterSend nulls it.
-        val oneShot = pendingOneShot
+        val pending = pendingContext.snapshot()
         clearAttachmentsAfterSend()
-        // One-shot overrides the session skill for exactly this send; the element body
-        // rides the attachedContext (trace) channel, already labeled by the action layer.
-        val effectivePromptName = oneShot?.skillName ?: selectedSpecificPromptName
-        val effectiveTrace = listOfNotNull(
-            oneShot?.elementContext,
-            trace
-        ).takeIf { it.isNotEmpty() }?.joinToString("\n\n")
+        val prepared = SendPreparationPolicy.prepare(
+            pending = pending,
+            selectedSpecificPromptName = selectedSpecificPromptName,
+            mode = mode
+        )
+
         MaxVibesLogger.info(
-            "Controller", "sendMessage", mapOf(
+            "Controller",
+            "sendMessage",
+            mapOf(
                 "mode" to mode.name,
                 "msgLen" to userInput.length,
                 "isPlanOnly" to isPlanOnly,
-                "hasTrace" to (trace != null),
-                "hasErrors" to (errs != null),
-                "images" to imgs.size,
+                "hasTrace" to (pending.trace != null),
+                "hasErrors" to (prepared.errors != null),
+                "images" to prepared.images.size,
                 "addHistory" to addHistory,
-                "specificPrompt" to (effectivePromptName ?: "null"),
-                "oneShot" to (oneShot?.label ?: "null")
+                "specificPrompt" to (prepared.effectivePromptName ?: "null"),
+                "oneShot" to (prepared.oneShotLabel ?: "null")
             )
         )
-        if (imgs.isNotEmpty() && mode != InteractionMode.CLAUDE_CODE) {
-            callbacks.appendToChat("⚠️ ${imgs.size} image(s) dropped — images are only sent in Claude Code mode")
-        }
-        if (oneShot != null && (mode == InteractionMode.API || mode == InteractionMode.CHEAP_API)) {
-            callbacks.appendToChat(
-                "⚠️ One-shot editor skill fully works only in Clipboard / Claude Code modes — " +
-                        if (mode == InteractionMode.API) "API mode gets the prefill text only"
-                        else "Cheap API gets the element context but not the skill body"
-            )
-        }
+
+        prepared.warnings.forEach(callbacks::appendToChat)
+
         when (mode) {
-            InteractionMode.API -> dispatchApiMessage(userInput, effectiveTrace, errs, isPlanOnly, isDryRun)
+            InteractionMode.API -> dispatchApiMessage(
+                userInput,
+                prepared.effectiveTrace,
+                prepared.errors,
+                isPlanOnly,
+                isDryRun
+            )
+
             InteractionMode.CLIPBOARD -> dispatchClipboardMessage(
                 userInput,
-                effectiveTrace,
-                errs,
+                prepared.effectiveTrace,
+                prepared.errors,
                 isPlanOnly,
                 addHistory,
-                effectivePromptName
+                prepared.effectivePromptName
             )
 
             InteractionMode.CHEAP_API -> dispatchCheapApiMessage(
                 userInput,
-                effectiveTrace,
-                errs,
+                prepared.effectiveTrace,
+                prepared.errors,
                 isPlanOnly,
                 isDryRun
             )
 
             InteractionMode.CLAUDE_CODE -> dispatchClaudeCodeMessage(
                 userInput,
-                effectiveTrace,
-                errs,
+                prepared.effectiveTrace,
+                prepared.errors,
                 isPlanOnly,
-                effectivePromptName,
-                images = imgs
+                prepared.effectivePromptName,
+                images = prepared.images
             )
         }
     }
@@ -634,21 +627,13 @@ class ChatMessageController(
         images: List<AttachedImage> = emptyList()
     ) = claudeCodeDispatcher.dispatchMessage(userInput, trace, errs, isPlanOnly, selectedSpecificPromptName, images)
 
-    /** One-shot editor-skill invocation armed by ChatPanel.acceptPrefill; consumed and cleared by the next send. */
-    private class PendingOneShot(val skillName: String?, val elementContext: String?, val label: String)
-
-    /** Armed one-shot editor skill/context; null when nothing is pending. */
-    private var pendingOneShot: PendingOneShot? = null
-
-    /** Arms a one-shot editor skill and/or element context for the next send (editor actions). */
     fun armOneShot(skillName: String?, elementContext: String?, label: String) {
-        pendingOneShot = PendingOneShot(skillName, elementContext, label)
+        pendingContext.armOneShot(skillName, elementContext, label)
         callbacks.onOneShotChanged(label)
     }
 
-    /** Cancels the armed one-shot skill (chip close button). */
     fun clearOneShot() {
-        pendingOneShot = null
+        pendingContext.clearOneShot()
         callbacks.onOneShotChanged(null)
     }
 }
