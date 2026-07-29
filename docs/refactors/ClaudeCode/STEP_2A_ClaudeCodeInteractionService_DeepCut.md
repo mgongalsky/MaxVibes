@@ -1,85 +1,240 @@
 # STEP 2A — Глубокая нарезка ClaudeCodeInteractionService
 
-Статус: ВЫПОЛНЕН (2026-07-28). Продолжение STEP 2. Дизайн-решения согласованы с пользователем.
+Статус: ВЫПОЛНЕН 2026-07-29.
 
-## Проблема
+## Цель
 
-STEP 2 выполнен: извлечены `ProtocolConverter`, `PendingModificationsStore`, `TokenEstimator`,
-добавлена сценарная матрица (7 тестов на фейках). Но DoD по размеру не достигнут: сервис —
-**971 строка** при цели ~700. Файл вырос со времени написания плана (questions, diagram,
-shell-команды, attached images, planner panel), и крупные конвейеры остались внутри.
+Превратить `ClaudeCodeInteractionService` из крупного application-сервиса, который одновременно управлял workspace, transport, response protocol, requested views и approvals, в тонкий фасад над отдельными компонентами с явными границами ответственности.
 
-## Согласованный дизайн
+Исходная точка этого этапа после предыдущего рефакторинга: **865 строк**.
 
-### Решение 1: ResponseProcessor — чистая функция (выбрано пользователем)
+Финальный размер фасада: **278 строк**.
 
-`ClaudeCodeResponseProcessor` НЕ делает побочных эффектов: принимает `InteractionResponse`
-+ `Context` и возвращает `Outcome(result, intents)`. Итоговый состав Intent (по фактическому
-телу processResponse):
+Сокращение: **587 строк**, или примерно **68%**.
 
-```kotlin
-sealed interface Intent {
-data class SavePlan(val plan: TaskPlan?)                  // null = очистка; только если response.plan != null
-data class AppendAssistantHistory(val message: String)
-data class PersistRequestedViews(val views: List<CodeViewRequest>)
-data class Transition(val hasRequestedViews: Boolean)     // ClipboardEvent.ResponseReceived
-data class HoldPending(val modifications, val commands, val commitMessage)
-}
-```
+Публичный API сохранён:
 
-Сервис исполняет намерения одним интерпретатором строго в порядке списка
-(SavePlan → AppendAssistantHistory → PersistRequestedViews → Transition → HoldPending) —
-порядок воспроизводит порядок побочных эффектов до извлечения и прибит тестами.
-Логирование/sessionLog остались в сервисе (наблюдаемость, не поведение).
+- `handleUserInput`
+- `approve`
+- `submitCommandResults`
+- `status`
+- `reset`
 
-### Решение 2: сначала пиновые тесты (выбрано пользователем)
+## Итоговая конфигурация
 
-До выноса допинованы ветки, которые сценарная матрица STEP 2 не покрывала:
-plan-снапшот (замена/очистка/отсутствие), diagram, questions, персист requestedViews,
-thinking+reasoning, blank message → "Done.", planOnly.
+`text
+ClaudeCodeInteractionService
+├── ClaudeCodeWorkspaceService
+├── ClaudeCodeViewResolver
+├── ClaudeCodeTurnExecutor
+├── ClaudeCodeResponseHandler
+├── ClaudeCodeApprovalService
+├── PendingModificationsStore
+└── ClipboardSessionManager
+`
 
-## Результаты
+### ClaudeCodeInteractionService
 
-| Шаг | Что сделано | Итог |
-|-----|-------------|------|
-| 2A.1 | 11 пиновых тестов через handleUserInput (`ClaudeCodeInteractionServicePinTest`) | 214/214 зелёные |
-| 2A.2 | `ClaudeCodeResponseProcessor` (чистая функция + Intent) + 10 табличных тестов; processResponse → интерпретатор | 224/224 без правки существующих ассертов |
-| 2A.3 | `ClaudeCodeRequestFactory`: один параметр `fullContext` разворачивается в isFirstMessage+addHistory (рассинхрон флагов невозможен); PLAN_ONLY_SUFFIX и omitSystemInstruction=true — в фабрике; buildRequest и companion удалены | 224/224 |
-| 2A.4 | `ClaudeCodeWorkspaceHolder`: state+owner с атомарными install/clear, isOwnedBy; sessionState/sessionStateOwner — read-only алиасы; ensureWorkspace ставит workspace через install; + 4 юнит-теста инварианта | 228/228 |
-| 2A.5 | Полный `gradlew test` (application 228, plugin 105, adapter-llm 10 — всё зелёное), замер размера | **865 строк** |
+Тонкий application facade.
 
-### DoD по размеру: НЕ достигнут
+Отвечает только за:
 
-Цель была ≤ ~500–600 строк, факт — 865 (971 → 865). Крупные остатки в сервисе:
-`approve` и `submitCommandResults` (конвейеры применения модификаций и команд),
-интерпретатор intents + деривация WARN-логов (~80 строк), `doSend` с resume-fallback (~140 строк),
-`handleUserInput`/`startOrContinue` (оркестрация), `ensureWorkspace` (тело осталось в сервисе,
-холдеру отдана только установка владения — перенос тела тянул бы зависимости портов в холдер).
+- маршрутизацию публичных операций;
+- выбор сценария по `ClipboardSessionStatus`;
+- координацию extracted-компонентов;
+- последовательность workspace → turn execution → response handling;
+- lifecycle reset.
 
-Варианты дальнейшего движения (решение за пользователем): принять 865 как новый DoD;
-отдельный шаг 2B (approve-конвейер, transport-цикл doSend); дешёвый срез — WARN-деривация
-в Outcome процессора.
+Фасад больше не содержит реализации transport, восстановления workspace, интерпретации response intents, разрешения views или применения modifications.
 
-## Инварианты и запреты (соблюдены)
+### ClaudeCodeWorkspaceService
 
-1. **Поведение не изменилось.** Существующие тесты не редактировались под новое поведение.
-Принятая микро-девиация: sessionLog-событие "response" логирует raw `response.commands.size`
-(до конвертации) — зафиксировано осознанно.
-2. **`ClipboardInteractionService` не тронут.** Расхождение его `estimateTokens` — НЕ баг для 2A.
-3. Новые классы — в `com.maxvibes.application.service`, без новых межмодульных зависимостей.
+Единственный владелец активного `ClipboardSessionState`.
 
-## Итоговая структура
+Отвечает за:
 
-- **Оркестратор**: `ClaudeCodeInteractionService` (865) — handleUserInput / approve / submitCommandResults / status / reset + doSend + интерпретатор Intent.
-- **Response-конвейер**: `ClaudeCodeResponseProcessor` (чистый) + `PendingModificationsStore` + `ProtocolConverter`.
-- **Request-сборка**: `ClaudeCodeRequestFactory` + `InteractionRequestBuilder` + `TokenEstimator`.
-- **Workspace**: `ClaudeCodeWorkspaceHolder` (инвариант владения, юнит-тесты).
-- **Общее**: `ClipboardSessionManager`, `ClaudeCodePort` — без изменений.
+- создание workspace для первого сообщения;
+- продолжение существующей сессии;
+- восстановление workspace из `ChatSessionRepository` после перезапуска IDE;
+- владение `state` и `owner`;
+- добавление USER и ASSISTANT сообщений в transport-history;
+- очистку workspace.
 
-## Тестовые активы
+### ClaudeCodeViewResolver
 
-- `ClaudeCodeInteractionServicePinTest` — 11 пинов протокольных веток.
-- `ClaudeCodeInteractionServiceScenarioTest` — 7 сценариев полного цикла.
-- `ClaudeCodeResponseProcessorTest` — 10 табличных тестов чистой функции.
-- `ClaudeCodeWorkspaceHolderTest` — 4 теста инварианта владения.
-- `TokenEstimatorTest` — 4 теста оценки токенов.
+Разрешает запрошенный LLM контекст из трёх источников:
+
+- `FULL` через `ProjectContextPort`;
+- `SIGNATURES`, `OUTLINE`, `ELEMENT` через `CodeRepository`;
+- `SKILL` через `SpecificPromptService`.
+
+Также обновляет `allGatheredFiles` workspace для полных файлов.
+
+### ClaudeCodeTurnExecutor
+
+Полностью владеет одним transport-turn.
+
+Отвечает за:
+
+- сборку `ClipboardRequest` через `ClaudeCodeRequestFactory`;
+- вычисление full/minimal context policy;
+- `ensureStarted` и resume существующей Claude session;
+- fallback на fresh start после `ResumeFailed`;
+- повторную сборку full-context request после resume failure;
+- вызов `ClaudeCodePort.send`;
+- token accounting и transport metrics;
+- сохранение `claudeCodeSessionId` и `claudeCodeNeedsFullContext`;
+- преобразование transport errors в `ClaudeCodeStepResult.TransportError`;
+- shutdown transport.
+
+Успешный transport-result нормализуется в `ReceivedClaudeTurn`.
+
+### ClaudeCodeResponseHandler
+
+Интерпретатор side-effect intents, созданных чистым `ClaudeCodeResponseProcessor`.
+
+Отвечает за:
+
+- обновление и очистку плана;
+- добавление assistant history;
+- persistence `requestedViews` в последнее ASSISTANT-сообщение;
+- переходы `ClipboardSessionManager`;
+- помещение modifications и commands в `PendingModificationsStore`;
+- protocol warnings для смешанных response branches;
+- session logging response-событий.
+
+Сам выбор protocol-ветки остаётся чистой функцией в `ClaudeCodeResponseProcessor`.
+
+### ClaudeCodeApprovalService
+
+Владеет approval semantics.
+
+Отвечает за:
+
+- approve запрошенных views;
+- восстановление workspace перед approve;
+- построение continuation `ClaudeCodeTurnCommand`;
+- approve pending modifications;
+- применение converted modifications через `CodeRepository`;
+- release удержанных commands и commit message;
+- rejection pending modifications при вводе нового сообщения;
+- формирование feedback-prefix для следующего turn.
+
+### Команды сценариев
+
+Введены отдельные модели:
+
+- `UserInputCommand` — user-originated turn;
+- `ClaudeCodeTurnCommand` — transport-level turn;
+- `ReceivedClaudeTurn` — нормализованный успешный transport-result.
+
+Они устранили длинные списки позиционных параметров между компонентами и закрепили границы сценариев.
+
+## Основные потоки
+
+### Первый user turn
+
+`text
+Facade
+→ WorkspaceService.start
+→ ViewResolver.gatherFullFiles для global context
+→ TurnExecutor.execute с full context
+→ ResponseHandler.handle
+`
+
+### Последующий user turn
+
+`text
+Facade
+→ WorkspaceService.continueSession
+→ TurnExecutor.execute с minimal context
+→ ResponseHandler.handle
+`
+
+### Approve requested views
+
+`text
+Facade.approve
+→ ApprovalService.approve
+→ WorkspaceService.ensure
+→ ViewResolver.resolve
+→ ClaudeCodeTurnCommand
+→ TurnExecutor.execute
+→ ResponseHandler.handle
+`
+
+### Approve modifications
+
+`text
+Facade.approve
+→ ApprovalService.approve
+→ PendingModificationsStore.take
+→ ProtocolConverter
+→ CodeRepository.applyModifications
+→ Completed с commands и commitMessage
+`
+
+### Resume failure
+
+`text
+TurnExecutor.ensureStarted old session
+→ ResumeFailed
+→ persisted session marked for full replay
+→ fresh ensureStarted
+→ request rebuilt with full context
+→ send
+→ observed new Claude session persisted
+`
+
+## Инварианты
+
+1. Первый turn содержит full context; обычные продолжения содержат только delta.
+2. После `ResumeFailed` выполняется fresh start с полным replay контекста.
+3. Requested views не читаются без user approval.
+4. Modifications не применяются без user approval.
+5. Pending modifications отклоняются новым user message и не применяются.
+6. Commands, пришедшие вместе с modifications, удерживаются до успешного approval.
+7. Workspace имеет одного owner и не должен использоваться другой сессией без restore.
+8. Response protocol выбирается чистым `ClaudeCodeResponseProcessor`.
+9. Extracted-компоненты находятся в application layer и не зависят от IntelliJ API.
+10. `ClipboardInteractionService` этим этапом не изменялся.
+
+## Проверка поведения
+
+Перед extraction были добавлены characterization tests для ключевых сквозных контрактов:
+
+- full context первого turn и minimal continuation;
+- resume fallback с полным replay;
+- approve pending modifications и release commands;
+- rejection modifications новым сообщением;
+- restore workspace при approve;
+- разрешение FULL и SIGNATURES views;
+- minimal continuation для command results.
+
+После каждого extraction запускались эти 6 сценариев.
+
+После завершения рефакторинга выполнен полный набор тестов `maxvibes-application` — все тесты зелёные.
+
+## Изменение размера фасада
+
+| Стадия | Строк |
+|---|---:|
+| Начало deep-cut | 865 |
+| После TurnExecutor | 526 |
+| После WorkspaceService | 448 |
+| После ApprovalService | 335 |
+| Финальный thin facade | 278 |
+
+## Что сознательно не делалось
+
+- Не объединялись extracted-компоненты в новый service-combine.
+- Не менялся публичный API фасада.
+- Не переписывался protocol под новые semantics.
+- Не переносились application concerns во внешние адаптеры.
+- Не заменялись characterization tests моками внутренних компонентов.
+
+## Следующий этап
+
+Продолжение описано в `STEP_2B_Component_Hardening.md`.
+
+Цель следующего этапа — покрыть каждый extracted-компонент чистыми изолированными unit-тестами, чтобы characterization suite оставался сквозной страховкой, а локальные контракты компонентов были проверены напрямую.
