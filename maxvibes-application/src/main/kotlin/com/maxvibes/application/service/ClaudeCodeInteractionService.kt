@@ -15,8 +15,6 @@ import com.maxvibes.application.port.output.PromptPort
 import com.maxvibes.application.port.output.PromptTemplates
 import com.maxvibes.domain.model.chat.MessageRole
 import com.maxvibes.domain.model.code.CodeViewRequest
-import com.maxvibes.domain.model.code.RequestedViewInfo
-import com.maxvibes.domain.model.command.CommandRequest
 import com.maxvibes.domain.model.interaction.ClipboardRequest
 import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 import com.maxvibes.domain.model.interaction.InteractionModification
@@ -24,7 +22,6 @@ import com.maxvibes.domain.model.interaction.InteractionResponse
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.shared.result.Result
 import com.maxvibes.domain.model.interaction.AttachedImage
-import com.maxvibes.domain.model.planning.TaskPlan
 
 /**
  * Application-layer service that orchestrates the Claude Code dialog mode.
@@ -110,6 +107,13 @@ class ClaudeCodeInteractionService(
         codeRepository = codeRepository,
         specificPromptService = specificPromptService,
         notificationPort = notificationPort,
+        logger = logger
+    )
+    private val responseHandler = ClaudeCodeResponseHandler(
+        chatSessionRepository = chatSessionRepository,
+        sessionManager = sessionManager,
+        pendingStore = pendingStore,
+        sessionLog = sessionLog,
         logger = logger
     )
 
@@ -490,16 +494,19 @@ class ClaudeCodeInteractionService(
                     )
                 }
                 val stats = payload.stats
-                processResponse(
+                responseHandler.handle(
                     sessionId = sessionId,
-                    response = payload.response,
-                    inputTokens = stats?.inputTokens?.takeIf { it > 0 } ?: totalTokens,
-                    outputTokens = stats?.outputTokens?.takeIf { it > 0 }
-                        ?: estimateOutputTokens(payload.response),
-                    thinkingText = payload.thinkingText,
-                    durationMs = stats?.durationMs?.takeIf { it > 0 } ?: durationMs,
-                    costUsd = stats?.costUsd?.takeIf { it > 0.0 },
-                    numTurns = stats?.numTurns?.takeIf { it > 0 }
+                    turn = ReceivedClaudeTurn(
+                        response = payload.response,
+                        inputTokens = stats?.inputTokens?.takeIf { it > 0 } ?: totalTokens,
+                        outputTokens = stats?.outputTokens?.takeIf { it > 0 }
+                            ?: estimateOutputTokens(payload.response),
+                        thinkingText = payload.thinkingText,
+                        durationMs = stats?.durationMs?.takeIf { it > 0 } ?: durationMs,
+                        costUsd = stats?.costUsd?.takeIf { it > 0.0 },
+                        numTurns = stats?.numTurns?.takeIf { it > 0 }
+                    ),
+                    state = state
                 )
             }
 
@@ -517,112 +524,6 @@ class ClaudeCodeInteractionService(
                 )
             }
         }
-    }
-
-    private suspend fun processResponse(
-        sessionId: String,
-        response: InteractionResponse,
-        inputTokens: Int,
-        outputTokens: Int,
-        thinkingText: String? = null,
-        durationMs: Long = 0L,
-        costUsd: Double? = null,
-        numTurns: Int? = null
-    ): ClaudeCodeStepResult {
-        val state = sessionState ?: return error("No active workspace")
-
-        log(
-            "Processing response: hasViews=${response.codeViewRequests.isNotEmpty()}, " +
-                    "hasMods=${response.modifications.isNotEmpty()}, hasQuestions=${response.questions.isNotEmpty()}, " +
-                    "commands=${response.commands.size}, msg=${response.message.take(60)}"
-        )
-        sessionLog?.event(
-            "response",
-            mapOf(
-                "hasViews" to response.codeViewRequests.isNotEmpty(),
-                "hasMods" to response.modifications.isNotEmpty(),
-                "questions" to response.questions.size,
-                "commands" to response.commands.size,
-                "msgLen" to response.message.length,
-                "thinkingLen" to (thinkingText?.length ?: 0)
-            )
-        )
-
-        val outcome = ClaudeCodeResponseProcessor.process(
-            response,
-            ClaudeCodeResponseProcessor.Context(
-                planOnly = state.planOnly,
-                inputTokens = inputTokens,
-                outputTokens = outputTokens,
-                thinkingText = thinkingText,
-                durationMs = durationMs,
-                costUsd = costUsd,
-                numTurns = numTurns
-            )
-        )
-
-        outcome.intents.forEach { intent ->
-            when (intent) {
-                is ClaudeCodeResponseProcessor.Intent.SavePlan ->
-                    chatSessionRepository.getSessionById(sessionId)?.let { current ->
-                        chatSessionRepository.saveSession(current.withPlan(intent.plan))
-                        log(if (intent.plan != null) "Plan updated: ${intent.plan.steps.size} step(s), done=${intent.plan.doneCount}" else "Plan cleared")
-                        sessionLog?.event("plan updated", mapOf("steps" to (intent.plan?.steps?.size ?: 0)))
-                    }
-
-                is ClaudeCodeResponseProcessor.Intent.AppendAssistantHistory ->
-                    addToHistory(ChatRole.ASSISTANT, intent.message)
-
-                is ClaudeCodeResponseProcessor.Intent.PersistRequestedViews ->
-                    persistRequestedViewsIntoDomain(sessionId, intent.views)
-
-                is ClaudeCodeResponseProcessor.Intent.Transition ->
-                    sessionManager.transition(
-                        sessionId,
-                        ClipboardEvent.ResponseReceived(hasRequestedViews = intent.hasRequestedViews)
-                    )
-
-                is ClaudeCodeResponseProcessor.Intent.HoldPending -> {
-                    pendingStore.hold(
-                        sessionId = sessionId,
-                        modifications = intent.modifications,
-                        commands = intent.commands,
-                        commitMessage = intent.commitMessage
-                    )
-                    log("Holding ${intent.modifications.size} modification(s) and ${intent.commands.size} command(s) for user approval")
-                    sessionLog?.event(
-                        "modifications held for approval",
-                        mapOf("mods" to intent.modifications.size, "commands" to intent.commands.size)
-                    )
-                }
-            }
-        }
-
-        when (val r = outcome.result) {
-            is ClaudeCodeStepResult.AwaitingModApprove ->
-                if (r.skippedViews > 0) {
-                    log("WARN: response mixed modifications with ${r.skippedViews} view request(s) — views skipped per protocol")
-                    sessionLog?.event("views skipped (mixed with modifications)", mapOf("count" to r.skippedViews))
-                }
-
-            is ClaudeCodeStepResult.WaitingForApprove ->
-                if (r.skippedCommands > 0) {
-                    log("WARN: response mixed requestedViews with ${r.skippedCommands} command(s) — commands skipped per protocol")
-                    sessionLog?.event(
-                        "commands skipped (mixed with requestedViews)",
-                        mapOf("count" to r.skippedCommands)
-                    )
-                }
-
-            is ClaudeCodeStepResult.AwaitingQuestions -> {
-                log("LLM asked ${r.questions.size} question(s) - awaiting user answer")
-                sessionLog?.event("questions received", mapOf("count" to r.questions.size))
-            }
-
-            else -> Unit
-        }
-
-        return outcome.result
     }
 
     /**
@@ -656,24 +557,6 @@ class ClaudeCodeInteractionService(
     }
 
     // ==================== Helpers ====================
-
-    /**
-     * Persists [codeViewRequests] from the LLM response into the last ASSISTANT message
-     * of the domain session as typed [RequestedViewInfo] entries. No-op if the session
-     * has no ASSISTANT message yet (e.g. response arrived before user message was committed).
-     */
-    private fun persistRequestedViewsIntoDomain(sessionId: String, codeViewRequests: List<CodeViewRequest>) {
-        val session = chatSessionRepository.getSessionById(sessionId) ?: return
-        val messages = session.messages.toMutableList()
-        val lastAssistantIdx = messages.indexOfLast { it.role == MessageRole.ASSISTANT }
-        if (lastAssistantIdx < 0) return
-        val requestedViews = codeViewRequests.map { rv ->
-            RequestedViewInfo(path = rv.filePath, granularity = rv.granularity, elementPath = rv.elementPath)
-        }
-        messages[lastAssistantIdx] = messages[lastAssistantIdx].copy(requestedViews = requestedViews)
-        chatSessionRepository.saveSession(session.copy(messages = messages))
-        log("Persisted ${requestedViews.size} requestedViews into domain message for session $sessionId")
-    }
 
     /**
      * Restores the in-memory [sessionState] from persisted domain data — used after IDE restart.
