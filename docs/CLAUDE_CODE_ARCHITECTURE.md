@@ -1,6 +1,6 @@
 # Claude Code dialog architecture
 
-        Актуальная архитектура Claude Code application pipeline после завершения STEP 2 A .
+Актуальная архитектура Claude Code application pipeline после завершения STEP 2A и STEP 2B.
 
 ## Общая схема
 
@@ -13,7 +13,6 @@ ClaudeCodeInteractionService
 ├── session routing ─────────────── ClipboardSessionManager
 │
 ├── workspace lifecycle ────────── ClaudeCodeWorkspaceService
-│                                      │
 │                                      └── ClaudeCodeWorkspaceHolder
 │
 ├── requested context ───────────── ClaudeCodeViewResolver
@@ -28,7 +27,7 @@ ClaudeCodeInteractionService
 │                                      └── ChatSessionRepository
 │
 ├── response semantics ──────────── ClaudeCodeResponseProcessor
-│                                      └── pure Outcome +Intent
+│                                      └── pure Outcome + Intent
 │
 ├── response side effects ───────── ClaudeCodeResponseHandler
 │                                      ├── ChatSessionRepository
@@ -42,109 +41,225 @@ ClaudeCodeInteractionService
 └── PendingModificationsStore
 `
 
-## Dependency direction
+## Границы ответственности
 
-        Все классы находятся в `maxvibes-application` и зависят только от:
+### `ClaudeCodeInteractionService`
 
--domain models;
--shared `Result`;
--application output ports;
--других application services с более узкой ответственностью.IntelliJ, process implementation, PSI implementation и persistence implementation остаются за output ports и адаптерами.
+Тонкий публичный application facade.
 
-## Владение состоянием
+Он отвечает за:
 
-### Persisted state
+- routing по `ClipboardSessionStatus`;
+- координацию workspace, executor, handler и approval service;
+- публичные entry points;
+- reset lifecycle.
 
-        `ChatSessionRepository` хранит :
+В нём не должна появляться внутренняя реализация transport, context resolution, restore, response semantics или modification application.
 
--domain messages;
--clipboard status;
--current plan;
--Claude session id;
--флаг необходимости полного replay;
--requested views внутри assistant messages.
+### `ClaudeCodeWorkspaceService`
 
-### In - memory state
+Единственный владелец активного in-memory workspace.
 
-        `ClaudeCodeWorkspaceService` владеет :
+Он отвечает за:
 
--активным `ClipboardSessionState`;
--owner session id;
--transport dialog history;
--набором уже собранных файлов;
--текущим `planOnly`;
--последней оценкой input tokens .
+- start;
+- continue;
+- restore;
+- ensure;
+- owner invariant;
+- dialog history;
+- clear.
 
-`PendingModificationsStore` отдельно владеет временным approval - набором:
+### `ClaudeCodeViewResolver`
 
--modifications;
--commands;
--commit message;
--owner session id.Оба хранилища являются in -memory и очищаются при reset.
-
-## Protocol boundary
-
-        `ClaudeCodeResponseProcessor` является чистой границей protocol semantics .
-
-Он принимает :
-
--`InteractionResponse`;
--immutable context turn metrics и `planOnly` .
-
-Он возвращает :
-
--конечный `ClaudeCodeStepResult`;
--упорядоченный список `Intent`.`ClaudeCodeResponseHandler` не выбирает protocol branch заново . Он только исполняет intents в заданном порядке .
-
-Это разделяет :
-
--решение, что означает response;
--выполнение persistence и state -machine side effects.
-
-## Transport boundary
-
-        `ClaudeCodeTurnExecutor` не знает approval semantics и не интерпретирует LLM response .
-
-Его контракт :
-
-`text
-ClaudeCodeTurnCommand + ClipboardSessionState
-→ Success ReceivedClaudeTurn
-        или
-→ Failure ClaudeCodeStepResult
-`
-
-Transport executor отвечает за корректность одного CLI turn, включая resume fallback.
-
-## Approval boundary
-
-        `ClaudeCodeApprovalService` возвращает один из двух outcomes :
-
--`Continue` с новым `ClaudeCodeTurnCommand`;
--`Immediate` с уже готовым `ClaudeCodeStepResult`.Таким образом, approval service не вызывает transport сам и не создаёт циклическую зависимость с фасадом или executor.
-
-## View resolution policy
+Единственная точка разрешения requested context:
 
 | Granularity | Источник |
-|---|-- - |
+|---|---|
 | FULL | `ProjectContextPort.gatherFiles` |
 | SIGNATURES | `CodeRepository.getCodeView` |
 | OUTLINE | `CodeRepository.getCodeView` |
 | ELEMENT | `CodeRepository.getCodeView` |
 | SKILL | `SpecificPromptService.resolveSkillBody` |
 
-Ошибка одного partial или skill view превращается в error - content для конкретного ключа .
+FULL failure останавливает continuation.
 
-Ошибка общего FULL gather возвращает `null` и останавливает continuation.
+Partial и SKILL failures возвращаются как локальный error-content.
 
-## Основные state transitions
+### `ClaudeCodeTurnExecutor`
+
+Владеет одним transport-level turn:
+
+`text
+ClaudeCodeTurnCommand + ClipboardSessionState
+→ Success ReceivedClaudeTurn
+или
+→ Failure ClaudeCodeStepResult
+`
+
+Он отвечает за:
+
+- request assembly;
+- full/minimal context policy;
+- process startup;
+- resume fallback;
+- send;
+- token and duration metrics;
+- Claude session persistence;
+- transport error mapping;
+- shutdown.
+
+### `ClaudeCodeResponseProcessor`
+
+Чистая protocol-функция.
+
+Она принимает `InteractionResponse` и immutable turn context, затем возвращает:
+
+- `ClaudeCodeStepResult`;
+- ordered side-effect intents.
+
+Она не вызывает persistence, state machine или UI ports.
+
+### `ClaudeCodeResponseHandler`
+
+Исполняет intents процессора в заданном порядке.
+
+Он отвечает за:
+
+- plan persistence;
+- assistant history;
+- requestedViews persistence;
+- state transitions;
+- pending modifications;
+- protocol warnings;
+- response observability.
+
+### `ClaudeCodeApprovalService`
+
+Владеет approve и reject semantics.
+
+Его результат:
+
+`text
+Immediate(ClaudeCodeStepResult)
+или
+Continue(ClaudeCodeTurnCommand)
+`
+
+Approval service не запускает transport самостоятельно.
+
+## Dependency direction
+
+Все классы находятся в `maxvibes-application` и зависят только от:
+
+- domain models;
+- shared `Result`;
+- application output ports;
+- application services с более узкой ответственностью.
+
+IntelliJ, PSI implementation, process implementation и persistence implementation находятся за output ports и адаптерами.
+
+## Владение состоянием
+
+### Persisted state
+
+`ChatSessionRepository` хранит:
+
+- domain messages;
+- clipboard status;
+- current plan;
+- Claude session id;
+- флаг необходимости полного replay;
+- requested views внутри assistant messages.
+
+### In-memory workspace
+
+`ClaudeCodeWorkspaceService` владеет:
+
+- активным `ClipboardSessionState`;
+- owner session id;
+- transport dialog history;
+- набором собранных файлов;
+- текущим `planOnly`;
+- последней оценкой input tokens.
+
+### Pending approval state
+
+`PendingModificationsStore` хранит:
+
+- modifications;
+- commands;
+- commit message;
+- owner session id.
+
+Workspace и pending store очищаются при reset.
+
+## Основные flow
+
+### Первый turn
+
+`text
+Facade
+→ WorkspaceService.start
+→ ViewResolver.gatherFullFiles для global context
+→ TurnExecutor.execute с full context
+→ ResponseHandler.handle
+`
+
+### Последующий turn
+
+`text
+Facade
+→ WorkspaceService.continueSession
+→ TurnExecutor.execute с minimal context
+→ ResponseHandler.handle
+`
+
+### Approve requested views
+
+`text
+Facade.approve
+→ ApprovalService.approve
+→ WorkspaceService.ensure
+→ ViewResolver.resolve
+→ Continue ClaudeCodeTurnCommand
+→ TurnExecutor.execute
+→ ResponseHandler.handle
+`
+
+### Approve modifications
+
+`text
+Facade.approve
+→ ApprovalService.approve
+→ PendingModificationsStore.take
+→ ProtocolConverter
+→ CodeRepository.applyModifications
+→ Immediate Completed
+`
+
+### Resume fallback
+
+`text
+TurnExecutor.ensureStarted old Claude session
+→ ResumeFailed
+→ persist claudeCodeSessionId=null
+→ persist claudeCodeNeedsFullContext=true
+→ fresh ensureStarted
+→ rebuild full-context request
+→ send
+→ persist observed new Claude session
+→ clear claudeCodeNeedsFullContext
+`
+
+## State transitions
 
 `text
 IDLE
 └── StartSession → SESSION_ACTIVE
 
 SESSION_ACTIVE
-├── response without requested approval → SESSION_ACTIVE
+├── normal response → SESSION_ACTIVE
 └── response requiring approval → AWAITING_APPROVE
 
 AWAITING_APPROVE
@@ -153,31 +268,124 @@ AWAITING_APPROVE
 └── Reset → IDLE
 `
 
-`AWAITING_PASTE` принадлежит shared clipboard state machine и для Claude Code facade считается ошибочным маршрутом .
+`AWAITING_PASTE` принадлежит shared clipboard state machine и является ошибочным route для Claude Code mode.
 
-## Testing layers
+## Testing architecture
 
-### Pure unit tests
+STEP 2B добавил **61 новый поведенческий тест**.
 
--`ClaudeCodeResponseProcessorTest`
--`ClaudeCodeWorkspaceHolderTest`
--component tests для ViewResolver, ResponseHandler, TurnExecutor, WorkspaceService и ApprovalService.
+| Test class | Количество | Уровень |
+|---|---:|---|
+| `ClaudeCodeViewResolverTest` | 9 | Direct component unit |
+| `ClaudeCodeResponseHandlerTest` | 10 | Direct component unit |
+| `ClaudeCodeTurnExecutorTest` | 11 | Direct component unit |
+| `ClaudeCodeWorkspaceServiceTest` | 12 | Direct component unit |
+| `ClaudeCodeApprovalServiceTest` | 13 | Direct component unit |
+| `ClaudeCodeInteractionServiceFacadeTest` | 6 | Facade boundary |
+| **Всего новых** | **61** | |
 
-### Facade characterization tests
+### Pure protocol layer
 
-`ClaudeCodeInteractionServiceCharacterizationTest` проверяет сквозные взаимодействия компонентов и публичный контракт фасада.
+Проверяет чистую трансформацию данных:
 
-### Regression suite
+- `ClaudeCodeResponseProcessorTest`;
+- ProtocolConverter tests;
+- `TokenEstimatorTest`.
 
-        Полный `maxvibes-application:test` проверяет отсутствие конфликтов с остальным application layer.
+### State invariant layer
+
+Проверяет локальные state containers:
+
+- `ClaudeCodeWorkspaceHolderTest`;
+- PendingModificationsStore tests.
+
+### Direct component layer
+
+Проверяет каждый extracted-компонент отдельно от фасада:
+
+- source routing и failures;
+- persistence;
+- state transitions;
+- transport lifecycle;
+- resume fallback;
+- workspace ownership;
+- approval semantics;
+- отсутствие запрещённых side effects.
+
+### Facade boundary layer
+
+`ClaudeCodeInteractionServiceFacadeTest` проверяет только публичные routing boundaries и reset lifecycle.
+
+Он сознательно не дублирует все внутренние component branches.
+
+### Facade characterization layer
+
+`ClaudeCodeInteractionServiceCharacterizationTest` сохраняет сквозные контракты:
+
+- full first turn;
+- minimal continuation;
+- resume fallback;
+- approve modifications;
+- reject modifications;
+- approve requested views;
+- command-results continuation.
+
+Дополнительно остаются существующие pin и scenario suites.
+
+### Full regression layer
+
+`text
+gradlew :maxvibes-application:test
+gradlew test
+`
+
+После STEP 2B оба уровня зелёные.
+
+## Shared test fixtures
+
+Переиспользуются:
+
+- `InMemoryChatSessionRepository`;
+- `RecordingClaudeCodePort`;
+- `RecordingNotificationPort`;
+- `RecordingClaudeCodeSessionLogPort`;
+- расширенный `FakeProjectContextPort`;
+- `FakePromptPort`.
+
+Recording fakes не содержат assertions и могут использоваться новыми component tests.
+
+## Инварианты, защищённые тестами
+
+1. Первый turn содержит full context.
+2. Нормальный continuation содержит только delta.
+3. Resume failure вызывает fresh start и full replay.
+4. Requested views не читаются без approval.
+5. Modifications не применяются без approval.
+6. Rejected modifications никогда не применяются.
+7. Held commands освобождаются только после approve.
+8. Workspace имеет одного owner.
+9. Failed restore не уничтожает workspace другой session.
+10. FULL view failure останавливает continuation.
+11. Partial view failure не блокирует остальные views.
+12. Response semantics выбираются чистым processor.
+13. Handler исполняет intents, но не пересчитывает protocol branch.
+14. ApprovalService не вызывает transport.
+15. Facade остаётся orchestration boundary.
 
 ## Правило будущих изменений
 
-Новая логика должна добавляться в компонент, который владеет соответствующей ответственностью :
+Новая логика добавляется в компонент, владеющий соответствующей ответственностью:
 
--workspace и restore → WorkspaceService;
--чтение context → ViewResolver;
--CLI lifecycle и request execution → TurnExecutor;
--interpretation side effects → ResponseHandler;
--approve / reject / apply → ApprovalService;
--только маршрутизация публичного use case → InteractionService.Если изменение требует правок сразу в нескольких компонентах, сначала следует определить новый явный command или outcome, а не возвращать логику обратно в фасад.
+- workspace и restore → `ClaudeCodeWorkspaceService`;
+- requested context → `ClaudeCodeViewResolver`;
+- CLI lifecycle и request execution → `ClaudeCodeTurnExecutor`;
+- response side effects → `ClaudeCodeResponseHandler`;
+- approve/reject/apply → `ClaudeCodeApprovalService`;
+- protocol decision → `ClaudeCodeResponseProcessor`;
+- публичная маршрутизация → `ClaudeCodeInteractionService`.
+
+Каждое изменение должно сопровождаться тестом на минимально возможном уровне.
+
+Facade characterization test добавляется только тогда, когда меняется сквозной публичный контракт.
+
+Нельзя возвращать component logic обратно в фасад ради удобства реализации.

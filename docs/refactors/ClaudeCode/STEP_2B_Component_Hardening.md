@@ -1,326 +1,302 @@
-# STEP 2 B — Claude Code component hardening
+# STEP 2B — Claude Code component hardening
 
-Статус: В РАБОТЕ .
+Статус: ВЫПОЛНЕН 2026-07-29.
 
 ## Цель
 
-После STEP 2 A крупный `ClaudeCodeInteractionService` разделён на независимые application -компоненты.Сквозное поведение защищено characterization tests, однако локальные контракты extracted -классов пока проверяются преимущественно косвенно через фасад.Цель STEP 2 B — создать фундаментальный набор чистых unit -тестов для каждого компонента .
+После STEP 2A крупный `ClaudeCodeInteractionService` был разделён на независимые application-компоненты. Сквозное поведение уже защищали characterization tests, но локальные контракты extracted-классов проверялись преимущественно косвенно через фасад.
 
-Тесты должны :
+Цель STEP 2B — создать фундаментальный набор чистых unit-тестов для каждого нового компонента и закрепить тонкую границу фасада.
 
--создавать только тестируемый класс и его непосредственные зависимости;
--не запускать весь facade pipeline без необходимости;
--точно проверять возвращаемое значение;
--точно проверять state changes;
--проверять persistence calls;
--проверять отсутствие запрещённых side effects;
--покрывать ошибки и пограничные ветки;
--использовать единые fixtures и recording fakes .
+## Итог
 
-## Почему characterization tests недостаточно
+Добавлен **61 новый поведенческий тест**:
 
-        Characterization suite отвечает на вопрос:
+| Компонент | Новых тестов | Основное покрытие |
+|---|---:|---|
+| `ClaudeCodeViewResolver` | 9 | FULL, partial, SKILL, failures, mixed sources |
+| `ClaudeCodeResponseHandler` | 10 | intents, history, transitions, persistence, pending state |
+| `ClaudeCodeTurnExecutor` | 11 | request policy, transport, resume fallback, persistence, shutdown |
+| `ClaudeCodeWorkspaceService` | 12 | start, continue, restore, ownership, ensure, clear |
+| `ClaudeCodeApprovalService` | 13 | reject, views approval, modifications approval, failures |
+| `ClaudeCodeInteractionService` facade | 6 | public routing boundaries, invalid states, reset |
+| **Всего** | **61** | |
 
-> Сохранился ли общий публичный сценарий после рефакторинга?
+Все существовавшие characterization, scenario, pin и pure-function tests сохранены без ослабления assertions.
 
-Component unit tests должны отвечать на другие вопросы :
+Полный `gradlew test` после завершения этапа — зелёный.
 
--Каков точный контракт конкретного класса?
--Какая зависимость вызывается и с какими аргументами?
--Какие зависимости не должны вызываться?
--Как компонент ведёт себя на локальной ошибке?
--Каким остаётся state после частичного failure ?
--Какие данные персистятся до и после fallback?
+## Общая test-support инфраструктура
 
-Оба слоя тестов сохраняются .
+Созданы четыре переиспользуемых recording fake:
 
-## Общая тестовая инфраструктура
+### `InMemoryChatSessionRepository`
 
-Планируется вынести в `com.maxvibes.application.testsupport` :
+Поддерживает:
 
-### InMemoryChatSessionRepository
+- setup с начальными sessions;
+- прямой `put` без регистрации persistence-вызова;
+- хранение актуальных sessions;
+- ordered `savedSessions`;
+- `lastSavedSession`;
+- запись удалённых session ids;
+- active session;
+- global context files.
 
-Функции:
+### `RecordingClaudeCodePort`
 
--хранение sessions;
--фиксация каждого `saveSession`;
--управление active session;
--global context files;
--удобный доступ к последнему persisted snapshot .
+Поддерживает:
 
-### RecordingClaudeCodePort
+- очередь результатов `ensureStarted`;
+- очередь результатов `send`;
+- запись resume ids и system prompts;
+- запись всех `ClipboardRequest`;
+- готовый helper `enqueueResponse`;
+- счётчики `shutdown` и `abort`;
+- управляемый exception при shutdown.
 
-Функции:
+### `RecordingNotificationPort`
 
--очередь результатов `ensureStarted`;
--очередь результатов `send`;
--запись resume ids и system prompts;
--запись всех `ClipboardRequest`;
--счётчик `shutdown`;
--возможность выбросить exception при shutdown.
+Записывает:
 
-### RecordingNotificationPort
+- progress notifications;
+- success notifications;
+- warnings;
+- errors;
+- confirmation requests и ответы.
 
-Фиксирует:
+### `RecordingClaudeCodeSessionLogPort`
 
--progress messages;
--success messages;
--warnings;
--отсутствие лишних notifications.
+Записывает:
 
-### RecordingClaudeCodeSessionLogPort
+- `begin` calls;
+- ordered events и payloads;
+- outbound lines;
+- inbound lines;
+- stderr lines;
+- test log paths.
 
-Фиксирует:
+Дополнительно расширен `FakeProjectContextPort`:
 
--`begin` calls;
--ordered events;
--event payloads .
+- счётчиком `getProjectContext`;
+- управляемым `projectContextError`;
+- управляемым `gatherFilesError`;
+- записью списков запрошенных paths.
 
-### Test builders
+## Покрытие `ClaudeCodeViewResolver`
 
-        Нужны компактные builders для :
+Добавлено 9 unit-тестов.
 
--`ChatSession`;
--`ChatMessage`;
--`ClipboardSessionState`;
--`InteractionResponse`;
--requested views;
--pending modifications;
--transport success payloads.Builders должны создавать минимально валидные объекты и позволять явно переопределить только важные для теста поля.
+Проверено:
 
-## Матрица unit -тестов
+1. Пустой FULL-список возвращает empty map без вызовов и notifications.
+2. Успешный FULL gather возвращает точную map.
+3. FULL gather обновляет `state.allGatheredFiles`.
+4. Повторный gather заменяет tracked content существующего path.
+5. Ошибка FULL gather возвращает `null` и не мутирует tracked files.
+6. Partial request передаётся в `CodeRepository` без изменения granularity и `elementPath`.
+7. Exception одного partial view превращается в локальный error-content и не блокирует остальные views.
+8. Известный и неизвестный SKILL разрешаются без чтения code repository.
+9. FULL, partial и SKILL корректно объединяются в mixed-source response.
 
-## 1.ClaudeCodeViewResolverTest
+Главный закреплённый контракт:
 
-### FULL views
-
-        -пустой список не вызывает `gatherFiles` и возвращает empty map;
--успешный gather возвращает точную map;
--успешный gather добавляет файлы в `state.allGatheredFiles`;
--повторный gather обновляет существующий tracked file;
--failure возвращает `null`;
--failure не мутирует tracked files;
--progress notification отправляется только для непустого списка.
-
-### Partial views
-
-        -SIGNATURES передаётся в `CodeRepository` без потери `elementPath`;
--OUTLINE передаётся без изменения;
--ELEMENT передаётся без изменения;
--content возвращается под исходным file path;
--exception одного view превращается в error -content только для этого файла;
--exception одного view не блокирует остальные views.
-
-### SKILL views
-
-        -существующий skill возвращается под ключом `skill:name`;
--неизвестный skill возвращает понятный error - content;
--отсутствие `SpecificPromptService` обрабатывается как неизвестный skill;
--skill request не вызывает `CodeRepository` и `ProjectContextPort`.
-
-### Mixed requests
-
-        -FULL, partial и SKILL объединяются в одну map;
--источники вызываются только для своих granularity;
--collision policy фиксируется тестом .
-
-## 2.ClaudeCodeResponseHandlerTest
-
-### History и transition
-
--text response добавляет assistant history;
--blank response не добавляет history;
--completed response переводит state machine в SESSION_ACTIVE;
--view response переводит в AWAITING_APPROVE.
-
-### Requested views persistence
-
--views сохраняются в последнее ASSISTANT - сообщение;
--более ранние assistant messages не изменяются;
--отсутствие assistant message является no - op;
--отсутствие session является no -op;
--`elementPath` и granularity сохраняются без потери .
-
-### Plan persistence
-
-        -новый plan сохраняется;
--empty plan очищает persisted plan;
--response без plan не вызывает save plan branch .
-
-### Pending modifications
-
-        -modifications, commands и commit message удерживаются вместе;
--owner pending store соответствует session id;
--mixed modifications +views не персистят views;
--planOnly не создаёт pending set.
-
-### Observability
-
--response event содержит raw branch counts;
--mixed views +commands создаёт warning event;
--mixed modifications +views создаёт warning event;
--questions создают questions event .
-
-## 3.ClaudeCodeTurnExecutorTest
-
-### Request policy
-
-        -first message создаёт full -context request;
--normal continuation создаёт minimal request;
--persisted `claudeCodeNeedsFullContext` принудительно включает full context;
--fresh files, attachments, IDE errors, specific prompt и command results передаются без потери;
--current plan передаётся в request factory .
-
-### Process startup
-
-        -существующий Claude session id передаётся в `ensureStarted`;
--отсутствие session id запускает fresh process;
--system prompt берётся из workspace state;
--ensure failure не вызывает `send`.
-
-### Resume fallback
-
-        -`ResumeFailed` вызывает второй `ensureStarted` с null;
--перед fresh retry persisted session временно помечается для full replay;
--request пересобирается с full context;
--второй ensure failure возвращается как transport error;
--успешный retry сохраняет новый observed session id;
--после success `claudeCodeNeedsFullContext` очищается .
-
-### Send result
-
-        -transport stats имеют приоритет над estimates;
--нулевые stats заменяются estimates;
--thinking text сохраняется;
--measured duration используется без transport duration;
--send failure маппится на правильный message для каждого `ClaudeCodeError`;
--отсутствующая domain session возвращает Error и не трогает transport.
-
-### Lifecycle
-
--shutdown делегируется transport;
--exception shutdown подавляется;
--shutdown exception логируется.
-
-## 4.ClaudeCodeWorkspaceServiceTest
-
-### Start
-
--project context failure возвращает Failure и не устанавливает workspace;
--успешный start устанавливает owner;
--state содержит current message, project context и prompts;
--supplied history копируется;
--USER message добавляется после supplied history;
--`planOnly` сохраняется;
--progress notification отправляется.
-
-### Continue owned session
-
--current message обновляется;
--USER history дополняется;
--существующие gathered files сохраняются;
--planOnly обновляется;
--restore не вызывается.
-
-### Restore
-
--persisted USER и ASSISTANT messages восстанавливаются в правильном порядке;
--другие domain roles не попадают в dialog history;
--последнее USER сообщение становится current message;
--owner устанавливается в восстанавливаемый session id;
--project context failure возвращает false;
--отсутствующая session возвращает false;
--session без USER message возвращает false;
--restored planOnly устанавливается в false.
-
-### Ensure и clear
-
--owned workspace возвращает true без repository / context calls;
--чужой owner вызывает restore;
--clear удаляет state и owner;
--appendAssistantHistory добавляет ровно одно сообщение.
-
-## 5.ClaudeCodeApprovalServiceTest
-
-### Reject pending
-
-        -отсутствие pending возвращает null и не меняет status;
--pending set удаляется;
--status возвращается в SESSION_ACTIVE;
--feedback содержит число modifications;
--feedback содержит число удержанных commands;
--original user input находится после пустой строки;
--modifications не применяются;
--rejection event фиксирует counts .
-
-### Invalid approve
-
-        -approve вне AWAITING_APPROVE возвращает Error;
--invalid approve не читает views и не применяет modifications.
-
-### Approve requested views
-
--owned workspace используется без restore;
--отсутствующий workspace восстанавливается;
--restore failure возвращает Error;
--отсутствующая session возвращает Error;
--отсутствие assistant message возвращает Error;
--assistant без requested views возвращает Error;
--resolver failure возвращает Error;
--успешный approve возвращает Continue;
--continuation содержит fresh files и attached context fields;
--assistant content добавляется в transport history один раз;
--дубликат assistant content не добавляется;
--status становится SESSION_ACTIVE только после успешного resolution.
-
-### Approve modifications
-
-        -pending modifications конвертируются и применяются;
--invalid protocol modifications отбрасываются;
--success result возвращает commit message и held commands;
--partial failures дают `success=false`;
--success notification отправляется при полном успехе;
--warning notification отправляется при частичном failure;
--пустой converted list не вызывает repository;
--pending set удаляется после approve.
-
-## 6.Thin facade contract
-
-Фасад не нужно тестировать повторно на уровне каждой внутренней ветки .
-
-Оставляем и расширяем только важные boundary tests:
-
--публичные аргументы правильно превращаются в command objects;
--routing по каждому `ClipboardSessionStatus`;
--approve Continue вызывает transport turn;
--approve Immediate не вызывает transport;
--reset очищает workspace, pending store, state machine и shutdown transport;
--существующие characterization tests остаются зелёными.
-
-## Порядок реализации
-
-        1.Общие recording fakes и builders.2.`ClaudeCodeViewResolverTest`.3.`ClaudeCodeResponseHandlerTest`.4.`ClaudeCodeTurnExecutorTest`.5.`ClaudeCodeWorkspaceServiceTest`.6.`ClaudeCodeApprovalServiceTest`.7.Точечное усиление facade tests .
-8.Полный application regression suite .
-9.Полный project regression suite .
-
-## Правила этапа
-
-        1.Сначала тестируется текущее поведение .
-2.Production code не меняется ради удобства теста без отдельного обоснования .
-3.Если unit test обнаруживает вероятный баг, сначала добавляется characterization test текущего поведения .
-4.Один тест проверяет один контракт или одну связанную группу side effects.5.Tests не должны зависеть от порядка запуска.6.Shared fakes не должны содержать assertions внутри себя .
-7.Проверяется не только наличие ожидаемого вызова, но и отсутствие запрещённых вызовов.8.Для stateful компонентов каждый test получает новый instance .
-9.Никакой IntelliJ test fixture для этих application - компонентов не требуется.
+`text
+FULL failure останавливает continuation.
+Partial или SKILL failure локализуется внутри конкретного результата.
+`
+
+## Покрытие `ClaudeCodeResponseHandler`
+
+Добавлено 10 unit-тестов.
+
+Проверено:
+
+1. Text response добавляет ASSISTANT history.
+2. Blank response не добавляет пустое history-сообщение.
+3. Completed response оставляет session active.
+4. Requested views переводят session в `AWAITING_APPROVE`.
+5. Requested views сохраняются только в последнее domain ASSISTANT-сообщение.
+6. Отсутствие ASSISTANT-сообщения не создаёт искусственное domain message.
+7. Plan snapshot заменяет persisted plan.
+8. Empty plan очищает persisted plan.
+9. Modifications, commands и commit message удерживаются одним pending set.
+10. Plan-only, mixed views/commands и questions создают правильные results и session-log events.
+
+Главный закреплённый контракт:
+
+`text
+ClaudeCodeResponseProcessor выбирает protocol semantics.
+ClaudeCodeResponseHandler только исполняет ordered intents и side effects.
+`
+
+## Покрытие `ClaudeCodeTurnExecutor`
+
+Добавлено 11 unit-тестов.
+
+Проверено:
+
+1. Отсутствующая domain session возвращает application error без transport calls.
+2. Первый turn всегда создаёт full-context request.
+3. Обычный continuation создаёт minimal request.
+4. Fresh files, attached context, IDE errors, specific prompt и command results передаются без потери.
+5. `claudeCodeNeedsFullContext` принудительно включает full replay.
+6. Startup failure не вызывает `send`.
+7. `ResumeFailed` запускает второй fresh `ensureStarted` с null session id.
+8. После resume failure request пересобирается с полным контекстом.
+9. Failure второго старта возвращает ошибку второго transport attempt.
+10. Успешный send сохраняет observed Claude session id и очищает full-context flag.
+11. Shutdown делегируется transport и подавляет transport exception.
+
+Главный закреплённый контракт:
+
+`text
+Первый turn и recovery turn являются full-context.
+Нормальный continuation является minimal.
+Resume fallback сохраняет промежуточное состояние до fresh retry.
+`
+
+## Покрытие `ClaudeCodeWorkspaceService`
+
+Добавлено 12 unit-тестов.
+
+Проверено:
+
+1. Ошибка project context не устанавливает workspace.
+2. Успешный start устанавливает полный state и owner.
+3. Supplied history копируется, после чего добавляется новый USER message.
+4. `planOnly` сохраняется при start.
+5. Owned continuation обновляет current message и сохраняет gathered files.
+6. Continue другой session восстанавливает persisted history.
+7. Failed restore не уничтожает workspace предыдущего owner.
+8. Restore включает только USER и ASSISTANT domain messages.
+9. Последнее USER-сообщение становится `currentMessage`.
+10. `ensure` owned workspace не перечитывает project context.
+11. Missing session, missing USER message и context failure возвращают false.
+12. Assistant history и clear корректно меняют workspace state.
+
+Главный закреплённый контракт:
+
+`text
+Workspace имеет одного owner.
+Неудачный restore не должен разрушать уже установленный workspace другой session.
+`
+
+## Покрытие `ClaudeCodeApprovalService`
+
+Добавлено 13 unit-тестов.
+
+Проверено:
+
+1. Reject без pending set возвращает null и не меняет status.
+2. Reject потребляет pending set и формирует feedback-prefix.
+3. Feedback содержит количество rejected modifications и held commands.
+4. Approve вне `AWAITING_APPROVE` возвращает immediate error.
+5. Approved modifications конвертируются и применяются.
+6. Commit message и commands освобождаются только после approve.
+7. Partial apply failure возвращает `success=false` и warning notification.
+8. Invalid protocol modifications отбрасываются без repository call.
+9. Owned workspace используется без restore.
+10. Missing workspace восстанавливается перед requestedViews approval.
+11. Restore failure, missing assistant, missing views и resolver failure возвращают explicit errors.
+12. Successful requestedViews approval возвращает `Continue` с `ClaudeCodeTurnCommand`.
+13. ASSISTANT history не дублируется, если latest content уже совпадает.
+
+Главный закреплённый контракт:
+
+`text
+ApprovalService либо возвращает Immediate result,
+либо возвращает Continue command.
+Transport внутри ApprovalService не запускается.
+`
+
+## Покрытие thin facade
+
+Добавлено 6 boundary-тестов.
+
+Проверено:
+
+1. `status` отражает persisted clipboard status.
+2. User input в `AWAITING_PASTE` отклоняется без transport calls.
+3. User input в `AWAITING_APPROVE` без pending modifications отклоняется.
+4. Invalid approve возвращает immediate error без transport.
+5. Command results вне `SESSION_ACTIVE` отклоняются.
+6. Reset переводит session в IDLE и вызывает transport shutdown.
+
+Characterization tests продолжают проверять полноценные happy-path сценарии фасада:
+
+- first full context → minimal continuation;
+- resume fallback;
+- modifications approval;
+- rejection новым сообщением;
+- requested views approval;
+- command-results continuation.
+
+## Тестовая пирамида после STEP 2B
+
+`text
+Pure protocol tests
+ClaudeCodeResponseProcessorTest
+ProtocolConverter tests
+TokenEstimatorTest
+
+State invariant tests
+ClaudeCodeWorkspaceHolderTest
+PendingModificationsStore tests
+
+Direct component unit tests
+ClaudeCodeViewResolverTest
+ClaudeCodeResponseHandlerTest
+ClaudeCodeTurnExecutorTest
+ClaudeCodeWorkspaceServiceTest
+ClaudeCodeApprovalServiceTest
+
+Facade boundary tests
+ClaudeCodeInteractionServiceFacadeTest
+
+Facade characterization tests
+ClaudeCodeInteractionServiceCharacterizationTest
+ClaudeCodeInteractionServicePinTest
+ClaudeCodeInteractionServiceScenarioTest
+
+Full regression
+gradlew test
+`
+
+## Правила, соблюдённые на этапе
+
+1. Production code не менялся ради удобства тестирования.
+2. Каждый component test создаёт новый instance тестируемого класса.
+3. Tests не зависят от порядка запуска.
+4. Recording fakes не содержат assertions.
+5. Проверялись ожидаемые вызовы и отсутствие запрещённых вызовов.
+6. Characterization tests не заменялись component tests.
+7. IntelliJ fixture для application-компонентов не использовался.
+8. Failure paths проверялись напрямую, а не только через facade.
 
 ## Definition of Done
 
--Для каждого из пяти extracted - компонентов существует отдельный test class.
--Все public / internal component methods имеют happy -path и failure - path coverage .
--Resume fallback полностью покрыт прямыми unit -тестами TurnExecutor .
--Persistence и state transitions ResponseHandler покрыты напрямую.
--Workspace restore покрыт без facade.
--Approval views и modifications покрыты раздельно .
--Общие fakes переиспользуются и не дублируются по test classes.
--Characterization suite остаётся без ослабления assertions .
--Полный `maxvibes-application:test` зелёный.
--Полный project test suite зелёный.
+- [x] Для каждого extracted-компонента существует отдельный test class.
+- [x] ViewResolver покрыт happy paths, source routing и failures.
+- [x] ResponseHandler покрыт persistence и state transitions.
+- [x] TurnExecutor напрямую покрыт resume fallback.
+- [x] Workspace restore покрыт без facade.
+- [x] Approval views и modifications покрыты раздельно.
+- [x] Общие recording fakes переиспользуются.
+- [x] Thin-facade границы закреплены отдельными tests.
+- [x] Characterization suite сохранён.
+- [x] Полный `maxvibes-application:test` зелёный.
+- [x] Полный `gradlew test` зелёный.
+
+## Результат
+
+После STEP 2A Claude Code pipeline стал структурно разделённым.
+
+После STEP 2B границы каждого компонента стали исполняемыми спецификациями.
+
+Теперь изменение одного участка pipeline можно проверять:
+
+- локально через direct unit tests;
+- на границе через facade tests;
+- сквозным образом через characterization tests;
+- системно через полный regression suite.
