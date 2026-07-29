@@ -1,0 +1,226 @@
+package com.maxvibes.application.service
+
+import com.maxvibes.application.port.output.ChatSessionRepository
+import com.maxvibes.application.port.output.ClaudeCodeSessionLogPort
+import com.maxvibes.application.port.output.CodeRepository
+import com.maxvibes.application.port.output.LoggerPort
+import com.maxvibes.application.port.output.NotificationPort
+import com.maxvibes.domain.model.chat.MessageRole
+import com.maxvibes.domain.model.code.CodeViewRequest
+import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
+import com.maxvibes.domain.model.interaction.InteractionModification
+import com.maxvibes.domain.model.modification.ModificationResult
+
+/**
+ * Owns Claude Code approval semantics.
+ *
+ * This includes approving requested views, applying held modifications, releasing held
+ * commands, and rejecting a pending modification set when the user types a new message.
+ * Transport continuation is returned as a ClaudeCodeTurnCommand and executed by the facade.
+ */
+internal class ClaudeCodeApprovalService(
+    private val chatSessionRepository: ChatSessionRepository,
+    private val sessionManager: ClipboardSessionManager,
+    private val pendingStore: PendingModificationsStore,
+    private val workspaceService: ClaudeCodeWorkspaceService,
+    private val viewResolver: ClaudeCodeViewResolver,
+    private val codeRepository: CodeRepository,
+    private val notificationPort: NotificationPort,
+    private val sessionLog: ClaudeCodeSessionLogPort? = null,
+    private val logger: LoggerPort? = null
+) {
+
+    fun rejectPending(command: UserInputCommand): UserInputCommand? {
+        val pending = pendingStore.take(command.sessionId) ?: return null
+        val rejectedCount = pending.modifications.size
+        val heldCommandCount = pending.commands.size
+
+        sessionManager.transition(command.sessionId, ClipboardEvent.Approved)
+        log("User rejected $rejectedCount pending modification(s) by typing a new message")
+        sessionLog?.event(
+            "pending modifications rejected",
+            mapOf(
+                "mods" to rejectedCount,
+                "heldCommands" to heldCommandCount
+            )
+        )
+
+        val rejectionMessage = buildString {
+            append("[USER REJECTED your ")
+            append(rejectedCount)
+            append(" proposed modification(s) — nothing was applied")
+            if (heldCommandCount > 0) {
+                append(", the ")
+                append(heldCommandCount)
+                append(" held command(s) were not run")
+            }
+            appendLine(". New instruction follows.]")
+            appendLine()
+            append(command.userInput)
+        }
+
+        return command.copy(userInput = rejectionMessage)
+    }
+
+    suspend fun approve(
+        sessionId: String,
+        attachedContext: String? = null,
+        ideErrors: String? = null,
+        specificPromptContent: String? = null
+    ): ClaudeCodeApprovalOutcome {
+        sessionLog?.begin(sessionId)
+        sessionLog?.event(
+            "approve",
+            mapOf("status" to sessionManager.statusFor(sessionId).name)
+        )
+
+        if (sessionManager.statusFor(sessionId) != ClipboardSessionStatus.AWAITING_APPROVE) {
+            return immediateError("Approve is only valid in AWAITING_APPROVE state")
+        }
+
+        if (pendingStore.hasPendingFor(sessionId)) {
+            return ClaudeCodeApprovalOutcome.Immediate(
+                approvePendingModifications(sessionId)
+            )
+        }
+
+        if (workspaceService.state == null || workspaceService.owner != sessionId) {
+            log("sessionState missing or owned by another session in approve — restoring for $sessionId")
+            if (!workspaceService.ensure(sessionId)) {
+                return immediateError(
+                    "Cannot restore session state for session $sessionId. Please start a new task."
+                )
+            }
+        }
+
+        val state = workspaceService.state
+            ?: return immediateError("No active workspace — cannot approve")
+        val session = chatSessionRepository.getSessionById(sessionId)
+            ?: return immediateError("Session not found: $sessionId")
+        val lastAssistant = session.messages.lastOrNull {
+            it.role == MessageRole.ASSISTANT
+        } ?: return immediateError("No assistant message to approve")
+
+        if (lastAssistant.requestedViews.isEmpty()) {
+            return immediateError("Last assistant message has no requestedViews to approve")
+        }
+
+        val viewRequests = lastAssistant.requestedViews.map { requestedView ->
+            CodeViewRequest(
+                filePath = requestedView.path,
+                granularity = requestedView.granularity,
+                elementPath = requestedView.elementPath
+            )
+        }
+        val freshFiles = viewResolver.resolve(viewRequests, state)
+            ?: return immediateError("Failed to gather requested files")
+
+        if (
+            lastAssistant.content.isNotBlank() &&
+            state.dialogHistory.lastOrNull()?.content != lastAssistant.content
+        ) {
+            workspaceService.appendAssistantHistory(lastAssistant.content)
+        }
+
+        sessionManager.transition(sessionId, ClipboardEvent.Approved)
+
+        return ClaudeCodeApprovalOutcome.Continue(
+            ClaudeCodeTurnCommand(
+                sessionId = sessionId,
+                freshFiles = freshFiles,
+                attachedContext = attachedContext,
+                ideErrors = ideErrors,
+                specificPromptContent = specificPromptContent
+            )
+        )
+    }
+
+    private suspend fun approvePendingModifications(
+        sessionId: String
+    ): ClaudeCodeStepResult {
+        val pending = pendingStore.take(sessionId)
+            ?: return error("No pending modifications to approve")
+
+        sessionManager.transition(sessionId, ClipboardEvent.Approved)
+        log(
+            "Applying ${pending.modifications.size} approved modification(s), " +
+                    "${pending.commands.size} held command(s)"
+        )
+        sessionLog?.event(
+            "pending modifications approved",
+            mapOf(
+                "mods" to pending.modifications.size,
+                "commands" to pending.commands.size
+            )
+        )
+
+        val modificationResults = applyModifications(pending.modifications)
+        val successCount = modificationResults.count {
+            it is ModificationResult.Success
+        }
+        val failureCount = modificationResults.size - successCount
+
+        if (failureCount > 0) {
+            notificationPort.showWarning(
+                "Applied $successCount changes, $failureCount failed"
+            )
+        } else if (successCount > 0) {
+            notificationPort.showSuccess("Applied $successCount changes")
+        }
+
+        return ClaudeCodeStepResult.Completed(
+            message = "Applied approved modifications.",
+            modifications = modificationResults,
+            success = failureCount == 0,
+            commitMessage = pending.commitMessage,
+            commands = pending.commands
+        )
+    }
+
+    private suspend fun applyModifications(
+        requestedModifications: List<InteractionModification>
+    ): List<ModificationResult> {
+        val modifications = requestedModifications.mapNotNull {
+            ProtocolConverter.convertModification(it)
+        }
+        if (modifications.isEmpty()) return emptyList()
+
+        log("Applying ${modifications.size} modifications...")
+        notificationPort.showProgress(
+            "Applying ${modifications.size} changes...",
+            0.8
+        )
+
+        val results = codeRepository.applyModifications(modifications)
+        val successCount = results.count {
+            it is ModificationResult.Success
+        }
+        val failureCount = results.size - successCount
+        log("Modifications: $successCount success, $failureCount failed")
+        return results
+    }
+
+    private fun immediateError(message: String): ClaudeCodeApprovalOutcome.Immediate =
+        ClaudeCodeApprovalOutcome.Immediate(error(message))
+
+    private fun error(message: String): ClaudeCodeStepResult.Error {
+        println("[MaxVibes ClaudeCode] ERROR: $message")
+        logger?.error("ClaudeCode", message)
+        return ClaudeCodeStepResult.Error(message)
+    }
+
+    private fun log(message: String) {
+        println("[MaxVibes ClaudeCode] $message")
+        logger?.info("ClaudeCode", message)
+    }
+}
+
+internal sealed interface ClaudeCodeApprovalOutcome {
+    data class Continue(
+        val command: ClaudeCodeTurnCommand
+    ) : ClaudeCodeApprovalOutcome
+
+    data class Immediate(
+        val result: ClaudeCodeStepResult
+    ) : ClaudeCodeApprovalOutcome
+}
