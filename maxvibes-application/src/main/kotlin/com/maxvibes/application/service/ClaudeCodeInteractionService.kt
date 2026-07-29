@@ -1,26 +1,19 @@
 package com.maxvibes.application.service
 
 import com.maxvibes.application.port.output.ChatMessageDTO
-import com.maxvibes.application.port.output.ChatRole
 import com.maxvibes.application.port.output.ChatSessionRepository
-import com.maxvibes.application.port.output.ClaudeCodeError
 import com.maxvibes.application.port.output.ClaudeCodePort
-import com.maxvibes.application.port.output.ClaudeCodeSendResult
 import com.maxvibes.application.port.output.ClaudeCodeSessionLogPort
 import com.maxvibes.application.port.output.CodeRepository
 import com.maxvibes.application.port.output.LoggerPort
 import com.maxvibes.application.port.output.NotificationPort
 import com.maxvibes.application.port.output.ProjectContextPort
 import com.maxvibes.application.port.output.PromptPort
-import com.maxvibes.application.port.output.PromptTemplates
 import com.maxvibes.domain.model.chat.MessageRole
 import com.maxvibes.domain.model.code.CodeViewRequest
-import com.maxvibes.domain.model.interaction.ClipboardRequest
 import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 import com.maxvibes.domain.model.interaction.InteractionModification
-import com.maxvibes.domain.model.interaction.InteractionResponse
 import com.maxvibes.domain.model.modification.ModificationResult
-import com.maxvibes.shared.result.Result
 import com.maxvibes.domain.model.interaction.AttachedImage
 
 /**
@@ -93,13 +86,6 @@ class ClaudeCodeInteractionService(
     private val streamHub: AgentStreamHub? = null
 ) {
 
-    /** In-memory workspace of the active session — read-only view over [workspace]. */
-    private val sessionState: ClipboardSessionState? get() = workspace.state
-
-    /** ID of the session that owns the current [sessionState]. Guards against cross-session misuse. */
-    private val sessionStateOwner: String? get() = workspace.owner
-    private val workspace = ClaudeCodeWorkspaceHolder()
-
     /** Modification sets proposed by the LLM, held until the user approves or rejects them. In-memory only. */
     private val pendingStore = PendingModificationsStore()
     private val viewResolver = ClaudeCodeViewResolver(
@@ -114,6 +100,21 @@ class ClaudeCodeInteractionService(
         sessionManager = sessionManager,
         pendingStore = pendingStore,
         sessionLog = sessionLog,
+        logger = logger
+    )
+    private val turnExecutor = ClaudeCodeTurnExecutor(
+        claudeCodePort = claudeCodePort,
+        chatSessionRepository = chatSessionRepository,
+        notificationPort = notificationPort,
+        sessionLog = sessionLog,
+        streamHub = streamHub,
+        logger = logger
+    )
+    private val workspaceService = ClaudeCodeWorkspaceService(
+        contextProvider = contextProvider,
+        promptPort = promptPort,
+        chatSessionRepository = chatSessionRepository,
+        notificationPort = notificationPort,
         logger = logger
     )
 
@@ -226,13 +227,14 @@ class ClaudeCodeInteractionService(
             return approvePendingModifications(sessionId)
         }
 
-        if (sessionState == null || sessionStateOwner != sessionId) {
+        if (workspaceService.state == null || workspaceService.owner != sessionId) {
             log("sessionState missing or owned by another session in approve — restoring for $sessionId")
-            if (!ensureWorkspace(sessionId)) {
+            if (!workspaceService.ensure(sessionId)) {
                 return error("Cannot restore session state for session $sessionId. Please start a new task.")
             }
         }
-        val state = sessionState ?: return error("No active workspace — cannot approve")
+        val state = workspaceService.state
+            ?: return error("No active workspace — cannot approve")
 
         val session = chatSessionRepository.getSessionById(sessionId)
             ?: return error("Session not found: $sessionId")
@@ -257,7 +259,7 @@ class ClaudeCodeInteractionService(
             lastAssistant.content.isNotBlank() &&
             state.dialogHistory.lastOrNull()?.content != lastAssistant.content
         ) {
-            addToHistory(ChatRole.ASSISTANT, lastAssistant.content)
+            workspaceService.appendAssistantHistory(lastAssistant.content)
         }
 
         sessionManager.transition(sessionId, ClipboardEvent.Approved)
@@ -285,9 +287,9 @@ class ClaudeCodeInteractionService(
         if (sessionManager.statusFor(sessionId) != ClipboardSessionStatus.SESSION_ACTIVE) {
             return error("Command results can only be submitted in SESSION_ACTIVE state")
         }
-        if (sessionState == null || sessionStateOwner != sessionId) {
+        if (workspaceService.state == null || workspaceService.owner != sessionId) {
             log("sessionState missing or owned by another session in submitCommandResults — restoring for $sessionId")
-            if (!ensureWorkspace(sessionId)) {
+            if (!workspaceService.ensure(sessionId)) {
                 return error("Cannot restore session state for session $sessionId. Please start a new task.")
             }
         }
@@ -302,21 +304,21 @@ class ClaudeCodeInteractionService(
     /** Returns the current [ClipboardSessionStatus] for the given session. */
     fun status(sessionId: String): ClipboardSessionStatus = sessionManager.statusFor(sessionId)
 
-    /**
-     * Resets the Claude Code session: clears in-memory workspace, transitions session to IDLE,
-     * and asks the transport to release its process. The next call to [handleUserInput] will
-     * start a fresh process and a fresh claude session.
-     */
     fun reset(sessionId: String) {
         log("Session reset (sessionId=$sessionId)")
-        sessionLog?.event("reset requested", mapOf("sessionId" to sessionId))
-        workspace.clear()
+        sessionLog?.event(
+            "reset requested",
+            mapOf("sessionId" to sessionId)
+        )
+        workspaceService.clear()
         pendingStore.clear()
         sessionManager.transition(sessionId, ClipboardEvent.Reset)
         try {
             claudeCodePort.shutdown()
-        } catch (e: Exception) {
-            log("Warning: shutdown raised ${e.javaClass.simpleName}: ${e.message}")
+        } catch (exception: Exception) {
+            log(
+                "Warning: shutdown raised ${exception.javaClass.simpleName}: ${exception.message}"
+            )
         }
     }
 
@@ -331,48 +333,21 @@ class ClaudeCodeInteractionService(
         if (isFirst) {
             log("Starting new Claude Code session (sessionId=$sessionId, planOnly=${command.planOnly})")
             sessionManager.transition(sessionId, ClipboardEvent.StartSession)
-
-            notificationPort.showProgress("Gathering project context...", 0.1)
-            val projectContextResult = contextProvider.getProjectContext()
-            if (projectContextResult is Result.Failure) {
-                return error("Failed to get project context: ${projectContextResult.error.message}")
-            }
-            val projectContext = (projectContextResult as Result.Success).value
-            val claudeSystem = promptPort.claudeCodeSystem()
-            val claudePrompts = PromptTemplates(
-                chatSystem = claudeSystem,
-                planningSystem = claudeSystem
-            )
-
-            workspace.install(
-                sessionId,
-                ClipboardSessionState(
-                    currentMessage = command.userInput,
-                    projectContext = projectContext,
-                    dialogHistory = command.history.toMutableList(),
-                    prompts = claudePrompts,
-                    allGatheredFiles = mutableMapOf(),
-                    planOnly = command.planOnly
-                )
-            )
-            addToHistory(ChatRole.USER, command.userInput)
         } else {
             log("Continuing Claude Code session (sessionId=$sessionId)")
-            if (!workspace.isOwnedBy(sessionId) && !ensureWorkspace(sessionId)) {
-                return error("Cannot restore session state for session $sessionId. Please start a new task.")
-            }
-            val state = sessionState ?: return error("No active workspace")
-            workspace.install(
-                sessionId,
-                state.copy(
-                    currentMessage = command.userInput,
-                    planOnly = command.planOnly
-                )
-            )
-            addToHistory(ChatRole.USER, command.userInput)
         }
 
-        val state = sessionState ?: return error("No active workspace")
+        val workspaceResult = if (isFirst) {
+            workspaceService.start(command)
+        } else {
+            workspaceService.continueSession(command)
+        }
+        val state = when (workspaceResult) {
+            is ClaudeCodeWorkspaceResult.Ready -> workspaceResult.state
+            is ClaudeCodeWorkspaceResult.Failure ->
+                return error(workspaceResult.message)
+        }
+
         val freshFiles = if (isFirst) {
             viewResolver.gatherFullFiles(
                 command.globalContextFiles,
@@ -398,131 +373,19 @@ class ClaudeCodeInteractionService(
     private suspend fun doSend(
         command: ClaudeCodeTurnCommand
     ): ClaudeCodeStepResult {
-        val sessionId = command.sessionId
-        streamHub?.begin(sessionId)
-        val state = sessionState ?: return error("No active workspace")
-        var session = chatSessionRepository.getSessionById(sessionId)
-            ?: return error("Session not found: $sessionId")
+        val state = workspaceService.state
+            ?: return error("No active workspace")
 
-        val needsFull = command.firstMessage || session.claudeCodeNeedsFullContext
-        var request = ClaudeCodeRequestFactory.create(
-            state = state,
-            freshFiles = command.freshFiles,
-            fullContext = needsFull,
-            attachedContext = command.attachedContext,
-            ideErrors = command.ideErrors,
-            specificPromptContent = command.specificPromptContent,
-            commandResults = command.commandResults,
-            attachedImages = command.attachedImages,
-            currentPlan = session.plan
-        )
-
-        val resumeId = session.claudeCodeSessionId
-        var ensureResult = claudeCodePort.ensureStarted(
-            resumeSessionId = resumeId,
-            systemPrompt = state.prompts.chatSystem
-        )
-
-        if (ensureResult is Result.Failure && ensureResult.error is ClaudeCodeError.ResumeFailed) {
-            val resumeFailure = ensureResult.error as ClaudeCodeError.ResumeFailed
-            log("Resume failed for sessionId=${resumeFailure.sessionId}; falling back to fresh start.")
-            sessionLog?.event(
-                "resume failed — falling back to fresh start",
-                mapOf("claudeSessionId" to resumeFailure.sessionId)
-            )
-            session = session.copy(
-                claudeCodeSessionId = null,
-                claudeCodeNeedsFullContext = true
-            )
-            chatSessionRepository.saveSession(session)
-
-            request = ClaudeCodeRequestFactory.create(
-                state = state,
-                freshFiles = command.freshFiles,
-                fullContext = true,
-                attachedContext = command.attachedContext,
-                ideErrors = command.ideErrors,
-                specificPromptContent = command.specificPromptContent,
-                commandResults = command.commandResults,
-                attachedImages = command.attachedImages,
-                currentPlan = session.plan
-            )
-            ensureResult = claudeCodePort.ensureStarted(
-                resumeSessionId = null,
-                systemPrompt = state.prompts.chatSystem
-            )
-        }
-
-        if (ensureResult is Result.Failure) {
-            return ClaudeCodeStepResult.TransportError(
-                transportErrorMessage(ensureResult.error)
-            )
-        }
-
-        val totalTokens = estimateTokens(request)
-        state.lastInputTokens = totalTokens
-
-        log(
-            "Sending: tokens≈$totalTokens, freshFiles=${command.freshFiles.size}, " +
-                    "history=${request.chatHistory.size}, fullCtx=$needsFull"
-        )
-        sessionLog?.event(
-            "sending request",
-            mapOf(
-                "tokensApprox" to totalTokens,
-                "freshFiles" to command.freshFiles.size,
-                "history" to request.chatHistory.size,
-                "fullContext" to needsFull
-            )
-        )
-        notificationPort.showProgress("Sending to Claude Code...", 0.5)
-
-        val sendStartedAt = System.currentTimeMillis()
-        val sendResult = claudeCodePort.send(request)
-        val durationMs = System.currentTimeMillis() - sendStartedAt
-
-        return when (sendResult) {
-            is Result.Success -> {
-                val payload: ClaudeCodeSendResult = sendResult.value
-                val observedId = payload.observedSessionId
-                if (observedId != null || session.claudeCodeNeedsFullContext) {
-                    chatSessionRepository.saveSession(
-                        session.copy(
-                            claudeCodeSessionId = observedId ?: session.claudeCodeSessionId,
-                            claudeCodeNeedsFullContext = false
-                        )
-                    )
-                }
-                val stats = payload.stats
+        return when (val execution = turnExecutor.execute(command, state)) {
+            is ClaudeCodeTurnExecutionResult.Success ->
                 responseHandler.handle(
-                    sessionId = sessionId,
-                    turn = ReceivedClaudeTurn(
-                        response = payload.response,
-                        inputTokens = stats?.inputTokens?.takeIf { it > 0 } ?: totalTokens,
-                        outputTokens = stats?.outputTokens?.takeIf { it > 0 }
-                            ?: estimateOutputTokens(payload.response),
-                        thinkingText = payload.thinkingText,
-                        durationMs = stats?.durationMs?.takeIf { it > 0 } ?: durationMs,
-                        costUsd = stats?.costUsd?.takeIf { it > 0.0 },
-                        numTurns = stats?.numTurns?.takeIf { it > 0 }
-                    ),
+                    sessionId = command.sessionId,
+                    turn = execution.turn,
                     state = state
                 )
-            }
 
-            is Result.Failure -> {
-                log("Send failed: ${sendResult.error} (after ${durationMs}ms)")
-                sessionLog?.event(
-                    "send failed",
-                    mapOf(
-                        "error" to sendResult.error.toString(),
-                        "elapsedMs" to durationMs
-                    )
-                )
-                ClaudeCodeStepResult.TransportError(
-                    transportErrorMessage(sendResult.error)
-                )
-            }
+            is ClaudeCodeTurnExecutionResult.Failure ->
+                execution.result
         }
     }
 
@@ -558,52 +421,6 @@ class ClaudeCodeInteractionService(
 
     // ==================== Helpers ====================
 
-    /**
-     * Restores the in-memory [sessionState] from persisted domain data — used after IDE restart.
-     * Identical strategy to [ClipboardInteractionService.ensureWorkspace] but always uses the
-     * Claude Code system prompt.
-     *
-     * @return true if workspace was successfully restored.
-     */
-    private suspend fun ensureWorkspace(sessionId: String): Boolean {
-        val session = chatSessionRepository.getSessionById(sessionId) ?: return false
-        val lastUserMessage = session.messages
-            .lastOrNull { it.role == MessageRole.USER }
-            ?.content
-            ?: return false
-
-        val projectContextResult = contextProvider.getProjectContext()
-        if (projectContextResult is Result.Failure) {
-            log("ERROR: Failed to get project context during workspace restore: ${projectContextResult.error.message}")
-            return false
-        }
-        val projectContext = (projectContextResult as Result.Success).value
-        val claudeSystem = promptPort.claudeCodeSystem()
-        val prompts = PromptTemplates(chatSystem = claudeSystem, planningSystem = claudeSystem)
-
-        workspace.install(
-            sessionId,
-            ClipboardSessionState(
-                currentMessage = lastUserMessage,
-                projectContext = projectContext,
-                dialogHistory = session.messages
-                    .filter { it.role == MessageRole.USER || it.role == MessageRole.ASSISTANT }
-                    .map {
-                        ChatMessageDTO(
-                            role = if (it.role == MessageRole.USER) ChatRole.USER else ChatRole.ASSISTANT,
-                            content = it.content
-                        )
-                    }
-                    .toMutableList(),
-                prompts = prompts,
-                allGatheredFiles = mutableMapOf(),
-                planOnly = false
-            )
-        )
-        log("Workspace restored from domain: sessionId=$sessionId, messages=${session.messages.size}")
-        return true
-    }
-
     private suspend fun applyModifications(claudeMods: List<InteractionModification>): List<ModificationResult> {
         val modifications = claudeMods.mapNotNull { ProtocolConverter.convertModification(it) }
         if (modifications.isEmpty()) return emptyList()
@@ -616,39 +433,6 @@ class ClaudeCodeInteractionService(
         val failCount = results.size - successCount
         log("Modifications: $successCount success, $failCount failed")
         return results
-    }
-
-    private fun addToHistory(role: ChatRole, content: String) {
-        val state = sessionState ?: return
-        state.dialogHistory.add(ChatMessageDTO(role = role, content = content))
-    }
-
-    private fun estimateTokens(request: ClipboardRequest): Int = TokenEstimator.estimateTokens(request)
-
-    private fun estimateOutputTokens(response: InteractionResponse): Int = TokenEstimator.estimateOutputTokens(response)
-
-    private fun transportErrorMessage(error: ClaudeCodeError): String = when (error) {
-        is ClaudeCodeError.BinaryNotFound ->
-            "Claude Code binary not found. Check the path in MaxVibes settings."
-
-        is ClaudeCodeError.Timeout ->
-            "Claude Code did not respond in time."
-
-        is ClaudeCodeError.Crashed ->
-            "Claude Code process crashed: ${error.message}"
-
-        is ClaudeCodeError.ProcessFailed ->
-            "Claude Code exited with code ${error.exitCode}: ${error.stderr.take(200)}"
-
-        is ClaudeCodeError.ResumeFailed ->
-            "Failed to resume claude session ${error.sessionId}: ${error.stderr.take(200)}"
-
-        is ClaudeCodeError.ParseFailed ->
-            "Failed to parse Claude Code response: ${error.message}"
-
-        is ClaudeCodeError.Aborted ->
-            "Claude Code turn was aborted." +
-                    (error.partialText?.let { " Partial output preserved (${it.length} chars)." } ?: "")
     }
 
     private fun log(message: String) {
