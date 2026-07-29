@@ -8,7 +8,6 @@ import com.maxvibes.domain.model.chat.ChatSession
 import com.maxvibes.domain.model.chat.MessageRole
 import com.maxvibes.plugin.service.MaxVibesLogger
 import com.maxvibes.plugin.service.MaxVibesService
-import com.maxvibes.shared.result.Result
 import com.maxvibes.domain.model.interaction.InteractionMode
 import com.maxvibes.domain.model.interaction.AttachedImage
 import com.intellij.openapi.progress.ProcessCanceledException
@@ -45,15 +44,28 @@ class ChatMessageController(
     private val chatTreeService get() = service.chatTreeService
 
     val attachedTrace: String?
-        get() = pendingContext.trace
+        get() = attachmentCoordinator.trace
     val attachedErrors: String?
-        get() = pendingContext.errors
+        get() = attachmentCoordinator.errors
 
-    private val pendingContext = PendingTurnContext(ImageAttachments.MAX_IMAGES)
+    private val attachmentCoordinator = AttachmentCoordinator(
+        context = PendingTurnContext(ImageAttachments.MAX_IMAGES),
+        attachmentView = callbacks,
+        inputStatusView = callbacks,
+        maxImages = ImageAttachments.MAX_IMAGES
+    )
     private val backgroundTaskRunner: BackgroundTaskRunner by lazy {
         IntellijBackgroundTaskRunner(project) { indicator ->
             service.notificationService.setProgressIndicator(indicator)
         }
+    }
+    private val ideErrorsAttachmentLoader: IdeErrorsAttachmentLoader by lazy {
+        IdeErrorsAttachmentLoader(
+            ideErrorsPort = service.ideErrorsPort,
+            backgroundTaskRunner = backgroundTaskRunner,
+            attachments = attachmentCoordinator,
+            inputStatusView = callbacks
+        )
     }
     private val sessionActions: SessionActions by lazy {
         SessionActions(
@@ -196,7 +208,7 @@ class ChatMessageController(
 
     fun approve() {
         saveAllDocuments()
-        val pending = pendingContext.snapshot()
+        val pending = attachmentCoordinator.snapshot()
         if (pending.images.isNotEmpty()) {
             callbacks.appendToChat(
                 "⚠️ ${pending.images.size} attached image(s) dropped — attach them to a regular message, not to Approve"
@@ -207,7 +219,7 @@ class ChatMessageController(
                 "⚠️ One-shot editor skill dropped — invoke it with a regular message, not with Approve"
             )
         }
-        clearAttachmentsAfterSend()
+        attachmentCoordinator.clearAfterSend()
         claudeCodeDispatcher.approve(pending.trace, pending.errors)
     }
 
@@ -326,81 +338,21 @@ class ChatMessageController(
         }
     }
 
-    fun attachTrace(traceContent: String) {
-        pendingContext.attachTrace(traceContent)
-        callbacks.onAttachmentsChanged(attachedTrace, attachedErrors)
-    }
+    fun attachTrace(traceContent: String) = attachmentCoordinator.attachTrace(traceContent)
 
-    fun clearTrace() {
-        pendingContext.clearTrace()
-        callbacks.onAttachmentsChanged(attachedTrace, attachedErrors)
-    }
+    fun clearTrace() = attachmentCoordinator.clearTrace()
 
-    fun clearErrors() {
-        pendingContext.clearErrors()
-        callbacks.onAttachmentsChanged(attachedTrace, attachedErrors)
-    }
+    fun clearErrors() = attachmentCoordinator.clearErrors()
 
-    fun attachImage(image: AttachedImage): Boolean {
-        if (!pendingContext.attachImage(image)) {
-            callbacks.setStatus("🖼 Max ${ImageAttachments.MAX_IMAGES} images per message")
-            return false
-        }
-        val images = pendingContext.imagesSnapshot()
-        callbacks.onImagesChanged(images)
-        callbacks.setStatus("🖼 Image attached (${images.size})")
-        return true
-    }
+    fun attachImage(image: AttachedImage): Boolean = attachmentCoordinator.attachImage(image)
 
-    fun clearImages() {
-        pendingContext.clearImages()
-        callbacks.onImagesChanged(emptyList())
-    }
+    fun clearImages() = attachmentCoordinator.clearImages()
 
-    fun removeImage(index: Int) {
-        if (pendingContext.removeImage(index)) {
-            callbacks.onImagesChanged(pendingContext.imagesSnapshot())
-        }
-    }
+    fun removeImage(index: Int) = attachmentCoordinator.removeImage(index)
 
-    fun fetchIdeErrors() {
-        callbacks.setStatus("Fetching IDE errors...")
-        backgroundTaskRunner.run(
-            title = "Fetching IDE errors",
-            cancellable = false,
-            publishIndicator = false,
-            action = { service.ideErrorsPort.getCompilerErrors() },
-            onSuccess = { result ->
-                when (result) {
-                    is Result.Success -> {
-                        val errors = result.value
-                        if (errors.isEmpty()) {
-                            callbacks.setStatus("No IDE errors found in open files")
-                        } else {
-                            pendingContext.attachErrors(
-                                errors.joinToString(separator = System.lineSeparator()) {
-                                    it.formatForLlm()
-                                }
-                            )
-                            callbacks.setStatus("Attached ${errors.size} IDE errors")
-                            callbacks.onAttachmentsChanged(attachedTrace, attachedErrors)
-                        }
-                    }
+    fun fetchIdeErrors() = ideErrorsAttachmentLoader.fetch()
 
-                    is Result.Failure -> callbacks.onError(
-                        "Failed to fetch IDE errors: ${result.error}"
-                    )
-                }
-            }
-        )
-    }
-
-    fun clearAttachmentsAfterSend() {
-        val hadOneShot = pendingContext.clearAll()
-        callbacks.onAttachmentsChanged(null, null)
-        callbacks.onImagesChanged(emptyList())
-        if (hadOneShot) callbacks.onOneShotChanged(null)
-    }
+    fun clearAttachmentsAfterSend() = attachmentCoordinator.clearAfterSend()
 
     fun createNewSession() = sessionActions.createNewSession()
 
@@ -426,8 +378,7 @@ class ChatMessageController(
     ) {
         saveAllDocuments()
         questionCoordinator.dismissQuestionTurn()
-        val pending = pendingContext.snapshot()
-        clearAttachmentsAfterSend()
+        val pending = attachmentCoordinator.consume()
         val prepared = SendPreparationPolicy.prepare(
             pending = pending,
             selectedSpecificPromptName = selectedSpecificPromptName,
@@ -489,13 +440,8 @@ class ChatMessageController(
         }
     }
 
-    fun armOneShot(skillName: String?, elementContext: String?, label: String) {
-        pendingContext.armOneShot(skillName, elementContext, label)
-        callbacks.onOneShotChanged(label)
-    }
+    fun armOneShot(skillName: String?, elementContext: String?, label: String) =
+        attachmentCoordinator.armOneShot(skillName, elementContext, label)
 
-    fun clearOneShot() {
-        pendingContext.clearOneShot()
-        callbacks.onOneShotChanged(null)
-    }
+    fun clearOneShot() = attachmentCoordinator.clearOneShot()
 }
