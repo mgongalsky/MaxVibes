@@ -1,56 +1,78 @@
-# STEP 1 — Распил ChatMessageController (1534 LOC) — ВЫПОЛНЕН
+# STEP 1 — ChatMessageController deep cut — ВЫПОЛНЕН
 
-Цель: контроллер остаётся тонким маршрутизатором; state machines и режимные диспетчеры — отдельные тестируемые классы. Поведение не меняется.
+Цель: превратить `ChatMessageController` из большого владельца логики режимов в тонкий стабильный фасад. State machines, подготовка отправки, фоновые политики, attachments, session actions, result routing и DI-wiring должны жить в отдельных тестируемых компонентах.
 
-## Итог (2026-07-29)
+## Итог
 
-**ChatMessageController: 1534 → 501 LOC (−67%). DoD «≤ ~600 LOC» достигнут.**
-Оставшиеся ~500 строк — композиционный корень: DI-вайринг ленивых компонентов, три run*Bg-обвязки с обработкой ошибок фона, approve-бухгалтерия вложений, делегаты публичного API. Логики state machines и рендера результатов в контроллере не осталось.
+Рефакторинг завершён полностью.
 
-### Извлечённые файлы (plugin/ui)
+`ChatMessageController` теперь содержит только:
 
-| Файл | LOC | Содержимое |
-|------|-----|-----------|
-| ClaudeCodeDispatcher.kt | 418 | send/approve/handleResult всех веток ClaudeCodeStepResult |
-| ClipboardDispatcher.kt | 317 | dispatch/redo/handleResult clipboard-режима |
-| ApiDispatcher.kt | 302 | API + CheapAPI (объединены параметром) |
-| CommandTurnCoordinator.kt | 176 | command-turn state machine (run all / decline all / стоп по ошибке) |
-| ChatPanelViews.kt | 109 | 6 узких UI-граней + агрегат ChatPanelCallbacks |
-| PendingTurnContext.kt | 99 | trace/errors/images/one-shot до отправки |
-| QuestionTurnCoordinator.kt | 75 | question-turn state machine |
-| SendPreparationPolicy.kt | 73 | чистая подготовка отправки (warnings, effective-поля) |
-| BackgroundTaskRunner.kt | 55 | абстракция Task.Backgroundable + EDT-хоп |
-| SessionActions.kt | 43 | session-операции |
-| CommandResultRouter.kt | 29 | роутинг результатов команд по режимам |
+- стабильный публичный API, используемый `ChatPanel` и editor actions;
+- чтение `attachedTrace` / `attachedErrors`;
+- тонкие делегаты в `ChatMessageControllerComposition`;
+- совместимый статический вход `buildTaskWithContext`.
 
-### Тесты
+Создание компонентов и циклическое lazy-wiring вынесены в `ChatMessageControllerComposition`. Контроллер больше не владеет mode routing, background error policy, cancellation recovery, attachment bookkeeping или session orchestration.
 
-140 тестов maxvibes-plugin зелёные. Новые тесты: координаторы (полный жизненный цикл обоих state machines), SessionActions, CommandResultRouter, PendingTurnContext, SendPreparationPolicy — все на переиспользуемом FakeChatPanelCallbacks.
+## Извлечённые компоненты
 
-### Сужение UI-портов (шаг 11)
+| Компонент | Ответственность |
+|---|---|
+| `ChatMessageControllerComposition` | Composition root и wiring всех chat-компонентов |
+| `ClaudeCodeDispatcher` | Send / approve / result flow Claude Code |
+| `ClipboardDispatcher` | Clipboard dialog flow и обработка результатов |
+| `ApiDispatcher` | API и Cheap API flow, включая auto-retry |
+| `TurnSubmissionCoordinator` | Send, approve, redo и маршрутизация подготовленного turn |
+| `InteractionExecutionCoordinator` | Mode-specific background execution, cancellation и error mapping |
+| `AttachmentCoordinator` | Синхронизация `PendingTurnContext` с attachment UI |
+| `IdeErrorsAttachmentLoader` | Фоновый сбор и прикрепление IDE errors |
+| `PendingTurnContext` | Trace, errors, images и one-shot state одного turn |
+| `SendPreparationPolicy` | Чистая подготовка effective context, prompt и warnings |
+| `CommandTurnCoordinator` | Command batch state machine |
+| `QuestionTurnCoordinator` | Question turn state machine |
+| `CommandResultRouter` | Продолжение диалога после command batch по режимам |
+| `SessionActions` | Операции с chat sessions |
+| `BackgroundTaskRunner` | IntelliJ background task boundary и EDT callback |
+| `DocumentSaver` | Flush editor documents перед чтением файлов |
+| `TaskContextFormatter` | Формирование полного task text с trace и IDE errors |
 
-ChatPanelCallbacks порезан на грани прямо здесь (изначально планировалось в STEP_3): ConversationView, InputStatusView, AttachmentView, SessionView, QuestionView, CommandView; ChatPanelCallbacks — пустой агрегат, поэтому ChatPanel и фейки не менялись.
+## UI-порты
 
-- QuestionTurnCoordinator принимает (QuestionView, InputStatusView), CommandTurnCoordinator — (CommandView, InputStatusView).
-- Диспетчеры ОСОЗНАННО оставлены на агрегате: каждый использует ровно ConversationView + InputStatusView (12 методов), сужение — это смена типа параметра конструктора, а конструкторы сейчас правятся только через REPLACE_FILE из-за PSI-бага (см. TODOs/BUG_replace_element_primary_constructor.md). Ретип ~800 строк ради одной строки отложен до починки бага.
+`ChatPanelCallbacks` остаётся пустым агрегатом для `ChatPanel` и тестовых fake-объектов. Рабочие компоненты используют узкие интерфейсы:
 
-## Исходный план (для истории)
+- `MessageFlowView` — transcript и input/status surface для dispatcher-ов;
+- `AttachmentView` — trace/errors, image strip и one-shot chip;
+- `SessionView` — lifecycle sessions;
+- `QuestionView` — interactive question blocks;
+- `CommandView` — interactive command blocks.
 
-### 1.1 CommandTurnCoordinator
-Вся command-turn state machine: CommandTurn, CommandItem, presentCommands, startRunAll, runNextQueued, declineAllRemaining, declineItem, runCommand, recordExecution. Правила сохранены: Run all останавливается на первом ненулевом exit code; батч завершён — авто-продолжение диалога.
+`QuestionTurnCoordinator` и `CommandTurnCoordinator` также принимают отдельный `InputStatusView`, а не полный агрегат.
 
-### 1.2 QuestionTurnCoordinator
-Question-turn state machine: presentQuestions, answerQuestion, dismissQuestionTurn. Правила сохранены: ввод в главное поле = dismiss всех блоков; все отвечены — составной ответ через обычный send-путь.
+## Проверки
 
-### 1.3 Режимные диспетчеры
-dispatch*/handle*Result → ClaudeCodeDispatcher, ClipboardDispatcher, ApiDispatcher (Api и CheapApi объединены). Контроллер держит только sendMessage-роутинг по InteractionMode.
+Последовательно прошли зелёные целевые наборы для:
 
-### 1.4 Осталось в контроллере
-Attachments (trace/errors/images), one-shot skills, session-делегаты, роутинг, run*Bg-обвязки фоновых задач.
+- attachment и IDE-errors extraction;
+- submission coordinator;
+- interaction execution policy;
+- composition-root extraction;
+- dispatcher port narrowing;
+- `TaskContextFormatter`;
+- публичного API контроллера и session flow.
+
+Финальный полный прогон:
+
+- команда: `./gradlew.bat :maxvibes-plugin:test`;
+- результат: **164/164 теста зелёные**.
 
 ## Definition of Done
 
-- [x] ChatMessageController ≤ ~600 LOC, без внутренних state-machine классов (факт: 501).
-- [x] CommandTurnCoordinator, QuestionTurnCoordinator, ClaudeCodeDispatcher — отдельные файлы с юнит-тестами на FakeChatPanelCallbacks.
-- [x] Поведение в IDE не изменилось (рефакторинг структурный, пины не редактировались).
-- [x] gradlew test зелёный (140/140 plugin).
+- [x] `ChatMessageController` является тонким публичным фасадом.
+- [x] Composition root вынесен из контроллера.
+- [x] Внутренних state-machine классов в контроллере нет.
+- [x] Send / approve / attachments / sessions / execution policy вынесены.
+- [x] Dispatcher-ы зависят от `MessageFlowView`, а не от полного `ChatPanelCallbacks`.
+- [x] Обратная зависимость `ApiDispatcher -> ChatMessageController` устранена.
+- [x] Извлечённые компоненты покрыты unit-тестами.
+- [x] Полный `:maxvibes-plugin:test` зелёный: 164/164.

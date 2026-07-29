@@ -26,7 +26,7 @@ class ClipboardDispatcher(
     private val clipboardService: () -> ClipboardInteractionService,
     private val resolveSpecificPrompt: (name: String?) -> String?,
     private val chatTreeService: ChatTreeService,
-    private val callbacks: ChatPanelCallbacks,
+    private val callbacks: MessageFlowView,
     private val presentCommands: (commands: List<CommandRequest>, sessionId: String, mode: InteractionMode) -> Unit,
     private val executeAsync: (title: String, session: ChatSession, action: suspend () -> ClipboardStepResult) -> Unit
 ) {

@@ -28,7 +28,7 @@ import com.maxvibes.plugin.service.MaxVibesLogger
  */
 class ApiDispatcher(
     private val chatTreeService: ChatTreeService,
-    private val callbacks: ChatPanelCallbacks,
+    private val callbacks: MessageFlowView,
     private val ensureCheapService: () -> Unit,
     private val presentCommands: (commands: List<CommandRequest>, sessionId: String, mode: InteractionMode) -> Unit,
     private val executeAsync: (progressTitle: String, session: ChatSession, isPlanOnly: Boolean, useCheap: Boolean, request: ContextAwareRequest) -> Unit
@@ -68,9 +68,15 @@ class ApiDispatcher(
         )
     }
 
-    fun dispatchCheapMessage(msg: String, trace: String?, errs: String?, isPlanOnly: Boolean, isDryRun: Boolean) {
+    fun dispatchCheapMessage(
+        msg: String,
+        trace: String?,
+        errs: String?,
+        isPlanOnly: Boolean,
+        isDryRun: Boolean
+    ) {
         var session = chatTreeService.getActiveSession()
-        val fullTask = ChatMessageController.buildTaskWithContext(msg, trace, errs)
+        val fullTask = TaskContextFormatter.build(msg, trace, errs)
         val history = session.messages.map { it.toChatMessageDTO() }
         session = chatTreeService.addMessage(session.id, MessageRole.USER, fullTask)
         callbacks.addUserMessageBubble(msg)
@@ -78,9 +84,15 @@ class ApiDispatcher(
         callbacks.setStatus("Thinking (cheap)...")
         ensureCheapService()
         send(
-            fullTask, session, history, isDryRun, isPlanOnly,
-            chatTreeService.getGlobalContextFiles(), errs,
-            useCheap = true, progressTitle = "Processing (budget)"
+            fullTask,
+            session,
+            history,
+            isDryRun,
+            isPlanOnly,
+            chatTreeService.getGlobalContextFiles(),
+            errs,
+            useCheap = true,
+            progressTitle = "Processing (budget)"
         )
     }
 

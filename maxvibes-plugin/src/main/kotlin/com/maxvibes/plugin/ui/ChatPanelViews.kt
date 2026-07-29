@@ -59,6 +59,9 @@ interface InputStatusView {
     fun sendUserMessage(text: String)
 }
 
+/** Combined transcript and input/status surface used by message dispatchers. */
+interface MessageFlowView : ConversationView, InputStatusView
+
 /** Attached trace/errors, image strip and one-shot skill chip. */
 interface AttachmentView {
     /** Called when attached trace or errors change. */

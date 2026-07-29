@@ -33,7 +33,7 @@ class ClaudeCodeDispatcher(
     private val claudeCodeService: () -> ClaudeCodeInteractionService,
     private val resolveSpecificPrompt: (name: String?) -> String?,
     private val chatTreeService: ChatTreeService,
-    private val callbacks: ChatPanelCallbacks,
+    private val callbacks: MessageFlowView,
     private val presentQuestions: (questions: List<InteractionQuestion>) -> Unit,
     private val presentCommands: (commands: List<CommandRequest>, sessionId: String, mode: InteractionMode) -> Unit,
     private val executeAsync: (title: String, session: ChatSession, action: suspend () -> ClaudeCodeStepResult) -> Unit
@@ -84,15 +84,13 @@ class ClaudeCodeDispatcher(
         }
     }
 
-    /**
-     * Approve the last Claude Code response with pre-collected attachments.
-     * Attachment bookkeeping (saveAllDocuments, dropped-attachment warnings,
-     * clearing) stays in [ChatMessageController].
-     */
+    /** Approves the current Claude Code turn with pre-collected text attachments. */
     fun approve(trace: String?, errs: String?) {
         val session = chatTreeService.getActiveSession()
         MaxVibesLogger.info(
-            "ClaudeCodeDispatcher", "approve", mapOf(
+            "ClaudeCodeDispatcher",
+            "approve",
+            mapOf(
                 "sessionId" to session.id,
                 "hasTrace" to (trace != null),
                 "hasErrors" to (errs != null)
