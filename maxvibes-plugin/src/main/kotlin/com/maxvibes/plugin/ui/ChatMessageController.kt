@@ -1,26 +1,18 @@
 package com.maxvibes.plugin.ui
 
-import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.progress.ProgressIndicator
-import com.intellij.openapi.progress.ProgressManager
-import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.maxvibes.application.port.input.ContextAwareRequest
 import com.maxvibes.application.service.ClaudeCodeStepResult
 import com.maxvibes.application.service.ClipboardStepResult
-import com.maxvibes.domain.model.chat.ChatMessage
 import com.maxvibes.domain.model.chat.ChatSession
 import com.maxvibes.domain.model.chat.MessageRole
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.plugin.service.MaxVibesLogger
 import com.maxvibes.plugin.service.MaxVibesService
-import kotlinx.coroutines.runBlocking
 import com.maxvibes.shared.result.Result
 import com.maxvibes.domain.model.interaction.InteractionMode
 import com.maxvibes.domain.model.interaction.AttachedImage
 import com.maxvibes.domain.model.modification.AppliedModInfo
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.cancel
 import com.maxvibes.domain.model.planning.PlanDiagram
 import com.intellij.openapi.progress.ProcessCanceledException
 
@@ -133,6 +125,18 @@ class ChatMessageController(
         get() = pendingContext.errors
 
     private val pendingContext = PendingTurnContext(ImageAttachments.MAX_IMAGES)
+    private val backgroundTaskRunner: BackgroundTaskRunner by lazy {
+        IntellijBackgroundTaskRunner(project) { indicator ->
+            service.notificationService.setProgressIndicator(indicator)
+        }
+    }
+    private val sessionActions: SessionActions by lazy {
+        SessionActions(
+            chatTreeService = chatTreeService,
+            onSessionChanged = callbacks::onSessionChanged,
+            onSessionRenamed = callbacks::onSessionRenamed
+        )
+    }
 
     companion object {
         fun buildTaskWithContext(task: String, trace: String?, errs: String?): String {
@@ -155,36 +159,35 @@ class ChatMessageController(
         session: ChatSession,
         action: suspend () -> ClipboardStepResult
     ) {
-        ProgressManager.getInstance().run(object : Task.Backgroundable(project, "MaxVibes: $title", true) {
-            override fun run(indicator: ProgressIndicator) {
-                service.notificationService.setProgressIndicator(indicator)
-                val result = try {
-                    runBlocking { action() }
+        backgroundTaskRunner.run(
+            title = "MaxVibes: $title",
+            cancellable = true,
+            action = {
+                try {
+                    action()
                 } catch (e: ProcessCanceledException) {
                     throw e
                 } catch (e: Throwable) {
-                    // Safety net: an adapter exception must surface as an Error result,
-                    // otherwise the panel stays disabled forever (no handler runs).
                     MaxVibesLogger.error(
-                        "Controller", "clipboard background action crashed",
+                        "Controller",
+                        "clipboard background action crashed",
                         e as? Exception ?: RuntimeException(e)
                     )
                     ClipboardStepResult.Error(
                         message = "Internal error: ${e.javaClass.simpleName}: ${e.message ?: "no message"}"
                     )
                 }
-                ApplicationManager.getApplication().invokeLater { clipboardDispatcher.handleResult(result, session) }
+            },
+            onSuccess = { result ->
+                clipboardDispatcher.handleResult(result, session)
+            },
+            onCancel = {
+                service.clipboardService.reset(session.id)
+                callbacks.appendToChat("⚠️ Cancelled")
+                callbacks.setInputEnabled(true)
+                callbacks.updateModeIndicator()
             }
-
-            override fun onCancel() {
-                ApplicationManager.getApplication().invokeLater {
-                    service.clipboardService.reset(session.id)
-                    callbacks.appendToChat("\u26A0\uFE0F Cancelled")
-                    callbacks.setInputEnabled(true)
-                    callbacks.updateModeIndicator()
-                }
-            }
-        })
+        )
     }
 
     /**
@@ -204,38 +207,33 @@ class ChatMessageController(
         action: suspend () -> ClaudeCodeStepResult
     ) {
         callbacks.setStatus("Claude Code: running")
-        ProgressManager.getInstance().run(
-            object : Task.Backgroundable(project, "MaxVibes: $title", true) {
-                override fun run(indicator: ProgressIndicator) {
-                    service.notificationService.setProgressIndicator(indicator)
-                    val result = try {
-                        runBlocking { action() }
-                    } catch (e: ProcessCanceledException) {
-                        throw e
-                    } catch (e: Throwable) {
-                        // Safety net: an adapter exception must surface as an Error result,
-                        // otherwise the panel stays disabled forever (no handler runs).
-                        MaxVibesLogger.error(
-                            "Controller", "claudeCode background action crashed",
-                            e as? Exception ?: RuntimeException(e)
-                        )
-                        ClaudeCodeStepResult.Error(
-                            message = "Internal error: ${e.javaClass.simpleName}: ${e.message ?: "no message"}"
-                        )
-                    }
-                    ApplicationManager.getApplication().invokeLater {
-                        claudeCodeDispatcher.handleResult(result, session)
-                    }
+        backgroundTaskRunner.run(
+            title = "MaxVibes: $title",
+            cancellable = true,
+            action = {
+                try {
+                    action()
+                } catch (e: ProcessCanceledException) {
+                    throw e
+                } catch (e: Throwable) {
+                    MaxVibesLogger.error(
+                        "Controller",
+                        "claudeCode background action crashed",
+                        e as? Exception ?: RuntimeException(e)
+                    )
+                    ClaudeCodeStepResult.Error(
+                        message = "Internal error: ${e.javaClass.simpleName}: ${e.message ?: "no message"}"
+                    )
                 }
-
-                override fun onCancel() {
-                    ApplicationManager.getApplication().invokeLater {
-                        service.claudeCodeService.reset(session.id)
-                        callbacks.appendToChat("⚠️ Cancelled")
-                        callbacks.setInputEnabled(true)
-                        callbacks.updateModeIndicator()
-                    }
-                }
+            },
+            onSuccess = { result ->
+                claudeCodeDispatcher.handleResult(result, session)
+            },
+            onCancel = {
+                service.claudeCodeService.reset(session.id)
+                callbacks.appendToChat("⚠️ Cancelled")
+                callbacks.setInputEnabled(true)
+                callbacks.updateModeIndicator()
             }
         )
     }
@@ -247,33 +245,28 @@ class ChatMessageController(
         useCheap: Boolean,
         request: ContextAwareRequest
     ) {
-        ProgressManager.getInstance()
-            .run(object : Task.Backgroundable(project, "MaxVibes: $progressTitle...", true) {
-                override fun run(indicator: ProgressIndicator) {
-                    service.notificationService.setProgressIndicator(indicator)
-                    runBlocking {
-                        val uc = if (useCheap) {
-                            service.cheapContextAwareModifyUseCase ?: service.contextAwareModifyUseCase
-                        } else {
-                            service.contextAwareModifyUseCase
-                        }
-                        val result = uc.execute(request)
-                        ApplicationManager.getApplication().invokeLater {
-                            apiDispatcher.handleResult(result, session, isPlanOnly)
-                        }
-                    }
+        backgroundTaskRunner.run(
+            title = "MaxVibes: $progressTitle...",
+            cancellable = true,
+            action = {
+                val useCase = if (useCheap) {
+                    service.cheapContextAwareModifyUseCase ?: service.contextAwareModifyUseCase
+                } else {
+                    service.contextAwareModifyUseCase
                 }
-
-                override fun onCancel() {
-                    ApplicationManager.getApplication().invokeLater {
-                        chatTreeService.addMessage(session.id, MessageRole.SYSTEM, "Cancelled")
-                        callbacks.appendToChat("\u26A0\uFE0F Cancelled")
-                        callbacks.setInputEnabled(true)
-                        callbacks.setStatus("Cancelled")
-                        MaxVibesLogger.warn("Controller", "cancelled by user")
-                    }
-                }
-            })
+                useCase.execute(request)
+            },
+            onSuccess = { result ->
+                apiDispatcher.handleResult(result, session, isPlanOnly)
+            },
+            onCancel = {
+                chatTreeService.addMessage(session.id, MessageRole.SYSTEM, "Cancelled")
+                callbacks.appendToChat("⚠️ Cancelled")
+                callbacks.setInputEnabled(true)
+                callbacks.setStatus("Cancelled")
+                MaxVibesLogger.warn("Controller", "cancelled by user")
+            }
+        )
     }
 
     fun approve() {
@@ -305,27 +298,26 @@ class ChatMessageController(
 
     // ==================== Command Flow ====================
 
-    /**
-     * Command-turn state machine lives in [CommandTurnCoordinator]; the controller only
-     * supplies threading (background execution + EDT callback) and batch continuation.
-     * Lazy so tests that never touch commands don't need [MaxVibesService.executeCommandUseCase].
-     */
-    private val commandCoordinator by lazy {
+    private val commandCoordinator: CommandTurnCoordinator by lazy {
         CommandTurnCoordinator(
             executeCommandUseCase = service.executeCommandUseCase,
             callbacks = callbacks,
-            addSystemMessage = { sessionId, text -> chatTreeService.addMessage(sessionId, MessageRole.SYSTEM, text) },
+            addSystemMessage = { sessionId, text ->
+                chatTreeService.addMessage(sessionId, MessageRole.SYSTEM, text)
+            },
             activeSessionId = { chatTreeService.getActiveSession().id },
             executeAsync = { request, onDone ->
-                ProgressManager.getInstance()
-                    .run(object : Task.Backgroundable(project, "MaxVibes: Running command...", false) {
-                        override fun run(indicator: ProgressIndicator) {
-                            val execution = runBlocking { service.executeCommandUseCase.execute(request) }
-                            ApplicationManager.getApplication().invokeLater { onDone(execution) }
-                        }
-                    })
+                backgroundTaskRunner.run(
+                    title = "MaxVibes: Running command...",
+                    cancellable = false,
+                    publishIndicator = false,
+                    action = { service.executeCommandUseCase.execute(request) },
+                    onSuccess = onDone
+                )
             },
-            onBatchComplete = { sessionId, mode, formatted -> handleCommandBatchComplete(sessionId, mode, formatted) }
+            onBatchComplete = { sessionId, mode, formatted ->
+                commandResultRouter.route(sessionId, mode, formatted)
+            }
         )
     }
     private val claudeCodeDispatcher by lazy {
@@ -353,7 +345,7 @@ class ChatMessageController(
             executeAsync = { title, session, action -> runClipboardBg(title, session, action) }
         )
     }
-    private val apiDispatcher by lazy {
+    private val apiDispatcher: ApiDispatcher by lazy {
         ApiDispatcher(
             chatTreeService = chatTreeService,
             callbacks = callbacks,
@@ -369,25 +361,26 @@ class ChatMessageController(
             }
         )
     }
-
-    /** Continues the dialog after a command batch resolves, dispatching by interaction mode. */
-    private fun handleCommandBatchComplete(sessionId: String, mode: InteractionMode, formatted: String) {
-        val session = chatTreeService.getSessionById(sessionId)
-        if (session == null) {
-            callbacks.setInputEnabled(true)
-            return
-        }
-        when (mode) {
-            InteractionMode.CLIPBOARD -> runClipboardBg("Sending command results...", session) {
-                service.clipboardService.submitCommandResults(session.id, formatted)
+    private val commandResultRouter: CommandResultRouter by lazy {
+        CommandResultRouter(
+            chatTreeService = chatTreeService,
+            submitClipboard = { session, formatted ->
+                runClipboardBg("Sending command results...", session) {
+                    service.clipboardService.submitCommandResults(session.id, formatted)
+                }
+            },
+            submitClaudeCode = { session, formatted ->
+                runClaudeCodeBg("Sending command results...", session) {
+                    service.claudeCodeService.submitCommandResults(session.id, formatted)
+                }
+            },
+            submitApi = { session, formatted ->
+                apiDispatcher.submitCommandResults(session, formatted)
+            },
+            onMissingSession = {
+                callbacks.setInputEnabled(true)
             }
-
-            InteractionMode.CLAUDE_CODE -> runClaudeCodeBg("Sending command results...", session) {
-                service.claudeCodeService.submitCommandResults(session.id, formatted)
-            }
-
-            InteractionMode.API, InteractionMode.CHEAP_API -> apiDispatcher.submitCommandResults(session, formatted)
-        }
+        )
     }
 
     // ==================== Auto-Retry Logic ====================
@@ -449,35 +442,34 @@ class ChatMessageController(
 
     fun fetchIdeErrors() {
         callbacks.setStatus("Fetching IDE errors...")
-        object : Task.Backgroundable(project, "Fetching IDE errors", false) {
-            override fun run(indicator: ProgressIndicator) {
-                runBlocking {
-                    val result = service.ideErrorsPort.getCompilerErrors()
-                    ApplicationManager.getApplication().invokeLater {
-                        when (result) {
-                            is Result.Success -> {
-                                val errors = result.value
-                                if (errors.isEmpty()) {
-                                    callbacks.setStatus("No IDE errors found in open files")
-                                } else {
-                                    pendingContext.attachErrors(
-                                        errors.joinToString(separator = System.lineSeparator()) {
-                                            it.formatForLlm()
-                                        }
-                                    )
-                                    callbacks.setStatus("Attached ${errors.size} IDE errors")
-                                    callbacks.onAttachmentsChanged(attachedTrace, attachedErrors)
+        backgroundTaskRunner.run(
+            title = "Fetching IDE errors",
+            cancellable = false,
+            publishIndicator = false,
+            action = { service.ideErrorsPort.getCompilerErrors() },
+            onSuccess = { result ->
+                when (result) {
+                    is Result.Success -> {
+                        val errors = result.value
+                        if (errors.isEmpty()) {
+                            callbacks.setStatus("No IDE errors found in open files")
+                        } else {
+                            pendingContext.attachErrors(
+                                errors.joinToString(separator = System.lineSeparator()) {
+                                    it.formatForLlm()
                                 }
-                            }
-
-                            is Result.Failure -> callbacks.onError(
-                                "Failed to fetch IDE errors: ${result.error}"
                             )
+                            callbacks.setStatus("Attached ${errors.size} IDE errors")
+                            callbacks.onAttachmentsChanged(attachedTrace, attachedErrors)
                         }
                     }
+
+                    is Result.Failure -> callbacks.onError(
+                        "Failed to fetch IDE errors: ${result.error}"
+                    )
                 }
             }
-        }.queue()
+        )
     }
 
     fun clearAttachmentsAfterSend() {
@@ -487,43 +479,19 @@ class ChatMessageController(
         if (hadOneShot) callbacks.onOneShotChanged(null)
     }
 
-    fun createNewSession() {
-        val newSession = chatTreeService.createNewSession()
-        callbacks.onSessionChanged(newSession)
-    }
+    fun createNewSession() = sessionActions.createNewSession()
 
-    fun deleteCurrentSession(sessionId: String) {
-        chatTreeService.deleteSession(sessionId)
-        val next = chatTreeService.getActiveSession()
-        callbacks.onSessionChanged(next)
-    }
+    fun deleteCurrentSession(sessionId: String) = sessionActions.deleteCurrentSession(sessionId)
 
-    fun renameSession(sessionId: String, newTitle: String) {
-        val updated = chatTreeService.renameSession(sessionId, newTitle)
-        if (updated != null) callbacks.onSessionRenamed(updated)
-    }
+    fun renameSession(sessionId: String, newTitle: String) =
+        sessionActions.renameSession(sessionId, newTitle)
 
-    fun branchSession(parentSessionId: String, title: String) {
-        val newSession = chatTreeService.createBranch(parentSessionId, title)
-        if (newSession != null) callbacks.onSessionChanged(newSession)
-    }
+    fun branchSession(parentSessionId: String, title: String) =
+        sessionActions.branchSession(parentSessionId, title)
 
-    fun loadSession(sessionId: String) {
-        chatTreeService.setActiveSession(sessionId)
-        val session = chatTreeService.getSessionById(sessionId)
-        if (session != null) callbacks.onSessionChanged(session)
-    }
+    fun loadSession(sessionId: String) = sessionActions.loadSession(sessionId)
 
-    /**
-     * Updates the selected specific prompt for the currently active session.
-     * Null means "Just Code" — no specific prompt.
-     */
-    fun selectSpecificPrompt(name: String?) {
-        val session = chatTreeService.getActiveSession() ?: return
-        val updated = session.withSelectedPrompt(name)
-        chatTreeService.saveSession(updated)
-        callbacks.onSessionChanged(updated)
-    }
+    fun selectSpecificPrompt(name: String?) = sessionActions.selectSpecificPrompt(name)
 
     fun sendMessage(
         userInput: String,
