@@ -6,11 +6,9 @@ import com.maxvibes.application.service.ClaudeCodeStepResult
 import com.maxvibes.application.service.ClipboardStepResult
 import com.maxvibes.domain.model.chat.ChatSession
 import com.maxvibes.domain.model.chat.MessageRole
-import com.maxvibes.plugin.service.MaxVibesLogger
 import com.maxvibes.plugin.service.MaxVibesService
 import com.maxvibes.domain.model.interaction.InteractionMode
 import com.maxvibes.domain.model.interaction.AttachedImage
-import com.intellij.openapi.progress.ProcessCanceledException
 
 /**
  * Aggregate UI port of the chat panel. Prefer depending on a narrow facet
@@ -59,6 +57,26 @@ class ChatMessageController(
             service.notificationService.setProgressIndicator(indicator)
         }
     }
+    private val interactionExecutionCoordinator: InteractionExecutionCoordinator by lazy {
+        InteractionExecutionCoordinator(
+            backgroundTaskRunner = backgroundTaskRunner,
+            inputStatusView = callbacks,
+            appendToChat = callbacks::appendToChat,
+            resetClipboardSession = { sessionId -> service.clipboardService.reset(sessionId) },
+            resetClaudeCodeSession = { sessionId -> service.claudeCodeService.reset(sessionId) },
+            addSystemMessage = { sessionId, text ->
+                chatTreeService.addMessage(sessionId, MessageRole.SYSTEM, text)
+            },
+            executeApiRequest = { useCheap, request ->
+                val useCase = if (useCheap) {
+                    service.cheapContextAwareModifyUseCase ?: service.contextAwareModifyUseCase
+                } else {
+                    service.contextAwareModifyUseCase
+                }
+                useCase.execute(request)
+            }
+        )
+    }
     private val documentSaver: DocumentSaver = IntellijDocumentSaver()
     private val ideErrorsAttachmentLoader: IdeErrorsAttachmentLoader by lazy {
         IdeErrorsAttachmentLoader(
@@ -96,37 +114,12 @@ class ChatMessageController(
         title: String,
         session: ChatSession,
         action: suspend () -> ClipboardStepResult
-    ) {
-        backgroundTaskRunner.run(
-            title = "MaxVibes: $title",
-            cancellable = true,
-            action = {
-                try {
-                    action()
-                } catch (e: ProcessCanceledException) {
-                    throw e
-                } catch (e: Throwable) {
-                    MaxVibesLogger.error(
-                        "Controller",
-                        "clipboard background action crashed",
-                        e as? Exception ?: RuntimeException(e)
-                    )
-                    ClipboardStepResult.Error(
-                        message = "Internal error: ${e.javaClass.simpleName}: ${e.message ?: "no message"}"
-                    )
-                }
-            },
-            onSuccess = { result ->
-                clipboardDispatcher.handleResult(result, session)
-            },
-            onCancel = {
-                service.clipboardService.reset(session.id)
-                callbacks.appendToChat("⚠️ Cancelled")
-                callbacks.setInputEnabled(true)
-                callbacks.updateModeIndicator()
-            }
-        )
-    }
+    ): Unit = interactionExecutionCoordinator.runClipboard(
+        title = title,
+        session = session,
+        action = action,
+        onResult = { result -> clipboardDispatcher.handleResult(result, session) }
+    )
 
     /**
      * Re-generates and copies the clipboard JSON for the current active session.
@@ -139,38 +132,12 @@ class ChatMessageController(
         title: String,
         session: ChatSession,
         action: suspend () -> ClaudeCodeStepResult
-    ) {
-        callbacks.setStatus("Claude Code: running")
-        backgroundTaskRunner.run(
-            title = "MaxVibes: $title",
-            cancellable = true,
-            action = {
-                try {
-                    action()
-                } catch (e: ProcessCanceledException) {
-                    throw e
-                } catch (e: Throwable) {
-                    MaxVibesLogger.error(
-                        "Controller",
-                        "claudeCode background action crashed",
-                        e as? Exception ?: RuntimeException(e)
-                    )
-                    ClaudeCodeStepResult.Error(
-                        message = "Internal error: ${e.javaClass.simpleName}: ${e.message ?: "no message"}"
-                    )
-                }
-            },
-            onSuccess = { result ->
-                claudeCodeDispatcher.handleResult(result, session)
-            },
-            onCancel = {
-                service.claudeCodeService.reset(session.id)
-                callbacks.appendToChat("⚠️ Cancelled")
-                callbacks.setInputEnabled(true)
-                callbacks.updateModeIndicator()
-            }
-        )
-    }
+    ): Unit = interactionExecutionCoordinator.runClaudeCode(
+        title = title,
+        session = session,
+        action = action,
+        onResult = { result -> claudeCodeDispatcher.handleResult(result, session) }
+    )
 
     private fun runApiBg(
         progressTitle: String,
@@ -178,30 +145,13 @@ class ChatMessageController(
         isPlanOnly: Boolean,
         useCheap: Boolean,
         request: ContextAwareRequest
-    ) {
-        backgroundTaskRunner.run(
-            title = "MaxVibes: $progressTitle...",
-            cancellable = true,
-            action = {
-                val useCase = if (useCheap) {
-                    service.cheapContextAwareModifyUseCase ?: service.contextAwareModifyUseCase
-                } else {
-                    service.contextAwareModifyUseCase
-                }
-                useCase.execute(request)
-            },
-            onSuccess = { result ->
-                apiDispatcher.handleResult(result, session, isPlanOnly)
-            },
-            onCancel = {
-                chatTreeService.addMessage(session.id, MessageRole.SYSTEM, "Cancelled")
-                callbacks.appendToChat("⚠️ Cancelled")
-                callbacks.setInputEnabled(true)
-                callbacks.setStatus("Cancelled")
-                MaxVibesLogger.warn("Controller", "cancelled by user")
-            }
-        )
-    }
+    ) = interactionExecutionCoordinator.runApi(
+        progressTitle = progressTitle,
+        session = session,
+        useCheap = useCheap,
+        request = request,
+        onResult = { result -> apiDispatcher.handleResult(result, session, isPlanOnly) }
+    )
 
     fun approve() = turnSubmissionCoordinator.approve()
 
@@ -224,12 +174,9 @@ class ChatMessageController(
             },
             activeSessionId = { chatTreeService.getActiveSession().id },
             executeAsync = { request, onDone ->
-                backgroundTaskRunner.run(
-                    title = "MaxVibes: Running command...",
-                    cancellable = false,
-                    publishIndicator = false,
+                interactionExecutionCoordinator.runCommand(
                     action = { service.executeCommandUseCase.execute(request) },
-                    onSuccess = onDone
+                    onResult = onDone
                 )
             },
             onBatchComplete = { sessionId, mode, formatted ->
@@ -237,7 +184,7 @@ class ChatMessageController(
             }
         )
     }
-    private val claudeCodeDispatcher by lazy {
+    private val claudeCodeDispatcher: ClaudeCodeDispatcher by lazy {
         ClaudeCodeDispatcher(
             claudeCodeService = { service.claudeCodeService },
             resolveSpecificPrompt = { name -> service.specificPromptService.resolvePromptContent(name) },
@@ -247,10 +194,12 @@ class ChatMessageController(
             presentCommands = { commands, sessionId, mode ->
                 commandCoordinator.presentCommands(commands, sessionId, mode)
             },
-            executeAsync = { title, session, action -> runClaudeCodeBg(title, session, action) }
+            executeAsync = { title, session, action ->
+                runClaudeCodeBg(title, session, action)
+            }
         )
     }
-    private val clipboardDispatcher by lazy {
+    private val clipboardDispatcher: ClipboardDispatcher by lazy {
         ClipboardDispatcher(
             clipboardService = { service.clipboardService },
             resolveSpecificPrompt = { name -> service.specificPromptService.resolvePromptContent(name) },
@@ -259,7 +208,9 @@ class ChatMessageController(
             presentCommands = { commands, sessionId, mode ->
                 commandCoordinator.presentCommands(commands, sessionId, mode)
             },
-            executeAsync = { title, session, action -> runClipboardBg(title, session, action) }
+            executeAsync = { title, session, action ->
+                runClipboardBg(title, session, action)
+            }
         )
     }
     private val apiDispatcher: ApiDispatcher by lazy {
