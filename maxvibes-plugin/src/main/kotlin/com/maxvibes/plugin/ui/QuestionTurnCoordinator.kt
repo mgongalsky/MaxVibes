@@ -31,6 +31,7 @@ class QuestionTurnCoordinator(
 
     fun presentQuestions(questions: List<InteractionQuestion>) {
         if (questions.isEmpty()) return
+        dismissQuestionTurn()
         MaxVibesLogger.info("QuestionCoordinator", "presentQuestions", mapOf("count" to questions.size))
         val turn = QuestionTurn()
         questionTurn = turn
@@ -45,19 +46,19 @@ class QuestionTurnCoordinator(
 
     private fun answerQuestion(item: QuestionItem, answer: String) {
         val turn = questionTurn ?: return
-        if (item.answer != null) return
+        if (item !in turn.items || item.answer != null) return
         item.answer = answer
         item.view?.setAnswered(answer)
         val remaining = turn.items.count { it.answer == null }
         if (remaining > 0) {
-            callbacks.setStatus("\u2753 $remaining question(s) left")
+            callbacks.setStatus("❓ $remaining question(s) left")
             return
         }
         questionTurn = null
         val responseText = if (turn.items.size == 1) {
             turn.items.first().answer.orEmpty()
         } else {
-            turn.items.joinToString("\n") { questionItem ->
+            turn.items.joinToString(10.toChar().toString()) { questionItem ->
                 "${questionItem.question.id}: ${questionItem.answer}"
             }
         }

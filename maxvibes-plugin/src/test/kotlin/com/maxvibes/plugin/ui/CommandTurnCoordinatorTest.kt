@@ -21,11 +21,14 @@ import org.junit.jupiter.api.Test
  */
 class CommandTurnCoordinatorTest {
 
-    private class FakeExecuteCommandUseCase : ExecuteCommandUseCase {
+    private class FakeExecuteCommandUseCase(
+        private val warningsByCommand: Map<String, List<String>> = emptyMap()
+    ) : ExecuteCommandUseCase {
         override suspend fun execute(request: CommandRequest): CommandExecution =
             throw UnsupportedOperationException("coordinator must use the injected executeAsync")
 
-        override fun warningsFor(request: CommandRequest): List<String> = emptyList()
+        override fun warningsFor(request: CommandRequest): List<String> =
+            warningsByCommand[request.command].orEmpty()
 
         override fun formatForLlm(execution: CommandExecution, tailLines: Int): String =
             "${execution.request.command}=${execution.status}" +
@@ -148,5 +151,123 @@ class CommandTurnCoordinatorTest {
         assertNull(callbacks.inputEnabled)
         assertNull(completedBatch)
         assertTrue(callbacks.commandBubbles.isEmpty())
+    }
+
+    @Test
+    fun `stale actions from superseded batch are ignored`() {
+        present("old-one", "old-two")
+        val oldBubble = callbacks.commandBubbles[0]
+        val oldBatchBar = callbacks.batchBars[0]
+
+        present("new")
+        oldBubble.onRun()
+        oldBubble.onDecline("stale")
+        oldBatchBar.onRunAll()
+        oldBatchBar.onDeclineAll()
+
+        assertTrue(pendingExecutions.isEmpty())
+        assertTrue(systemMessages.isEmpty())
+        assertNull(completedBatch)
+
+        callbacks.commandBubbles.last().onDecline("not needed")
+        assertTrue(completedBatch!!.third.contains("new=DECLINED[not needed]"))
+    }
+
+    @Test
+    fun `stale completion from superseded batch is ignored`() {
+        present("old")
+        callbacks.commandBubbles[0].onRun()
+        val staleCompletion = pendingExecutions.single().second
+        pendingExecutions.clear()
+
+        present("new")
+        staleCompletion(
+            CommandExecution(
+                request = CommandRequest("old"),
+                status = CommandStatus.SUCCESS,
+                exitCode = 0,
+                durationMs = 1000
+            )
+        )
+
+        assertNull(completedBatch)
+        assertNull(callbacks.commandBubbles[0].resultHeadline)
+
+        callbacks.commandBubbles[1].onRun()
+        completeNext(CommandStatus.SUCCESS)
+        assertTrue(completedBatch!!.third.contains("new=SUCCESS"))
+        assertTrue(!completedBatch!!.third.contains("old=SUCCESS"))
+    }
+
+    @Test
+    fun `timeout in run all declines every remaining command`() {
+        present("one", "two", "three")
+        callbacks.batchBars[0].onRunAll()
+
+        completeNext(CommandStatus.TIMEOUT, exitCode = null)
+
+        assertTrue(pendingExecutions.isEmpty())
+        assertTrue(completedBatch!!.third.contains("one=TIMEOUT"))
+        assertTrue(completedBatch!!.third.contains("two=DECLINED[skipped: previous command failed]"))
+        assertTrue(completedBatch!!.third.contains("three=DECLINED[skipped: previous command failed]"))
+    }
+
+    @Test
+    fun `run all waits for manually running command before continuing queue`() {
+        present("one", "two")
+        callbacks.commandBubbles[0].onRun()
+
+        callbacks.batchBars[0].onRunAll()
+
+        assertEquals(1, pendingExecutions.size)
+        assertTrue(callbacks.commandBubbles[1].stateChanges.contains("queued"))
+
+        completeNext(CommandStatus.SUCCESS)
+        assertEquals(1, pendingExecutions.size)
+        completeNext(CommandStatus.SUCCESS)
+        assertTrue(completedBatch!!.third.contains("two=SUCCESS"))
+    }
+
+    @Test
+    fun `run and decline callbacks are ignored after command has started`() {
+        present("one")
+        val bubble = callbacks.commandBubbles.single()
+
+        bubble.onRun()
+        bubble.onRun()
+        bubble.onDecline("too late")
+
+        assertEquals(1, pendingExecutions.size)
+        assertEquals(listOf("running"), bubble.stateChanges)
+        assertNull(bubble.declineComment)
+
+        completeNext(CommandStatus.SUCCESS)
+        assertTrue(completedBatch != null)
+    }
+
+    @Test
+    fun `command bubble receives reason and validation warnings`() {
+        val localCallbacks = FakeChatPanelCallbacks()
+        val localCoordinator = CommandTurnCoordinator(
+            executeCommandUseCase = FakeExecuteCommandUseCase(
+                mapOf("danger" to listOf("warning one", "warning two"))
+            ),
+            commandView = localCallbacks,
+            callbacks = localCallbacks,
+            addSystemMessage = { _, _ -> },
+            activeSessionId = { "active" },
+            executeAsync = { _, _ -> },
+            onBatchComplete = { _, _, _ -> }
+        )
+
+        localCoordinator.presentCommands(
+            listOf(CommandRequest(command = "danger", reason = "needed for diagnostics")),
+            "session",
+            InteractionMode.API
+        )
+
+        val bubble = localCallbacks.commandBubbles.single()
+        assertEquals("needed for diagnostics", bubble.reason)
+        assertEquals(listOf("warning one", "warning two"), bubble.warnings)
     }
 }

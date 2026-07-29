@@ -95,4 +95,60 @@ class QuestionTurnCoordinatorTest {
         assertNull(callbacks.questionBubbles.single().answeredWith)
         assertTrue(callbacks.sentUserMessages.isEmpty())
     }
+
+    @Test
+    fun `remaining count is updated exactly after each partial answer`() {
+        coordinator.presentQuestions(
+            listOf(question("q1"), question("q2"), question("q3"))
+        )
+
+        callbacks.questionBubbles[0].onAnswer("A")
+        callbacks.questionBubbles[1].onAnswer("B")
+
+        assertEquals(
+            listOf("❓ 2 question(s) left", "❓ 1 question(s) left"),
+            callbacks.statusUpdates
+        )
+        assertTrue(callbacks.sentUserMessages.isEmpty())
+    }
+
+    @Test
+    fun `completed turn ignores further callbacks`() {
+        coordinator.presentQuestions(listOf(question("q1")))
+        val bubble = callbacks.questionBubbles.single()
+
+        bubble.onAnswer("Yes")
+        bubble.onAnswer("No")
+
+        assertEquals("Yes", bubble.answeredWith)
+        assertEquals(listOf("Yes"), callbacks.sentUserMessages)
+    }
+
+    @Test
+    fun `dismiss is idempotent and never submits an answer`() {
+        coordinator.presentQuestions(listOf(question("q1"), question("q2")))
+
+        coordinator.dismissQuestionTurn()
+        coordinator.dismissQuestionTurn()
+
+        assertTrue(callbacks.questionBubbles.all { it.dismissed })
+        assertTrue(callbacks.sentUserMessages.isEmpty())
+    }
+
+    @Test
+    fun `presenting a new turn dismisses old bubbles and ignores their callbacks`() {
+        coordinator.presentQuestions(listOf(question("old")))
+        val oldBubble = callbacks.questionBubbles.single()
+
+        coordinator.presentQuestions(listOf(question("new")))
+        val newBubble = callbacks.questionBubbles.last()
+
+        assertTrue(oldBubble.dismissed)
+        oldBubble.onAnswer("stale")
+        assertNull(oldBubble.answeredWith)
+        assertTrue(callbacks.sentUserMessages.isEmpty())
+
+        newBubble.onAnswer("fresh")
+        assertEquals(listOf("fresh"), callbacks.sentUserMessages)
+    }
 }

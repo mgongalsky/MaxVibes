@@ -78,4 +78,35 @@ class CommandResultRouterTest {
         assertTrue(claudeCodeCalls.isEmpty())
         assertTrue(apiCalls.isEmpty())
     }
+
+    @Test
+    fun `route resolves the requested session id exactly once`() {
+        router.route("session-id", InteractionMode.CLIPBOARD, "result")
+
+        io.mockk.verify(exactly = 1) {
+            chatTreeService.getSessionById("session-id")
+        }
+        assertEquals(listOf(session to "result"), clipboardCalls)
+    }
+
+    @Test
+    fun `missing Cheap API session restores interaction without API continuation`() {
+        every { chatTreeService.getSessionById("missing-cheap") } returns null
+
+        router.route("missing-cheap", InteractionMode.CHEAP_API, "result")
+
+        assertTrue(missingSessionReported)
+        assertTrue(apiCalls.isEmpty())
+        assertTrue(clipboardCalls.isEmpty())
+        assertTrue(claudeCodeCalls.isEmpty())
+    }
+
+    @Test
+    fun `empty formatted API result is forwarded unchanged`() {
+        router.route("session-id", InteractionMode.API, "")
+
+        assertEquals(listOf(session to ""), apiCalls)
+        assertTrue(clipboardCalls.isEmpty())
+        assertTrue(claudeCodeCalls.isEmpty())
+    }
 }

@@ -50,127 +50,131 @@ class CommandTurnCoordinator(
 
     private var commandTurn: CommandTurn? = null
 
-    /**
-     * Renders command blocks (plus a Run all / Decline all bar for batches) and keeps
-     * input locked until every command is resolved. When the batch completes, results
-     * are reported through [onBatchComplete] — see [recordExecution].
-     */
     fun presentCommands(commands: List<CommandRequest>, sessionId: String, mode: InteractionMode) {
         if (commands.isEmpty()) return
+        commandTurn?.batchBar?.dismiss()
         MaxVibesLogger.info("Controller", "presentCommands", mapOf("count" to commands.size, "mode" to mode.name))
         val turn = CommandTurn(sessionId, mode)
         commandTurn = turn
         callbacks.setInputEnabled(false)
-        callbacks.setStatus("\u26A1 ${commands.size} command(s) awaiting approval")
+        callbacks.setStatus("⚡ ${commands.size} command(s) awaiting approval")
         if (commands.size > 1) {
             turn.batchBar = commandView.addCommandBatchBar(
                 count = commands.size,
-                onRunAll = { startRunAll() },
-                onDeclineAll = { declineAllRemaining(null) }
+                onRunAll = { startRunAll(turn) },
+                onDeclineAll = { declineAllRemaining(turn, null) }
             )
         }
-        commands.forEach { cmd ->
-            val item = CommandItem(cmd)
+        commands.forEach { command ->
+            val item = CommandItem(command)
             turn.items.add(item)
-            val warnings = executeCommandUseCase.warningsFor(cmd)
+            val warnings = executeCommandUseCase.warningsFor(command)
             item.view = commandView.addCommandBubble(
-                command = cmd.command,
-                reason = cmd.reason,
+                command = command.command,
+                reason = command.reason,
                 warnings = warnings,
-                onRun = { runCommand(item) },
-                onDecline = { comment -> declineItem(item, comment) }
+                onRun = { runCommand(turn, item) },
+                onDecline = { comment -> declineItem(turn, item, comment) }
             )
         }
     }
 
-    /** Runs every unresolved command sequentially, stopping at the first non-zero exit code. */
-    private fun startRunAll() {
-        val turn = commandTurn ?: return
-        if (turn.runAllActive) return
+    private fun startRunAll(turn: CommandTurn) {
+        if (commandTurn !== turn || turn.runAllActive) return
         turn.runAllActive = true
         turn.batchBar?.dismiss()
         turn.items.filter { !it.resolved && !it.started }.forEach { it.view?.setQueued() }
-        // If a manually started command is still running, its completion hook continues the chain.
-        if (turn.items.none { it.started && !it.resolved }) runNextQueued()
+        if (turn.items.none { it.started && !it.resolved }) {
+            runNextQueued(turn)
+        }
     }
 
-    private fun runNextQueued() {
-        val turn = commandTurn ?: return
+    private fun runNextQueued(turn: CommandTurn) {
+        if (commandTurn !== turn) return
         val next = turn.items.firstOrNull { !it.resolved && !it.started } ?: return
-        runCommand(next)
+        runCommand(turn, next)
     }
 
-    /** Declines every unresolved command; used by Decline all and by the run-all failure stop. */
-    private fun declineAllRemaining(comment: String?) {
-        val turn = commandTurn ?: return
+    private fun declineAllRemaining(turn: CommandTurn, comment: String?) {
+        if (commandTurn !== turn) return
         turn.batchBar?.dismiss()
-        turn.items.filter { !it.resolved && !it.started }.toList().forEach { declineItem(it, comment) }
+        turn.items
+            .filter { !it.resolved && !it.started }
+            .toList()
+            .forEach { declineItem(turn, it, comment) }
     }
 
-    private fun declineItem(item: CommandItem, comment: String?) {
-        if (item.resolved) return
+    private fun declineItem(turn: CommandTurn, item: CommandItem, comment: String?) {
+        if (commandTurn !== turn || item !in turn.items || item.resolved || item.started) return
         item.resolved = true
         item.view?.setDeclined(comment)
         addSystemMessage(
             commandTurn?.sessionId ?: activeSessionId(),
-            "\u2716 Declined: ${item.request.command}" + (comment?.let { " \u2014 $it" } ?: "")
+            "✖ Declined: ${item.request.command}" + (comment?.let { " — $it" } ?: "")
         )
         recordExecution(
-            CommandExecution(request = item.request, status = CommandStatus.DECLINED, declineComment = comment)
+            turn,
+            CommandExecution(
+                request = item.request,
+                status = CommandStatus.DECLINED,
+                declineComment = comment
+            )
         )
     }
 
-    /** Executes one approved command via [executeAsync] and records its outcome. */
-    private fun runCommand(item: CommandItem) {
-        if (item.resolved || item.started) return
+    private fun runCommand(turn: CommandTurn, item: CommandItem) {
+        if (commandTurn !== turn || item !in turn.items || item.resolved || item.started) return
         item.started = true
         item.view?.setRunning()
-        callbacks.setStatus("\u26A1 Running: ${item.request.command.take(50)}")
-        executeAsync(item.request) { execution ->
+        callbacks.setStatus("⚡ Running: ${item.request.command.take(50)}")
+        executeAsync(item.request) completion@{ execution ->
+            if (commandTurn !== turn || item.resolved) return@completion
             val headline = when (execution.status) {
-                CommandStatus.SUCCESS -> "\u2705 exit 0 \u00B7 ${execution.durationMs / 1000}s"
-                CommandStatus.FAILED -> "\u274C exit ${execution.exitCode} \u00B7 ${execution.durationMs / 1000}s"
-                CommandStatus.TIMEOUT -> "\u23F1 Timeout after ${item.request.timeoutSec}s"
-                CommandStatus.ERROR -> "\u274C Failed to start"
-                CommandStatus.DECLINED -> "\u2716 Declined"
+                CommandStatus.SUCCESS -> "✅ exit 0 · ${execution.durationMs / 1000}s"
+                CommandStatus.FAILED -> "❌ exit ${execution.exitCode} · ${execution.durationMs / 1000}s"
+                CommandStatus.TIMEOUT -> "⏱ Timeout after ${item.request.timeoutSec}s"
+                CommandStatus.ERROR -> "❌ Failed to start"
+                CommandStatus.DECLINED -> "✖ Declined"
             }
             item.resolved = true
             item.view?.setResult(headline, execution.output, execution.status == CommandStatus.SUCCESS)
             addSystemMessage(
                 commandTurn?.sessionId ?: activeSessionId(),
-                "\u26A1 ${item.request.command} \u2192 $headline"
+                "⚡ ${item.request.command} → $headline"
             )
-            val turn = commandTurn
-            recordExecution(execution)
-            if (turn != null && turn.runAllActive && commandTurn === turn) {
+            recordExecution(turn, execution)
+            if (turn.runAllActive && commandTurn === turn) {
                 if (execution.status == CommandStatus.SUCCESS) {
-                    runNextQueued()
+                    runNextQueued(turn)
                 } else {
-                    declineAllRemaining("skipped: previous command failed")
+                    declineAllRemaining(turn, "skipped: previous command failed")
                 }
             }
         }
     }
 
-    /** Records one resolved command; when the batch is complete, reports it via [onBatchComplete]. */
-    private fun recordExecution(execution: CommandExecution) {
-        val turn = commandTurn ?: return
+    private fun recordExecution(turn: CommandTurn, execution: CommandExecution) {
+        if (commandTurn !== turn) return
         turn.executions.add(execution)
         val remaining = turn.items.size - turn.executions.size
         if (remaining > 0) {
-            callbacks.setStatus("\u26A1 $remaining command(s) awaiting approval")
+            callbacks.setStatus("⚡ $remaining command(s) awaiting approval")
             return
         }
         turn.batchBar?.dismiss()
         commandTurn = null
-        val formatted = turn.executions.joinToString("\n\n---\n\n") {
+        val lineFeed = 10.toChar().toString()
+        val formatted = turn.executions.joinToString(
+            lineFeed + lineFeed + "---" + lineFeed + lineFeed
+        ) {
             executeCommandUseCase.formatForLlm(it)
         }
         MaxVibesLogger.info(
-            "Controller", "commandTurn complete",
+            "Controller",
+            "commandTurn complete",
             mapOf("mode" to turn.mode.name, "n" to turn.executions.size)
         )
-        callbacks.setStatus("\u26A1 Sending command results...")
+        callbacks.setStatus("⚡ Sending command results...")
         onBatchComplete(turn.sessionId, turn.mode, formatted)
     }
 }

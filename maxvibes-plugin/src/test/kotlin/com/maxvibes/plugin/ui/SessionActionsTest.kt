@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import io.mockk.verifyOrder
 
 class SessionActionsTest {
     private val chatTreeService = mockk<ChatTreeService>(relaxed = true)
@@ -139,4 +140,34 @@ class SessionActionsTest {
         assertEquals(session.id, saved.captured.id)
         assertEquals(listOf<ChatSession?>(saved.captured), changedSessions)
     }
+
+    @Test
+    fun `selectSpecificPrompt preserves unrelated session fields`() {
+        val session = ChatSession(title = "Original title")
+        every { chatTreeService.getActiveSession() } returns session
+
+        actions.selectSpecificPrompt("write-unittest")
+
+        val saved = slot<ChatSession>()
+        verify { chatTreeService.saveSession(capture(saved)) }
+        assertEquals(session.id, saved.captured.id)
+        assertEquals("Original title", saved.captured.title)
+        assertEquals(session.messages, saved.captured.messages)
+        assertEquals("write-unittest", saved.captured.selectedSpecificPromptName)
+    }
+
+    @Test
+    fun `loadSession activates before reading the selected session`() {
+        val session = ChatSession()
+        every { chatTreeService.getSessionById(session.id) } returns session
+
+        actions.loadSession(session.id)
+
+        verifyOrder {
+            chatTreeService.setActiveSession(session.id)
+            chatTreeService.getSessionById(session.id)
+        }
+        assertEquals(listOf(session), changedSessions)
+    }
+
 }
