@@ -4,7 +4,7 @@
 
 ## Итог
 
-Рефакторинг завершён полностью.
+Рефакторинг и последующий test-hardening завершены полностью.
 
 `ChatMessageController` теперь содержит только:
 
@@ -49,22 +49,78 @@
 
 `QuestionTurnCoordinator` и `CommandTurnCoordinator` также принимают отдельный `InputStatusView`, а не полный агрегат.
 
+## Test hardening
+
+После структурного рефакторинга проведён отдельный аудит покрытия выделенных seams.
+
+### Submission и attachments
+
+Дополнительно зафиксированы:
+
+- независимость snapshot-ов и consume semantics;
+- точные UI-публикации trace/errors/images/one-shot;
+- image-limit и invalid-index paths;
+- повторная очистка состояния;
+- сохранение документов и порядок `save → dismiss → consume → dispatch`;
+- точная передача параметров во все четыре interaction mode;
+- approve и redo ordering;
+- замена и сохранение IDE errors при success/empty/failure.
+
+### Execution boundary
+
+Дополнительно покрыты:
+
+- точная передача успешных результатов;
+- преобразование неожиданных исключений Clipboard и Claude Code в protocol error;
+- отдельная обработка `ProcessCanceledException`;
+- cancellation recovery каждого режима;
+- отсутствие запуска action при отмене;
+- выбор Cheap/Regular API use case;
+- параметры cancellable/publishIndicator и task titles;
+- command execution boundary.
+
+### Session и result routing
+
+Дополнительно зафиксированы:
+
+- порядок session operations;
+- сохранение остальных полей при смене selected prompt;
+- неизвестные session/branch/rename paths;
+- отдельный routing всех interaction modes;
+- Cheap API continuation через обычный API path;
+- missing-session recovery;
+- передача пустого formatted result без преобразования.
+
+### Question и command state machines
+
+Помимо расширения тестов устранены реальные stale-callback риски:
+
+- новый question turn закрывает предыдущий;
+- ответы старых question blocks игнорируются;
+- callbacks завершённого/dismissed question turn идемпотентны;
+- command callbacks привязаны к конкретному `CommandTurn`;
+- старые Run/Decline/Run all/Decline all callbacks после нового batch игнорируются;
+- stale completion старого command batch не изменяет новый batch;
+- повторные Run/Decline после старта команды игнорируются;
+- Run all корректно продолжает вручную запущенную команду;
+- FAILED/TIMEOUT/ERROR останавливают цепочку и отклоняют остаток.
+
+### Composition smoke tests
+
+Публичный `ChatMessageController` проверен как composition boundary:
+
+- конструктор не инициализирует lazy service graph;
+- attachment-only операции не читают application services;
+- session path инициализирует только `ChatTreeService`;
+- selected prompt проходит через facade и composition wiring;
+- compatibility formatter не зависит от создания контроллера.
+
 ## Проверки
 
-Последовательно прошли зелёные целевые наборы для:
-
-- attachment и IDE-errors extraction;
-- submission coordinator;
-- interaction execution policy;
-- composition-root extraction;
-- dispatcher port narrowing;
-- `TaskContextFormatter`;
-- публичного API контроллера и session flow.
-
-Финальный полный прогон:
+Все промежуточные целевые наборы прошли зелёными. После test-hardening выполнен полный прогон:
 
 - команда: `./gradlew.bat :maxvibes-plugin:test`;
-- результат: **164/164 теста зелёные**.
+- результат: **полный набор тестов зелёный**.
 
 ## Definition of Done
 
@@ -74,5 +130,7 @@
 - [x] Send / approve / attachments / sessions / execution policy вынесены.
 - [x] Dispatcher-ы зависят от `MessageFlowView`, а не от полного `ChatPanelCallbacks`.
 - [x] Обратная зависимость `ApiDispatcher -> ChatMessageController` устранена.
-- [x] Извлечённые компоненты покрыты unit-тестами.
-- [x] Полный `:maxvibes-plugin:test` зелёный: 164/164.
+- [x] Извлечённые компоненты покрыты unit- и characterization-тестами.
+- [x] Composition wiring покрыт smoke-тестами.
+- [x] State machines защищены от stale и повторных callbacks.
+- [x] Полный `:maxvibes-plugin:test` зелёный после test-hardening.
