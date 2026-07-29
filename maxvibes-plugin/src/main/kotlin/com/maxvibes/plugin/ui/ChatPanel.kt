@@ -295,28 +295,12 @@ class ChatPanel(
     /** Guards claudeModelCombo listeners during programmatic sync. */
     private var suppressModelCombo = false
 
-    /** Re-reads settings.claudeCodeModel into the combo without firing commit. */
     private fun syncModelComboFromSettings() {
-        suppressModelCombo = true
-        try {
-            val value = settings.claudeCodeModel.trim()
-            claudeModelCombo.selectedItem = if (value.isEmpty()) "Auto" else value
-        } finally {
-            suppressModelCombo = false
-        }
+        cliSettingsBinder.syncModel { claudeModelCombo.selectedItem = it }
     }
 
-    /** Commits the combo editor value into settings.claudeCodeModel (Auto becomes blank). */
     private fun commitModelComboToSettings() {
-        if (suppressModelCombo) return
-        val raw = (claudeModelCombo.editor.item ?: claudeModelCombo.selectedItem)
-            ?.toString()
-            ?.trim()
-            ?: return
-        val value = if (raw.isEmpty() || raw.equals("Auto", ignoreCase = true)) "" else raw
-        if (settings.claudeCodeModel == value) return
-        settings.claudeCodeModel = value
-        statusLabel.text = "CLI model: ${value.ifEmpty { "Auto" }} — applies on next send"
+        cliSettingsBinder.commitModel(claudeModelCombo.editor.item ?: claudeModelCombo.selectedItem)
     }
 
     /**
@@ -343,21 +327,11 @@ class ChatPanel(
     /** Guards claudeEffortCombo listener during programmatic sync. */
     private var suppressEffortCombo = false
     private fun syncEffortComboFromSettings() {
-        suppressEffortCombo = true
-        try {
-            claudeEffortCombo.selectedItem = settings.claudeCodeEffortLevel.ifBlank { "Auto" }
-        } finally {
-            suppressEffortCombo = false
-        }
+        cliSettingsBinder.syncEffort { claudeEffortCombo.selectedItem = it }
     }
 
     private fun commitEffortComboToSettings() {
-        if (suppressEffortCombo) return
-        val raw = claudeEffortCombo.selectedItem as? String ?: return
-        val value = if (raw == "Auto") "" else raw
-        if (settings.claudeCodeEffortLevel == value) return
-        settings.claudeCodeEffortLevel = value
-        statusLabel.text = "CLI effort: ${value.ifEmpty { "Auto" }} — applies on next send"
+        cliSettingsBinder.commitEffort(claudeEffortCombo.selectedItem)
     }
 
     /**
@@ -393,6 +367,28 @@ class ChatPanel(
     private val chatTreeService get() = service.chatTreeService
     private val promptService: PromptService by lazy { PromptService.getInstance(project) }
     private val settings: MaxVibesSettings by lazy { MaxVibesSettings.getInstance() }
+
+    /** Null when the project has no base path (default/light projects). */
+    private val specificPromptFiles: SpecificPromptFiles? by lazy {
+        project.basePath?.let { SpecificPromptFiles(it) }
+    }
+    private val cliSettingsBinder: ClaudeCliSettingsBinder by lazy {
+        ClaudeCliSettingsBinder(
+            settings = object : ClaudeCliSettings {
+                override var model: String
+                    get() = settings.claudeCodeModel
+                    set(value) {
+                        settings.claudeCodeModel = value
+                    }
+                override var effortLevel: String
+                    get() = settings.claudeCodeEffortLevel
+                    set(value) {
+                        settings.claudeCodeEffortLevel = value
+                    }
+            },
+            onStatus = { statusLabel.text = it }
+        )
+    }
     private val initialModelComboSync: Unit = run {
         syncModelComboFromSettings()
         syncEffortComboFromSettings()
@@ -1036,128 +1032,45 @@ class ChatPanel(
     }
 
     /**
-     * Updates mode-specific UI components based on the provided panel state.
-     *
-     * Reads [ChatPanelState.clipboardStatus] instead of querying the clipboard service directly.
-     * In Clipboard mode, [modeIndicator] is clickable in both AWAITING_PASTE and SESSION_ACTIVE,
-     * allowing the user to toggle between the two states manually.
+     * Applies the [ModeUiPolicy] decision for the current mode and clipboard status to the
+     * mode-specific widgets.
      *
      * The [forceActivateListener] is removed at the top of every call so it never accumulates
      * across renders or leaks across mode switches (e.g. CLIPBOARD \u2192 CLAUDE_CODE).
      */
     private fun updateModeUI(state: ChatPanelState) {
-        // Always tear down any previously attached force-activate listener BEFORE the when \u2014
-        // the listener is only meaningful in CLIPBOARD's AWAITING_PASTE / SESSION_ACTIVE branches
-        // and must not survive a mode switch or a state transition out of those branches.
         forceActivateListener?.let { modeIndicator.removeMouseListener(it) }
         forceActivateListener = null
 
-        // The Claude Code transcript link is meaningful only in CLAUDE_CODE mode \u2014
-        // one switch here covers every branch of the when below.
-        ccLogLink.isVisible = state.mode == InteractionMode.CLAUDE_CODE
+        val decision = ModeUiPolicy.decide(state.mode, state.clipboardStatus)
 
-        when (state.mode) {
-            InteractionMode.API -> {
-                modeIndicator.isVisible = false
-                sendButton.text = "Send"
-                dryRunCheckbox.isVisible = true
-                copyJsonButton.isVisible = false
-                addHistoryCheckbox.isVisible = false
-            }
+        ccLogLink.isVisible = decision.ccLogLinkVisible
+        sendButton.text = decision.sendButtonText
+        dryRunCheckbox.isVisible = decision.dryRunVisible
+        copyJsonButton.isVisible = decision.copyJsonVisible
+        addHistoryCheckbox.isVisible = decision.addHistoryVisible
+        modeIndicator.isVisible = decision.indicatorVisible
+        decision.indicatorText?.let { modeIndicator.text = it }
 
-            InteractionMode.CLIPBOARD -> {
-                addHistoryCheckbox.isVisible = true
+        val decoration = decision.indicatorDecoration ?: return
+        modeIndicator.cursor =
+            if (decoration.handCursor) Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            else Cursor.getDefaultCursor()
+        modeIndicator.toolTipText = decoration.tooltip
 
-                when (state.clipboardStatus) {
-                    ClipboardSessionStatus.AWAITING_PASTE -> {
-                        modeIndicator.text = "\u23F3 Paste response"
-                        modeIndicator.isVisible = true
-                        sendButton.text = "Paste"
-                        copyJsonButton.isVisible = true
-
-                        modeIndicator.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-                        modeIndicator.toolTipText = "Click to skip paste and continue dialog"
-                        val listener = object : MouseAdapter() {
-                            override fun mouseClicked(e: MouseEvent) {
-                                val sessionId = chatTreeService.getActiveSession().id
-                                service.clipboardService.forceActivate(sessionId)
-                                render(buildState())
-                            }
-                        }
-                        forceActivateListener = listener
-                        modeIndicator.addMouseListener(listener)
-                    }
-
-                    ClipboardSessionStatus.SESSION_ACTIVE -> {
-                        modeIndicator.text = "\uD83D\uDCCB Active"
-                        modeIndicator.isVisible = true
-                        sendButton.text = "Send / Paste"
-                        copyJsonButton.isVisible = false
-
-                        modeIndicator.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-                        modeIndicator.toolTipText = "Click to go back to paste mode"
-                        val listener = object : MouseAdapter() {
-                            override fun mouseClicked(e: MouseEvent) {
-                                val sessionId = chatTreeService.getActiveSession().id
-                                service.clipboardService.forceAwaitPaste(sessionId)
-                                render(buildState())
-                            }
-                        }
-                        forceActivateListener = listener
-                        modeIndicator.addMouseListener(listener)
-                    }
-
-                    ClipboardSessionStatus.IDLE -> {
-                        modeIndicator.text = "\uD83D\uDCCB"
-                        modeIndicator.isVisible = true
-                        sendButton.text = "Generate"
-                        copyJsonButton.isVisible = false
-                        modeIndicator.cursor = Cursor.getDefaultCursor()
-                        modeIndicator.toolTipText = null
-                    }
-
-                    // Clipboard mode should never see AWAITING_APPROVE (Claude Code-only);
-                    // fall back to IDLE-equivalent visuals defensively.
-                    ClipboardSessionStatus.AWAITING_APPROVE -> {
-                        modeIndicator.text = "\uD83D\uDCCB"
-                        modeIndicator.isVisible = true
-                        sendButton.text = "Generate"
-                        copyJsonButton.isVisible = false
-                        modeIndicator.cursor = Cursor.getDefaultCursor()
-                        modeIndicator.toolTipText = null
-                    }
+        val action = decoration.action ?: return
+        val listener = object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) {
+                val sessionId = chatTreeService.getActiveSession().id
+                when (action) {
+                    IndicatorAction.FORCE_ACTIVATE -> service.clipboardService.forceActivate(sessionId)
+                    IndicatorAction.FORCE_AWAIT_PASTE -> service.clipboardService.forceAwaitPaste(sessionId)
                 }
-                dryRunCheckbox.isVisible = false
-            }
-
-            InteractionMode.CHEAP_API -> {
-                modeIndicator.text = "\uD83D\uDCB0"
-                modeIndicator.isVisible = true
-                sendButton.text = "Send"
-                dryRunCheckbox.isVisible = true
-                copyJsonButton.isVisible = false
-                addHistoryCheckbox.isVisible = false
-            }
-
-            InteractionMode.CLAUDE_CODE -> {
-                // Clipboard-specific controls have no meaning in Claude Code mode.
-                addHistoryCheckbox.isVisible = false
-                copyJsonButton.isVisible = false
-                dryRunCheckbox.isVisible = false
-
-                sendButton.text = "Send"
-                modeIndicator.cursor = Cursor.getDefaultCursor()
-                modeIndicator.toolTipText = null
-                modeIndicator.isVisible = true
-
-                modeIndicator.text = when (state.clipboardStatus) {
-                    ClipboardSessionStatus.AWAITING_APPROVE -> "\uD83E\uDD16 Awaiting Approve"
-                    ClipboardSessionStatus.SESSION_ACTIVE -> "\uD83E\uDD16 Active"
-                    ClipboardSessionStatus.IDLE,
-                    ClipboardSessionStatus.AWAITING_PASTE -> "\uD83E\uDD16 Claude Code"
-                }
+                render(buildState())
             }
         }
+        forceActivateListener = listener
+        modeIndicator.addMouseListener(listener)
     }
 
     private fun updateIndicators() {
@@ -1386,49 +1299,25 @@ class ChatPanel(
     }
 
     private fun createNewPromptFile() {
-        val basePath = project.basePath ?: return
-        val dir = java.io.File(basePath, ".maxvibes/prompts/specific")
-        if (!dir.exists()) dir.mkdirs()
-
-        // Find a unique filename
-        var candidate = java.io.File(dir, "new_prompt.md")
-        var counter = 1
-        while (candidate.exists()) {
-            candidate = java.io.File(dir, "new_prompt_$counter.md")
-            counter++
-        }
-
-        try {
-            candidate.writeText("# ${candidate.nameWithoutExtension}\n\nDescribe your task-specific prompt here.\n")
-        } catch (e: Exception) {
-            statusLabel.text = "Failed to create prompt file: ${e.message}"
-            return
-        }
-
-        // Open the file in the IDE editor
-        val vFile = com.intellij.openapi.vfs.LocalFileSystem.getInstance()
-            .refreshAndFindFileByIoFile(candidate)
-        if (vFile != null) {
-            com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project).openFile(vFile, true)
-        }
-
-        statusLabel.text = "Created: ${candidate.name} \u2014 add your prompt text and save"
-        // Refresh the dropdown so the new file appears immediately
-        render(buildState())
+        val files = specificPromptFiles ?: return
+        files.create().fold(
+            onSuccess = { file ->
+                com.intellij.openapi.vfs.LocalFileSystem.getInstance()
+                    .refreshAndFindFileByIoFile(file)
+                    ?.let { com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project).openFile(it, true) }
+                statusLabel.text = "Created: ${file.name} \u2014 add your prompt text and save"
+                render(buildState())
+            },
+            onFailure = { statusLabel.text = "Failed to create prompt file: ${it.message}" }
+        )
     }
 
     private fun editCurrentPromptFile() {
         val name = buildState().selectedSpecificPromptName ?: return
-        val basePath = project.basePath ?: return
-        val dir = java.io.File(basePath, ".maxvibes/prompts/specific")
-        val file = listOf("md", "txt")
-            .map { java.io.File(dir, "$name.$it") }
-            .firstOrNull { it.exists() } ?: return
-        val vFile = com.intellij.openapi.vfs.LocalFileSystem.getInstance()
+        val file = specificPromptFiles?.resolve(name) ?: return
+        com.intellij.openapi.vfs.LocalFileSystem.getInstance()
             .refreshAndFindFileByIoFile(file)
-        if (vFile != null) {
-            com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project).openFile(vFile, true)
-        }
+            ?.let { com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project).openFile(it, true) }
     }
 
     private fun deleteCurrentPromptFile() {
@@ -1442,20 +1331,12 @@ class ChatPanel(
         )
         if (confirm != JOptionPane.YES_OPTION) return
 
-        val basePath = project.basePath ?: return
-        val dir = java.io.File(basePath, ".maxvibes/prompts/specific")
-        val file = listOf("md", "txt")
-            .map { java.io.File(dir, "$name.$it") }
-            .firstOrNull { it.exists() }
-
-        if (file == null || !file.delete()) {
+        if (specificPromptFiles?.delete(name) != true) {
             statusLabel.text = "Failed to delete prompt file"
             return
         }
 
-        // Reset selection in all sessions that had this prompt
-        val session = chatTreeService.getActiveSession()
-        if (session.selectedSpecificPromptName == name) {
+        if (chatTreeService.getActiveSession().selectedSpecificPromptName == name) {
             messageController.selectSpecificPrompt(null)
         }
 
