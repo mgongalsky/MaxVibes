@@ -9,34 +9,61 @@ import com.maxvibes.domain.model.context.ProjectContext
 import com.maxvibes.shared.result.Result
 
 /**
- * Fake [ProjectContextPort] with a fixed project context and a configurable
- * in-memory file store backing [gatherFiles]. Unknown paths are silently
- * skipped, mirroring the lenient behaviour of the PSI adapter.
+ * Configurable fake ProjectContextPort.
+ *
+ * Successful operation uses projectContext and fileContents. Setting an error
+ * makes the corresponding call return Failure without mutating other state.
  */
 class FakeProjectContextPort(
     var projectContext: ProjectContext = defaultContext(),
     val fileContents: MutableMap<String, String> = mutableMapOf()
 ) : ProjectContextPort {
+    var projectContextError: ContextError? = null
+    var gatherFilesError: ContextError? = null
 
-    /** Every path list passed to [gatherFiles], in order. */
+    var projectContextCalls: Int = 0
+        private set
+
     val gatheredPathLists = mutableListOf<List<String>>()
 
-    override suspend fun getProjectContext(): Result<ProjectContext, ContextError> =
-        Result.Success(projectContext)
+    override suspend fun getProjectContext(): Result<ProjectContext, ContextError> {
+        projectContextCalls += 1
+        val error = projectContextError
+        return if (error != null) {
+            Result.Failure(error)
+        } else {
+            Result.Success(projectContext)
+        }
+    }
 
     override suspend fun getFileTree(
         maxDepth: Int,
         excludePatterns: List<String>
-    ): Result<FileTree, ContextError> = Result.Success(projectContext.fileTree)
+    ): Result<FileTree, ContextError> =
+        Result.Success(projectContext.fileTree)
 
     override suspend fun gatherFiles(
         paths: List<String>,
         maxTotalSize: Long
     ): Result<GatheredContext, ContextError> {
         gatheredPathLists += paths
-        val files = paths.mapNotNull { path -> fileContents[path]?.let { path to it } }.toMap()
-        val tokens = files.values.sumOf { GatheredContext.estimateTokens(it) }
-        return Result.Success(GatheredContext(files, tokens))
+        val error = gatherFilesError
+        if (error != null) {
+            return Result.Failure(error)
+        }
+
+        val files = paths.mapNotNull { path ->
+            fileContents[path]?.let { content -> path to content }
+        }.toMap()
+        val tokens = files.values.sumOf {
+            GatheredContext.estimateTokens(it)
+        }
+        return Result.Success(
+            GatheredContext(
+                files = files,
+                totalTokensEstimate = tokens
+            )
+        )
     }
 
     override suspend fun findDescriptionFiles(): Result<Map<String, String>, ContextError> =
@@ -47,7 +74,11 @@ class FakeProjectContextPort(
             name = "TestProject",
             rootPath = "C:/test",
             fileTree = FileTree(
-                root = FileNode(name = "TestProject", path = "", isDirectory = true),
+                root = FileNode(
+                    name = "TestProject",
+                    path = "",
+                    isDirectory = true
+                ),
                 totalFiles = 0,
                 totalDirectories = 1
             )
