@@ -59,6 +59,7 @@ class ChatMessageController(
             service.notificationService.setProgressIndicator(indicator)
         }
     }
+    private val documentSaver: DocumentSaver = IntellijDocumentSaver()
     private val ideErrorsAttachmentLoader: IdeErrorsAttachmentLoader by lazy {
         IdeErrorsAttachmentLoader(
             ideErrorsPort = service.ideErrorsPort,
@@ -129,12 +130,8 @@ class ChatMessageController(
 
     /**
      * Re-generates and copies the clipboard JSON for the current active session.
-     * Flushes editor buffers first, then delegates to [ClipboardDispatcher.redoLastRequest].
      */
-    fun redoClipboardJson() {
-        saveAllDocuments()
-        clipboardDispatcher.redoLastRequest()
-    }
+    fun redoClipboardJson() = turnSubmissionCoordinator.redoClipboardJson()
 
     // ==================== Claude Code Mode ====================
 
@@ -206,22 +203,7 @@ class ChatMessageController(
         )
     }
 
-    fun approve() {
-        saveAllDocuments()
-        val pending = attachmentCoordinator.snapshot()
-        if (pending.images.isNotEmpty()) {
-            callbacks.appendToChat(
-                "⚠️ ${pending.images.size} attached image(s) dropped — attach them to a regular message, not to Approve"
-            )
-        }
-        if (pending.oneShot != null) {
-            callbacks.appendToChat(
-                "⚠️ One-shot editor skill dropped — invoke it with a regular message, not with Approve"
-            )
-        }
-        attachmentCoordinator.clearAfterSend()
-        claudeCodeDispatcher.approve(pending.trace, pending.errors)
-    }
+    fun approve() = turnSubmissionCoordinator.approve()
 
     // ==================== Question Flow ====================
 
@@ -317,26 +299,52 @@ class ChatMessageController(
             }
         )
     }
+    private val turnSubmissionCoordinator: TurnSubmissionCoordinator by lazy {
+        TurnSubmissionCoordinator(
+            documentSaver = documentSaver,
+            dismissQuestionTurn = { questionCoordinator.dismissQuestionTurn() },
+            attachments = attachmentCoordinator,
+            appendToChat = callbacks::appendToChat,
+            dispatchApi = { message, trace, errors, planOnly, dryRun ->
+                apiDispatcher.dispatchMessage(message, trace, errors, planOnly, dryRun)
+            },
+            dispatchClipboard = { message, trace, errors, planOnly, addHistory, promptName ->
+                clipboardDispatcher.dispatchMessage(
+                    message,
+                    trace,
+                    errors,
+                    planOnly,
+                    addHistory,
+                    promptName
+                )
+            },
+            dispatchCheapApi = { message, trace, errors, planOnly, dryRun ->
+                apiDispatcher.dispatchCheapMessage(message, trace, errors, planOnly, dryRun)
+            },
+            dispatchClaudeCode = { message, trace, errors, planOnly, promptName, images ->
+                claudeCodeDispatcher.dispatchMessage(
+                    message,
+                    trace,
+                    errors,
+                    planOnly,
+                    promptName,
+                    images
+                )
+            },
+            approveClaudeCode = { trace, errors ->
+                claudeCodeDispatcher.approve(trace, errors)
+            },
+            redoClipboardJson = {
+                clipboardDispatcher.redoLastRequest()
+            }
+        )
+    }
 
     // ==================== Auto-Retry Logic ====================
 
     // ==================== Result Handlers ====================
 
     // ==================== Helpers ====================
-
-    /**
-     * Flushes all unsaved editor Documents to disk. The plugin reads project files
-     * (skills, gathered sources) via java.io — without this flush, edits still sitting
-     * in editor buffers are invisible to the LLM. Same convention as the IDE saving
-     * all documents before a build. EDT-only.
-     */
-    private fun saveAllDocuments() {
-        try {
-            com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().saveAllDocuments()
-        } catch (e: Exception) {
-            MaxVibesLogger.warn("Controller", "saveAllDocuments failed", data = mapOf("msg" to (e.message ?: "?")))
-        }
-    }
 
     fun attachTrace(traceContent: String) = attachmentCoordinator.attachTrace(traceContent)
 
@@ -375,70 +383,14 @@ class ChatMessageController(
         mode: InteractionMode,
         addHistory: Boolean = false,
         selectedSpecificPromptName: String? = null
-    ) {
-        saveAllDocuments()
-        questionCoordinator.dismissQuestionTurn()
-        val pending = attachmentCoordinator.consume()
-        val prepared = SendPreparationPolicy.prepare(
-            pending = pending,
-            selectedSpecificPromptName = selectedSpecificPromptName,
-            mode = mode
-        )
-
-        MaxVibesLogger.info(
-            "Controller",
-            "sendMessage",
-            mapOf(
-                "mode" to mode.name,
-                "msgLen" to userInput.length,
-                "isPlanOnly" to isPlanOnly,
-                "hasTrace" to (pending.trace != null),
-                "hasErrors" to (prepared.errors != null),
-                "images" to prepared.images.size,
-                "addHistory" to addHistory,
-                "specificPrompt" to (prepared.effectivePromptName ?: "null"),
-                "oneShot" to (prepared.oneShotLabel ?: "null")
-            )
-        )
-
-        prepared.warnings.forEach(callbacks::appendToChat)
-
-        when (mode) {
-            InteractionMode.API -> apiDispatcher.dispatchMessage(
-                userInput,
-                prepared.effectiveTrace,
-                prepared.errors,
-                isPlanOnly,
-                isDryRun
-            )
-
-            InteractionMode.CLIPBOARD -> clipboardDispatcher.dispatchMessage(
-                userInput,
-                prepared.effectiveTrace,
-                prepared.errors,
-                isPlanOnly,
-                addHistory,
-                prepared.effectivePromptName
-            )
-
-            InteractionMode.CHEAP_API -> apiDispatcher.dispatchCheapMessage(
-                userInput,
-                prepared.effectiveTrace,
-                prepared.errors,
-                isPlanOnly,
-                isDryRun
-            )
-
-            InteractionMode.CLAUDE_CODE -> claudeCodeDispatcher.dispatchMessage(
-                userInput,
-                prepared.effectiveTrace,
-                prepared.errors,
-                isPlanOnly,
-                prepared.effectivePromptName,
-                images = prepared.images
-            )
-        }
-    }
+    ) = turnSubmissionCoordinator.sendMessage(
+        userInput = userInput,
+        isPlanOnly = isPlanOnly,
+        isDryRun = isDryRun,
+        mode = mode,
+        addHistory = addHistory,
+        selectedSpecificPromptName = selectedSpecificPromptName
+    )
 
     fun armOneShot(skillName: String?, elementContext: String?, label: String) =
         attachmentCoordinator.armOneShot(skillName, elementContext, label)
