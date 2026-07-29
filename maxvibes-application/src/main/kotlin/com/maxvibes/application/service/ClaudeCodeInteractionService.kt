@@ -9,81 +9,31 @@ import com.maxvibes.application.port.output.LoggerPort
 import com.maxvibes.application.port.output.NotificationPort
 import com.maxvibes.application.port.output.ProjectContextPort
 import com.maxvibes.application.port.output.PromptPort
-import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 import com.maxvibes.domain.model.interaction.AttachedImage
+import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 
 /**
- * Application-layer service that orchestrates the Claude Code dialog mode.
+ * Thin application facade for Claude Code dialog mode.
  *
- * Conceptually mirrors [ClipboardInteractionService] but replaces the manual clipboard
- * round-trip with an automatic transport via [ClaudeCodePort]. The user's "paste"
- * step disappears; in its place, when the LLM asks for files via `requestedViews`,
- * the session enters [ClipboardSessionStatus.AWAITING_APPROVE] and the UI shows an
- * Approve button. Pressing it gathers the requested files and triggers the next [send].
- *
- * Modifications approval: when the LLM proposes `modifications`, the service no longer
- * applies them immediately. It holds them (plus any commands and commit message that
- * arrived with them) in-memory and enters AWAITING_APPROVE. Approve applies them; typing
- * a new message rejects them with a feedback prefix. Held commands run after a successful
- * apply. In-memory only: an IDE restart before Approve loses the pending set.
- *
- * Shell commands: when the LLM requests terminal commands via the `commands` field,
- * they bypass the state machine entirely — the session stays SESSION_ACTIVE, the UI
- * renders per-command Run/Decline blocks, and once every command is resolved the
- * controller calls [submitCommandResults] to continue the dialog automatically.
- * Responses that mix `commands` with `requestedViews` get their commands skipped
- * (files win); responses that mix `requestedViews` with `modifications` get their
- * views skipped (modifications win) — see [processResponse].
- *
- * Reuses the existing clipboard stack as-is: [InteractionRequestBuilder] for request
- * assembly, [ClipboardSessionState] for the in-memory workspace, [ClipboardSessionManager]
- * for the state machine, and [CodeRepository] for applying PSI modifications.
- *
- * Token-saving policy: the first send for a session carries the full context
- * (system prompt + history + file tree); subsequent sends are minimal — just the
- * latest message and any freshly gathered files. After a failed `--resume`, the
- * service marks [com.maxvibes.domain.model.chat.ChatSession.claudeCodeNeedsFullContext]
- * so the next send replays the full context to the freshly started process.
- *
- * Public API surface:
- *  - [handleUserInput]       — unified entry point; routes by session status.
- *  - [approve]               — confirm an [ClipboardSessionStatus.AWAITING_APPROVE] response and continue.
- *  - [submitCommandResults]  — send resolved shell-command outcomes back as an automatic follow-up.
- *  - [status]                — current [ClipboardSessionStatus] for a session.
- *  - [reset]                 — clears in-memory state and sets session back to IDLE.
- *
- * Concurrency: the service is single-threaded by contract. Callers must not invoke
- * [handleUserInput]/[approve] concurrently for the same project.
- *
- * @param contextProvider        supplies project tree and file content.
- * @param claudeCodePort         transport to the running `claude` CLI process.
- * @param codeRepository         applies PSI-level code modifications.
- * @param notificationPort       displays progress/success/warning notifications in the IDE.
- * @param promptPort             supplies system prompt templates; required for Claude Code mode.
- * @param logger                 optional logger; pass null in unit tests to suppress output.
- * @param sessionManager         clipboard-status state-machine manager (shared with clipboard mode).
- * @param chatSessionRepository  read/write access to persisted chat sessions.
- * @param sessionLog             optional per-dialog verbose transcript ([ClaudeCodeSessionLogPort]).
- *                               The service calls begin(sessionId) at every entry point so the
- *                               transport's raw I/O lands in the right dialog file. Null disables.
- * @param specificPromptService optional resolver for SKILL requestedViews.
+ * It routes public operations and coordinates specialized collaborators:
+ * workspace lifecycle, requested views, transport turns, response handling,
+ * and user approval. The facade is single-threaded by contract.
  */
 class ClaudeCodeInteractionService(
-    private val contextProvider: ProjectContextPort,
-    private val claudeCodePort: ClaudeCodePort,
-    private val codeRepository: CodeRepository,
-    private val notificationPort: NotificationPort,
-    private val promptPort: PromptPort,
+    contextProvider: ProjectContextPort,
+    claudeCodePort: ClaudeCodePort,
+    codeRepository: CodeRepository,
+    notificationPort: NotificationPort,
+    promptPort: PromptPort,
     private val logger: LoggerPort? = null,
     private val sessionManager: ClipboardSessionManager,
-    private val chatSessionRepository: ChatSessionRepository,
+    chatSessionRepository: ChatSessionRepository,
     private val sessionLog: ClaudeCodeSessionLogPort? = null,
-    private val specificPromptService: SpecificPromptService? = null,
-    private val streamHub: AgentStreamHub? = null
+    specificPromptService: SpecificPromptService? = null,
+    streamHub: AgentStreamHub? = null
 ) {
-
-    /** Modification sets proposed by the LLM, held until the user approves or rejects them. In-memory only. */
     private val pendingStore = PendingModificationsStore()
+
     private val viewResolver = ClaudeCodeViewResolver(
         contextProvider = contextProvider,
         codeRepository = codeRepository,
@@ -91,6 +41,7 @@ class ClaudeCodeInteractionService(
         notificationPort = notificationPort,
         logger = logger
     )
+
     private val responseHandler = ClaudeCodeResponseHandler(
         chatSessionRepository = chatSessionRepository,
         sessionManager = sessionManager,
@@ -98,6 +49,7 @@ class ClaudeCodeInteractionService(
         sessionLog = sessionLog,
         logger = logger
     )
+
     private val turnExecutor = ClaudeCodeTurnExecutor(
         claudeCodePort = claudeCodePort,
         chatSessionRepository = chatSessionRepository,
@@ -106,6 +58,7 @@ class ClaudeCodeInteractionService(
         streamHub = streamHub,
         logger = logger
     )
+
     private val workspaceService = ClaudeCodeWorkspaceService(
         contextProvider = contextProvider,
         promptPort = promptPort,
@@ -113,6 +66,7 @@ class ClaudeCodeInteractionService(
         notificationPort = notificationPort,
         logger = logger
     )
+
     private val approvalService = ClaudeCodeApprovalService(
         chatSessionRepository = chatSessionRepository,
         sessionManager = sessionManager,
@@ -124,8 +78,6 @@ class ClaudeCodeInteractionService(
         sessionLog = sessionLog,
         logger = logger
     )
-
-    // ==================== Public API ====================
 
     suspend fun handleUserInput(
         sessionId: String,
@@ -151,6 +103,65 @@ class ClaudeCodeInteractionService(
         )
     )
 
+    suspend fun approve(
+        sessionId: String,
+        attachedContext: String? = null,
+        ideErrors: String? = null,
+        specificPromptContent: String? = null
+    ): ClaudeCodeStepResult = when (
+        val outcome = approvalService.approve(
+            sessionId = sessionId,
+            attachedContext = attachedContext,
+            ideErrors = ideErrors,
+            specificPromptContent = specificPromptContent
+        )
+    ) {
+        is ClaudeCodeApprovalOutcome.Continue -> send(outcome.command)
+        is ClaudeCodeApprovalOutcome.Immediate -> outcome.result
+    }
+
+    suspend fun submitCommandResults(
+        sessionId: String,
+        resultsForLlm: String
+    ): ClaudeCodeStepResult {
+        sessionLog?.begin(sessionId)
+        sessionLog?.event(
+            "submitCommandResults",
+            mapOf("len" to resultsForLlm.length)
+        )
+
+        if (sessionManager.statusFor(sessionId) != ClipboardSessionStatus.SESSION_ACTIVE) {
+            return error("Command results can only be submitted in SESSION_ACTIVE state")
+        }
+        if (!workspaceService.ensure(sessionId)) {
+            return error(
+                "Cannot restore session state for session $sessionId. Please start a new task."
+            )
+        }
+
+        return send(
+            ClaudeCodeTurnCommand(
+                sessionId = sessionId,
+                commandResults = resultsForLlm
+            )
+        )
+    }
+
+    fun status(sessionId: String): ClipboardSessionStatus =
+        sessionManager.statusFor(sessionId)
+
+    fun reset(sessionId: String) {
+        log("Session reset (sessionId=$sessionId)")
+        sessionLog?.event(
+            "reset requested",
+            mapOf("sessionId" to sessionId)
+        )
+        workspaceService.clear()
+        pendingStore.clear()
+        sessionManager.transition(sessionId, ClipboardEvent.Reset)
+        turnExecutor.shutdown()
+    }
+
     private suspend fun handleUserInputCommand(
         command: UserInputCommand
     ): ClaudeCodeStepResult {
@@ -169,16 +180,12 @@ class ClaudeCodeInteractionService(
             ClipboardSessionStatus.SESSION_ACTIVE ->
                 startOrContinue(command)
 
-            ClipboardSessionStatus.AWAITING_APPROVE -> {
-                val continuation = approvalService.rejectPending(command)
-                if (continuation != null) {
-                    startOrContinue(continuation)
-                } else {
-                    ClaudeCodeStepResult.Error(
+            ClipboardSessionStatus.AWAITING_APPROVE ->
+                approvalService.rejectPending(command)
+                    ?.let { startOrContinue(it) }
+                    ?: ClaudeCodeStepResult.Error(
                         "Session is awaiting approve. Press Approve or Reset before sending a new message."
                     )
-                }
-            }
 
             ClipboardSessionStatus.AWAITING_PASTE ->
                 ClaudeCodeStepResult.Error(
@@ -187,86 +194,23 @@ class ClaudeCodeInteractionService(
         }
     }
 
-    suspend fun approve(
-        sessionId: String,
-        attachedContext: String? = null,
-        ideErrors: String? = null,
-        specificPromptContent: String? = null
-    ): ClaudeCodeStepResult = when (
-        val outcome = approvalService.approve(
-            sessionId = sessionId,
-            attachedContext = attachedContext,
-            ideErrors = ideErrors,
-            specificPromptContent = specificPromptContent
-        )
-    ) {
-        is ClaudeCodeApprovalOutcome.Continue ->
-            doSend(outcome.command)
-
-        is ClaudeCodeApprovalOutcome.Immediate ->
-            outcome.result
-    }
-
-    suspend fun submitCommandResults(
-        sessionId: String,
-        resultsForLlm: String
-    ): ClaudeCodeStepResult {
-        sessionLog?.begin(sessionId)
-        sessionLog?.event(
-            "submitCommandResults",
-            mapOf("len" to resultsForLlm.length)
-        )
-        if (sessionManager.statusFor(sessionId) != ClipboardSessionStatus.SESSION_ACTIVE) {
-            return error("Command results can only be submitted in SESSION_ACTIVE state")
-        }
-        if (workspaceService.state == null || workspaceService.owner != sessionId) {
-            log("sessionState missing or owned by another session in submitCommandResults — restoring for $sessionId")
-            if (!workspaceService.ensure(sessionId)) {
-                return error("Cannot restore session state for session $sessionId. Please start a new task.")
-            }
-        }
-        return doSend(
-            ClaudeCodeTurnCommand(
-                sessionId = sessionId,
-                commandResults = resultsForLlm
-            )
-        )
-    }
-
-    /** Returns the current [ClipboardSessionStatus] for the given session. */
-    fun status(sessionId: String): ClipboardSessionStatus = sessionManager.statusFor(sessionId)
-
-    fun reset(sessionId: String) {
-        log("Session reset (sessionId=$sessionId)")
-        sessionLog?.event(
-            "reset requested",
-            mapOf("sessionId" to sessionId)
-        )
-        workspaceService.clear()
-        pendingStore.clear()
-        sessionManager.transition(sessionId, ClipboardEvent.Reset)
-        try {
-            claudeCodePort.shutdown()
-        } catch (exception: Exception) {
-            log(
-                "Warning: shutdown raised ${exception.javaClass.simpleName}: ${exception.message}"
-            )
-        }
-    }
-
-    // ==================== Internal flow ====================
-
     private suspend fun startOrContinue(
         command: UserInputCommand
     ): ClaudeCodeStepResult {
-        val sessionId = command.sessionId
-        val isFirst = sessionManager.statusFor(sessionId) == ClipboardSessionStatus.IDLE
+        val isFirst = sessionManager.statusFor(command.sessionId) ==
+                ClipboardSessionStatus.IDLE
 
         if (isFirst) {
-            log("Starting new Claude Code session (sessionId=$sessionId, planOnly=${command.planOnly})")
-            sessionManager.transition(sessionId, ClipboardEvent.StartSession)
+            log(
+                "Starting new Claude Code session " +
+                        "(sessionId=${command.sessionId}, planOnly=${command.planOnly})"
+            )
+            sessionManager.transition(
+                command.sessionId,
+                ClipboardEvent.StartSession
+            )
         } else {
-            log("Continuing Claude Code session (sessionId=$sessionId)")
+            log("Continuing Claude Code session (sessionId=${command.sessionId})")
         }
 
         val workspaceResult = if (isFirst) {
@@ -289,9 +233,9 @@ class ClaudeCodeInteractionService(
             emptyMap()
         }
 
-        return doSend(
+        return send(
             ClaudeCodeTurnCommand(
-                sessionId = sessionId,
+                sessionId = command.sessionId,
                 freshFiles = freshFiles,
                 firstMessage = isFirst,
                 attachedContext = command.attachedContext,
@@ -302,7 +246,7 @@ class ClaudeCodeInteractionService(
         )
     }
 
-    private suspend fun doSend(
+    private suspend fun send(
         command: ClaudeCodeTurnCommand
     ): ClaudeCodeStepResult {
         val state = workspaceService.state
@@ -321,8 +265,6 @@ class ClaudeCodeInteractionService(
         }
     }
 
-    // ==================== Helpers ====================
-
     private fun log(message: String) {
         println("[MaxVibes ClaudeCode] $message")
         logger?.info("ClaudeCode", message)
@@ -333,5 +275,4 @@ class ClaudeCodeInteractionService(
         logger?.error("ClaudeCode", message)
         return ClaudeCodeStepResult.Error(message)
     }
-
 }

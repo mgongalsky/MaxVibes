@@ -158,6 +158,16 @@ internal class ClaudeCodeTurnExecutor(
         }
     }
 
+    fun shutdown() {
+        try {
+            claudeCodePort.shutdown()
+        } catch (exception: Exception) {
+            log(
+                "Warning: shutdown raised ${exception.javaClass.simpleName}: ${exception.message}"
+            )
+        }
+    }
+
     private fun persistObservedSession(
         payload: ClaudeCodeSendResult,
         session: com.maxvibes.domain.model.chat.ChatSession
