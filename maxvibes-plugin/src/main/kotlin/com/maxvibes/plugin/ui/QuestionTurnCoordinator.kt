@@ -6,13 +6,14 @@ import com.maxvibes.plugin.service.MaxVibesLogger
 /**
  * State machine for one turn of LLM questions (the `questions` channel).
  *
- * Renders interactive question blocks via [ChatPanelCallbacks.addQuestionBubble];
+ * Renders interactive question blocks via [QuestionView.addQuestionBubble];
  * the main input stays enabled — typing a message instead is a valid answer and
  * supersedes the blocks via [dismissQuestionTurn]. Once every block is answered,
  * the composed answer is submitted through the panel's regular send path.
  */
 class QuestionTurnCoordinator(
-    private val callbacks: ChatPanelCallbacks
+    private val questionView: QuestionView,
+    private val callbacks: InputStatusView
 ) {
 
     /** One question awaiting the user's choice, with its rendered block handle. */
@@ -36,7 +37,7 @@ class QuestionTurnCoordinator(
         questions.forEach { question ->
             val item = QuestionItem(question)
             turn.items.add(item)
-            item.view = callbacks.addQuestionBubble(question.question, question.options) { answer ->
+            item.view = questionView.addQuestionBubble(question.question, question.options) { answer ->
                 answerQuestion(item, answer)
             }
         }

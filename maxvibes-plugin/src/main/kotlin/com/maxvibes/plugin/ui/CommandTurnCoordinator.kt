@@ -22,7 +22,8 @@ import com.maxvibes.plugin.service.MaxVibesLogger
  */
 class CommandTurnCoordinator(
     private val executeCommandUseCase: ExecuteCommandUseCase,
-    private val callbacks: ChatPanelCallbacks,
+    private val commandView: CommandView,
+    private val callbacks: InputStatusView,
     private val addSystemMessage: (sessionId: String, text: String) -> Unit,
     private val activeSessionId: () -> String,
     private val executeAsync: (request: CommandRequest, onDone: (CommandExecution) -> Unit) -> Unit,
@@ -62,7 +63,7 @@ class CommandTurnCoordinator(
         callbacks.setInputEnabled(false)
         callbacks.setStatus("\u26A1 ${commands.size} command(s) awaiting approval")
         if (commands.size > 1) {
-            turn.batchBar = callbacks.addCommandBatchBar(
+            turn.batchBar = commandView.addCommandBatchBar(
                 count = commands.size,
                 onRunAll = { startRunAll() },
                 onDeclineAll = { declineAllRemaining(null) }
@@ -72,7 +73,7 @@ class CommandTurnCoordinator(
             val item = CommandItem(cmd)
             turn.items.add(item)
             val warnings = executeCommandUseCase.warningsFor(cmd)
-            item.view = callbacks.addCommandBubble(
+            item.view = commandView.addCommandBubble(
                 command = cmd.command,
                 reason = cmd.reason,
                 warnings = warnings,

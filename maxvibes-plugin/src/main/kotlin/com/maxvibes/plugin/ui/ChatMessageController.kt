@@ -6,100 +6,25 @@ import com.maxvibes.application.service.ClaudeCodeStepResult
 import com.maxvibes.application.service.ClipboardStepResult
 import com.maxvibes.domain.model.chat.ChatSession
 import com.maxvibes.domain.model.chat.MessageRole
-import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.plugin.service.MaxVibesLogger
 import com.maxvibes.plugin.service.MaxVibesService
 import com.maxvibes.shared.result.Result
 import com.maxvibes.domain.model.interaction.InteractionMode
 import com.maxvibes.domain.model.interaction.AttachedImage
-import com.maxvibes.domain.model.modification.AppliedModInfo
-import com.maxvibes.domain.model.planning.PlanDiagram
 import com.intellij.openapi.progress.ProcessCanceledException
 
-interface ChatPanelCallbacks {
-    fun appendToChat(text: String)
-    fun appendAssistantMessage(text: String)
-    fun setInputEnabled(enabled: Boolean)
-    fun setStatus(text: String)
-    fun updateModeIndicator()
-    fun updateBreadcrumb()
-    fun registerElementPaths(modifications: List<ModificationResult>)
-    fun formatMarkdown(text: String): String
-    fun updateTokenDisplay()
-
-    /** Adds a user message bubble, optionally with attached image thumbnails. */
-    fun addUserMessageBubble(text: String, images: List<AttachedImage> = emptyList())
-    fun addAssistantMessageBubble(
-        text: String,
-        tokenInfo: String?,
-        modifications: List<ModificationResult>,
-        metaFiles: List<String> = emptyList(),
-        reasoning: String? = null,
-        requestedViews: List<com.maxvibes.domain.model.code.RequestedViewInfo> = emptyList(),
-        appliedModifications: List<AppliedModInfo> = emptyList()
-    )
-
-    /** Renders a post-apply errors block with Send to model / Dismiss buttons. */
-    fun addPostApplyErrorsBubble(
-        summary: String,
-        details: String,
-        onSend: () -> Unit,
-        onDismiss: () -> Unit
-    ): PostApplyErrorsView
-
-    /** Renders an interactive question block; returns a handle for freeze/status updates. */
-    fun addQuestionBubble(
-        question: String,
-        options: List<String>,
-        onAnswer: (String) -> Unit
-    ): QuestionBlockView
-
-    /** Submits text through the exact same path as the main input's Send button. */
-    fun sendUserMessage(text: String)
-
-    fun appendIconToLastBubble(icon: String)
-    fun clearChatDisplay()
-    fun setPlanOnlyMode(enabled: Boolean)
-
-    /** Sets the commit message in the IDE VCS commit dialog. */
-    fun setCommitMessage(message: String)
-
-    /** Called when attached trace or errors change. */
-    fun onAttachmentsChanged(trace: String?, errors: String?)
-
-    /** Called when a background operation encounters an error. */
-    fun onError(message: String)
-
-    /** Called when the active session changes (create, delete, branch, load). */
-    fun onSessionChanged(session: ChatSession?)
-
-    /** Called when a session is renamed. */
-    fun onSessionRenamed(session: ChatSession)
-
-    /** Called to show the welcome screen (e.g. no sessions). */
-    fun onShowWelcome()
-
-    /** Renders an interactive shell-command block; returns a view handle for status updates. */
-    fun addCommandBubble(
-        command: String,
-        reason: String?,
-        warnings: List<String>,
-        onRun: () -> Unit,
-        onDecline: (String?) -> Unit
-    ): CommandBlockView
-
-    /** Renders a Run all / Decline all bar above a multi-command batch. */
-    fun addCommandBatchBar(count: Int, onRunAll: () -> Unit, onDeclineAll: () -> Unit): CommandBatchBarView
-
-    /** Rebuilds the attached-images preview strip (empty list hides it). */
-    fun onImagesChanged(images: List<AttachedImage>)
-
-    /** Shows/hides the one-shot editor-skill chip; null label hides it. */
-    fun onOneShotChanged(label: String?)
-
-    /** Adds a "Схема" button under the last assistant bubble; opens the plan diagram viewer. */
-    fun showDiagramButton(diagram: PlanDiagram)
-}
+/**
+ * Aggregate UI port of the chat panel. Prefer depending on a narrow facet
+ * (see ChatPanelViews.kt) — this aggregate exists for ChatPanel and test fakes
+ * that implement the full surface.
+ */
+interface ChatPanelCallbacks :
+    ConversationView,
+    InputStatusView,
+    AttachmentView,
+    SessionView,
+    QuestionView,
+    CommandView
 
 /**
  * Handles message sending (API, Clipboard, CheapAPI, ClaudeCode) and response processing.
@@ -288,19 +213,17 @@ class ChatMessageController(
 
     // ==================== Question Flow ====================
 
-    private val questionCoordinator = QuestionTurnCoordinator(callbacks)
-
-    private fun presentQuestions(
-        questions: List<com.maxvibes.domain.model.interaction.InteractionQuestion>
-    ) = questionCoordinator.presentQuestions(questions)
-
-    private fun dismissQuestionTurn() = questionCoordinator.dismissQuestionTurn()
+    private val questionCoordinator = QuestionTurnCoordinator(
+        questionView = callbacks,
+        callbacks = callbacks
+    )
 
     // ==================== Command Flow ====================
 
     private val commandCoordinator: CommandTurnCoordinator by lazy {
         CommandTurnCoordinator(
             executeCommandUseCase = service.executeCommandUseCase,
+            commandView = callbacks,
             callbacks = callbacks,
             addSystemMessage = { sessionId, text ->
                 chatTreeService.addMessage(sessionId, MessageRole.SYSTEM, text)
@@ -326,7 +249,7 @@ class ChatMessageController(
             resolveSpecificPrompt = { name -> service.specificPromptService.resolvePromptContent(name) },
             chatTreeService = chatTreeService,
             callbacks = callbacks,
-            presentQuestions = { questions -> presentQuestions(questions) },
+            presentQuestions = questionCoordinator::presentQuestions,
             presentCommands = { commands, sessionId, mode ->
                 commandCoordinator.presentCommands(commands, sessionId, mode)
             },
@@ -502,7 +425,7 @@ class ChatMessageController(
         selectedSpecificPromptName: String? = null
     ) {
         saveAllDocuments()
-        dismissQuestionTurn()
+        questionCoordinator.dismissQuestionTurn()
         val pending = pendingContext.snapshot()
         clearAttachmentsAfterSend()
         val prepared = SendPreparationPolicy.prepare(
@@ -530,7 +453,7 @@ class ChatMessageController(
         prepared.warnings.forEach(callbacks::appendToChat)
 
         when (mode) {
-            InteractionMode.API -> dispatchApiMessage(
+            InteractionMode.API -> apiDispatcher.dispatchMessage(
                 userInput,
                 prepared.effectiveTrace,
                 prepared.errors,
@@ -538,7 +461,7 @@ class ChatMessageController(
                 isDryRun
             )
 
-            InteractionMode.CLIPBOARD -> dispatchClipboardMessage(
+            InteractionMode.CLIPBOARD -> clipboardDispatcher.dispatchMessage(
                 userInput,
                 prepared.effectiveTrace,
                 prepared.errors,
@@ -547,7 +470,7 @@ class ChatMessageController(
                 prepared.effectivePromptName
             )
 
-            InteractionMode.CHEAP_API -> dispatchCheapApiMessage(
+            InteractionMode.CHEAP_API -> apiDispatcher.dispatchCheapMessage(
                 userInput,
                 prepared.effectiveTrace,
                 prepared.errors,
@@ -555,7 +478,7 @@ class ChatMessageController(
                 isDryRun
             )
 
-            InteractionMode.CLAUDE_CODE -> dispatchClaudeCodeMessage(
+            InteractionMode.CLAUDE_CODE -> claudeCodeDispatcher.dispatchMessage(
                 userInput,
                 prepared.effectiveTrace,
                 prepared.errors,
@@ -565,35 +488,6 @@ class ChatMessageController(
             )
         }
     }
-
-    private fun dispatchApiMessage(msg: String, trace: String?, errs: String?, isPlanOnly: Boolean, isDryRun: Boolean) =
-        apiDispatcher.dispatchMessage(msg, trace, errs, isPlanOnly, isDryRun)
-
-    private fun dispatchClipboardMessage(
-        userInput: String,
-        trace: String?,
-        errs: String?,
-        isPlanOnly: Boolean,
-        addHistory: Boolean = false,
-        selectedSpecificPromptName: String? = null
-    ) = clipboardDispatcher.dispatchMessage(userInput, trace, errs, isPlanOnly, addHistory, selectedSpecificPromptName)
-
-    private fun dispatchCheapApiMessage(
-        msg: String,
-        trace: String?,
-        errs: String?,
-        isPlanOnly: Boolean,
-        isDryRun: Boolean
-    ) = apiDispatcher.dispatchCheapMessage(msg, trace, errs, isPlanOnly, isDryRun)
-
-    private fun dispatchClaudeCodeMessage(
-        userInput: String,
-        trace: String?,
-        errs: String?,
-        isPlanOnly: Boolean,
-        selectedSpecificPromptName: String? = null,
-        images: List<AttachedImage> = emptyList()
-    ) = claudeCodeDispatcher.dispatchMessage(userInput, trace, errs, isPlanOnly, selectedSpecificPromptName, images)
 
     fun armOneShot(skillName: String?, elementContext: String?, label: String) {
         pendingContext.armOneShot(skillName, elementContext, label)

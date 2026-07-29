@@ -46,6 +46,7 @@ class CommandTurnCoordinatorTest {
         completedBatch = null
         coordinator = CommandTurnCoordinator(
             executeCommandUseCase = FakeExecuteCommandUseCase(),
+            commandView = callbacks,
             callbacks = callbacks,
             addSystemMessage = { sessionId, text -> systemMessages.add(sessionId to text) },
             activeSessionId = { "active-session" },

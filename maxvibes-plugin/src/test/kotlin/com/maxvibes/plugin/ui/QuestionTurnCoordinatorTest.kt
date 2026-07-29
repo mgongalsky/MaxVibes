@@ -11,7 +11,7 @@ import org.junit.jupiter.api.Test
 class QuestionTurnCoordinatorTest {
 
     private val callbacks = FakeChatPanelCallbacks()
-    private val coordinator = QuestionTurnCoordinator(callbacks)
+    private val coordinator = QuestionTurnCoordinator(callbacks, callbacks)
 
     private fun question(
         id: String,

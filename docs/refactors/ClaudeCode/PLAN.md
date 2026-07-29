@@ -31,7 +31,7 @@
 | Шаг | Что | Документ |
 |-----|---- - |----------|
 | 0 | Починить тесты (2 фикса +фундамент фейков) | [STEP_0_FixTests.md](STEP_0_FixTests.md) |
-| 1 | Распил `ChatMessageController` |[STEP_1_ChatMessageController.md](STEP_1_ChatMessageController.md) |
+| 1 | Распил `ChatMessageController` (1534 → 501; координаторы, диспетчеры, UI-грани) — ВЫПОЛНЕН | [STEP_1_ChatMessageController.md](STEP_1_ChatMessageController.md) |
 | 2 | Распил `ClaudeCodeInteractionService` +общий `ProtocolConverter` |[STEP_2_ClaudeCodeInteractionService.md](
 STEP_2_ClaudeCodeInteractionService.md
 ) |
