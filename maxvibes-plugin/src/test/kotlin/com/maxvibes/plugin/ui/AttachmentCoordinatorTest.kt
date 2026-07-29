@@ -102,4 +102,71 @@ class AttachmentCoordinatorTest {
 
         assertTrue(callbacks.oneShotLabels.isEmpty())
     }
+
+    @Test
+    fun `clearAfterSend publishes one-shot removal only once`() {
+        coordinator.armOneShot("skill", "context", "label")
+
+        coordinator.clearAfterSend()
+        coordinator.clearAfterSend()
+
+        assertEquals(listOf("label", null), callbacks.oneShotLabels)
+        assertEquals(2, callbacks.attachmentsChanges.size)
+        assertEquals(2, callbacks.imagesChanges.size)
+    }
+
+    @Test
+    fun `explicit clearOneShot hides chip even when no one-shot is armed`() {
+        coordinator.clearOneShot()
+
+        assertEquals(listOf<String?>(null), callbacks.oneShotLabels)
+    }
+
+    @Test
+    fun `clearImages clears state and publishes empty preview`() {
+        coordinator.attachImage(image("first"))
+
+        coordinator.clearImages()
+
+        assertTrue(coordinator.snapshot().images.isEmpty())
+        assertEquals(emptyList<AttachedImage>(), callbacks.imagesChanges.last())
+    }
+
+    @Test
+    fun `successful image attachment publishes exact status and snapshot`() {
+        val attached = image("first")
+
+        assertTrue(coordinator.attachImage(attached))
+
+        assertEquals(listOf(attached), callbacks.imagesChanges.single())
+        assertEquals("🖼 Image attached (1)", callbacks.statusUpdates.single())
+    }
+
+    @Test
+    fun `clearErrors preserves trace and publishes combined attachment state`() {
+        coordinator.attachTrace("trace")
+        coordinator.attachErrors("errors")
+
+        coordinator.clearErrors()
+
+        assertEquals("trace", coordinator.trace)
+        assertNull(coordinator.errors)
+        assertEquals("trace" to null, callbacks.attachmentsChanges.last())
+    }
+
+    @Test
+    fun `snapshot preserves coordinator state and owns its image list`() {
+        val first = image("first")
+        coordinator.attachTrace("trace")
+        coordinator.attachErrors("errors")
+        coordinator.attachImage(first)
+
+        val snapshot = coordinator.snapshot()
+        coordinator.attachImage(image("second"))
+
+        assertEquals("trace", coordinator.trace)
+        assertEquals("errors", coordinator.errors)
+        assertEquals(listOf(first), snapshot.images)
+        assertEquals(2, coordinator.snapshot().images.size)
+    }
 }

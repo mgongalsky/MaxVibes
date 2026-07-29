@@ -13,6 +13,8 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import com.intellij.openapi.progress.ProcessCanceledException
+import org.junit.jupiter.api.assertThrows
 
 class InteractionExecutionCoordinatorTest {
     @Test
@@ -114,6 +116,224 @@ class InteractionExecutionCoordinatorTest {
         assertEquals(listOf(execution), results)
         assertFalse(runner.cancellable)
         assertFalse(runner.publishIndicator)
+    }
+
+    @Test
+    fun `command execution uses the fixed background task title`() {
+        val runner = ImmediateRunner()
+        val fixture = fixture(runner)
+
+        fixture.coordinator.runCommand(
+            action = { mockk() },
+            onResult = {}
+        )
+
+        assertEquals("MaxVibes: Running command...", runner.title)
+    }
+
+    @Test
+    fun `API cancellation does not reset Clipboard or Claude sessions`() {
+        val runner = ImmediateRunner(cancel = true)
+        val fixture = fixture(runner)
+
+        fixture.coordinator.runApi(
+            progressTitle = "Processing",
+            session = ChatSession(),
+            useCheap = false,
+            request = mockk(),
+            onResult = {}
+        )
+
+        assertTrue(fixture.clipboardResets.isEmpty())
+        assertTrue(fixture.claudeResets.isEmpty())
+        assertEquals(listOf("⚠️ Cancelled"), fixture.chatMessages)
+    }
+
+    @Test
+    fun `API execution failure propagates without protocol-specific conversion`() {
+        val runner = ImmediateRunner()
+        val callbacks = FakeChatPanelCallbacks()
+        val coordinator = InteractionExecutionCoordinator(
+            backgroundTaskRunner = runner,
+            inputStatusView = callbacks,
+            appendToChat = {},
+            resetClipboardSession = {},
+            resetClaudeCodeSession = {},
+            addSystemMessage = { _, _ -> },
+            executeApiRequest = { _, _ -> throw IllegalStateException("api boom") }
+        )
+
+        val thrown = assertThrows<IllegalStateException> {
+            coordinator.runApi(
+                progressTitle = "Processing",
+                session = ChatSession(),
+                useCheap = false,
+                request = mockk(),
+                onResult = {}
+            )
+        }
+
+        assertEquals("api boom", thrown.message)
+    }
+
+    @Test
+    fun `API regular execution selects regular use case and visible cancellable task`() {
+        val runner = ImmediateRunner()
+        val expected = mockk<ContextAwareResult>()
+        val fixture = fixture(runner, apiResult = expected)
+        val results = mutableListOf<ContextAwareResult>()
+
+        fixture.coordinator.runApi(
+            progressTitle = "Processing",
+            session = ChatSession(),
+            useCheap = false,
+            request = mockk(),
+            onResult = results::add
+        )
+
+        assertEquals(listOf(false), fixture.apiSelections)
+        assertEquals(listOf(expected), results)
+        assertEquals("MaxVibes: Processing...", runner.title)
+        assertTrue(runner.cancellable)
+        assertTrue(runner.publishIndicator)
+    }
+
+    @Test
+    fun `Claude Code ProcessCanceledException is rethrown rather than converted to Error`() {
+        val runner = ImmediateRunner()
+        val fixture = fixture(runner)
+        val results = mutableListOf<ClaudeCodeStepResult>()
+
+        assertThrows<ProcessCanceledException> {
+            fixture.coordinator.runClaudeCode(
+                title = "Turn",
+                session = ChatSession(),
+                action = { throw ProcessCanceledException() },
+                onResult = results::add
+            )
+        }
+
+        assertTrue(results.isEmpty())
+        assertTrue(fixture.claudeResets.isEmpty())
+    }
+
+    @Test
+    fun `Claude Code cancellation resets only Claude session and unlocks input`() {
+        val runner = ImmediateRunner(cancel = true)
+        val fixture = fixture(runner)
+        val session = ChatSession()
+
+        fixture.coordinator.runClaudeCode(
+            title = "Turn",
+            session = session,
+            action = { mockk() },
+            onResult = {}
+        )
+
+        assertEquals(listOf(session.id), fixture.claudeResets)
+        assertTrue(fixture.clipboardResets.isEmpty())
+        assertEquals(listOf("⚠️ Cancelled"), fixture.chatMessages)
+        assertEquals(true, fixture.callbacks.inputEnabled)
+        assertEquals("Claude Code: running", fixture.callbacks.statusUpdates.single())
+    }
+
+    @Test
+    fun `Claude Code success forwards exact result with cancellable visible task`() {
+        val runner = ImmediateRunner()
+        val fixture = fixture(runner)
+        val expected = mockk<ClaudeCodeStepResult>()
+        val results = mutableListOf<ClaudeCodeStepResult>()
+
+        fixture.coordinator.runClaudeCode(
+            title = "Approving",
+            session = ChatSession(),
+            action = { expected },
+            onResult = results::add
+        )
+
+        assertEquals(listOf(expected), results)
+        assertEquals("MaxVibes: Approving", runner.title)
+        assertTrue(runner.cancellable)
+        assertTrue(runner.publishIndicator)
+        assertTrue(fixture.claudeResets.isEmpty())
+    }
+
+    @Test
+    fun `Clipboard cancellation does not execute the supplied action`() {
+        val runner = ImmediateRunner(cancel = true)
+        val fixture = fixture(runner)
+        var actionInvoked = false
+
+        fixture.coordinator.runClipboard(
+            title = "Sending",
+            session = ChatSession(),
+            action = {
+                actionInvoked = true
+                mockk()
+            },
+            onResult = {}
+        )
+
+        assertFalse(actionInvoked)
+    }
+
+    @Test
+    fun `Clipboard non-Exception crash uses throwable type and fallback message`() {
+        val runner = ImmediateRunner()
+        val fixture = fixture(runner)
+        val results = mutableListOf<ClipboardStepResult>()
+
+        fixture.coordinator.runClipboard(
+            title = "Sending",
+            session = ChatSession(),
+            action = { throw AssertionError() },
+            onResult = results::add
+        )
+
+        val error = results.single() as ClipboardStepResult.Error
+        assertEquals("Internal error: AssertionError: no message", error.message)
+    }
+
+    @Test
+    fun `Clipboard ProcessCanceledException is rethrown rather than converted to Error`() {
+        val runner = ImmediateRunner()
+        val fixture = fixture(runner)
+        val results = mutableListOf<ClipboardStepResult>()
+
+        assertThrows<ProcessCanceledException> {
+            fixture.coordinator.runClipboard(
+                title = "Sending",
+                session = ChatSession(),
+                action = { throw ProcessCanceledException() },
+                onResult = results::add
+            )
+        }
+
+        assertTrue(results.isEmpty())
+        assertTrue(fixture.clipboardResets.isEmpty())
+    }
+
+    @Test
+    fun `Clipboard success forwards the exact result without resetting either protocol`() {
+        val runner = ImmediateRunner()
+        val fixture = fixture(runner)
+        val session = ChatSession()
+        val expected = mockk<ClipboardStepResult>()
+        val results = mutableListOf<ClipboardStepResult>()
+
+        fixture.coordinator.runClipboard(
+            title = "Sending",
+            session = session,
+            action = { expected },
+            onResult = results::add
+        )
+
+        assertEquals(listOf(expected), results)
+        assertTrue(fixture.clipboardResets.isEmpty())
+        assertTrue(fixture.claudeResets.isEmpty())
+        assertTrue(fixture.chatMessages.isEmpty())
+        assertEquals("MaxVibes: Sending", runner.title)
+        assertTrue(runner.publishIndicator)
     }
 
     private fun fixture(

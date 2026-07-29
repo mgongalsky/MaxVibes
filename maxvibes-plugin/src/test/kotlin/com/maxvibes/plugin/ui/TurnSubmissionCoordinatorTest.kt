@@ -203,4 +203,156 @@ class TurnSubmissionCoordinatorTest {
         assertEquals(1, savedDocuments)
         assertEquals(1, redoneClipboardRequests)
     }
+
+    @Test
+    fun `redo invokes clipboard delegate only after documents are saved`() {
+        val events = mutableListOf<String>()
+        val orderedCoordinator = TurnSubmissionCoordinator(
+            documentSaver = DocumentSaver { events.add("save") },
+            dismissQuestionTurn = {},
+            attachments = attachments,
+            appendToChat = {},
+            dispatchApi = { _, _, _, _, _ -> error("unexpected API dispatch") },
+            dispatchClipboard = { _, _, _, _, _, _ -> error("unexpected clipboard dispatch") },
+            dispatchCheapApi = { _, _, _, _, _ -> error("unexpected cheap dispatch") },
+            dispatchClaudeCode = { _, _, _, _, _, _ -> error("unexpected Claude dispatch") },
+            approveClaudeCode = { _, _ -> error("unexpected approve") },
+            redoClipboardJson = { events.add("redo") }
+        )
+
+        orderedCoordinator.redoClipboardJson()
+
+        assertEquals(listOf("save", "redo"), events)
+    }
+
+    @Test
+    fun `approve without unsupported attachments clears state before delegate and emits no warning`() {
+        attachments.attachTrace("trace")
+        attachments.attachErrors("errors")
+        val events = mutableListOf<String>()
+        val orderedCoordinator = TurnSubmissionCoordinator(
+            documentSaver = DocumentSaver { events.add("save") },
+            dismissQuestionTurn = { error("approve must not dismiss questions") },
+            attachments = attachments,
+            appendToChat = { events.add("warning") },
+            dispatchApi = { _, _, _, _, _ -> error("unexpected API dispatch") },
+            dispatchClipboard = { _, _, _, _, _, _ -> error("unexpected clipboard dispatch") },
+            dispatchCheapApi = { _, _, _, _, _ -> error("unexpected cheap dispatch") },
+            dispatchClaudeCode = { _, _, _, _, _, _ -> error("unexpected Claude dispatch") },
+            approveClaudeCode = { trace, errors ->
+                assertEquals("trace", trace)
+                assertEquals("errors", errors)
+                assertNull(attachments.trace)
+                assertNull(attachments.errors)
+                assertEquals(null to null, callbacks.attachmentsChanges.last())
+                events.add("approve")
+            },
+            redoClipboardJson = { error("unexpected redo") }
+        )
+
+        orderedCoordinator.approve()
+
+        assertEquals(listOf("save", "approve"), events)
+    }
+
+    @Test
+    fun `send saves documents dismisses questions and consumes state before dispatch`() {
+        attachments.attachTrace("trace")
+        val events = mutableListOf<String>()
+        val orderedCoordinator = TurnSubmissionCoordinator(
+            documentSaver = DocumentSaver { events.add("save") },
+            dismissQuestionTurn = { events.add("dismiss") },
+            attachments = attachments,
+            appendToChat = { events.add("warning") },
+            dispatchApi = { _, trace, _, _, _ ->
+                assertEquals("trace", trace)
+                assertNull(attachments.trace)
+                events.add("dispatch")
+            },
+            dispatchClipboard = { _, _, _, _, _, _ -> error("unexpected clipboard dispatch") },
+            dispatchCheapApi = { _, _, _, _, _ -> error("unexpected cheap dispatch") },
+            dispatchClaudeCode = { _, _, _, _, _, _ -> error("unexpected Claude dispatch") },
+            approveClaudeCode = { _, _ -> error("unexpected approve") },
+            redoClipboardJson = { error("unexpected redo") }
+        )
+
+        orderedCoordinator.sendMessage(
+            userInput = "message",
+            isPlanOnly = false,
+            isDryRun = false,
+            mode = InteractionMode.API
+        )
+
+        assertEquals(listOf("save", "dismiss", "dispatch"), events)
+    }
+
+    @Test
+    fun `Clipboard one-shot overrides session prompt without warning`() {
+        attachments.armOneShot("one-shot", "class Example", "label")
+
+        coordinator.sendMessage(
+            userInput = "clipboard message",
+            isPlanOnly = false,
+            isDryRun = false,
+            mode = InteractionMode.CLIPBOARD,
+            addHistory = true,
+            selectedSpecificPromptName = "session prompt"
+        )
+
+        val call = clipboardCalls.single()
+        assertEquals("one-shot", call.promptName)
+        assertEquals("class Example", call.trace)
+        assertTrue(call.addHistory)
+        assertTrue(warnings.isEmpty())
+        assertTrue(apiCalls.isEmpty())
+        assertTrue(cheapApiCalls.isEmpty())
+        assertTrue(claudeCalls.isEmpty())
+    }
+
+    @Test
+    fun `Cheap API one-shot prepends element context and emits mode warning`() {
+        attachments.attachTrace("trace")
+        attachments.attachErrors("errors")
+        attachments.armOneShot("skill", "class Example", "label")
+
+        coordinator.sendMessage(
+            userInput = "cheap message",
+            isPlanOnly = false,
+            isDryRun = true,
+            mode = InteractionMode.CHEAP_API,
+            selectedSpecificPromptName = "session prompt"
+        )
+
+        val call = cheapApiCalls.single()
+        assertEquals("cheap message", call.message)
+        assertEquals(
+            "class Example" + System.lineSeparator() + System.lineSeparator() + "trace",
+            call.trace
+        )
+        assertEquals("errors", call.errors)
+        assertTrue(call.isDryRun)
+        assertTrue(warnings.single().contains("not the skill body"))
+        assertTrue(apiCalls.isEmpty())
+    }
+
+    @Test
+    fun `API send forwards all arguments and invokes no other dispatcher`() {
+        attachments.attachTrace("trace")
+        attachments.attachErrors("errors")
+
+        coordinator.sendMessage(
+            userInput = "api message",
+            isPlanOnly = true,
+            isDryRun = true,
+            mode = InteractionMode.API
+        )
+
+        assertEquals(
+            ApiCall("api message", "trace", "errors", true, true),
+            apiCalls.single()
+        )
+        assertTrue(cheapApiCalls.isEmpty())
+        assertTrue(clipboardCalls.isEmpty())
+        assertTrue(claudeCalls.isEmpty())
+    }
 }
