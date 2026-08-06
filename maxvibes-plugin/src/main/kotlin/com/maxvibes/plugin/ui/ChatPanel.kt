@@ -51,102 +51,11 @@ class ChatPanel(
         statusLabel.text = ChatNavigationHelper.navigateToElement(project, path)
     }
 
-    private val inputArea = JBTextArea(3, 40).apply {
-        lineWrap = true; wrapStyleWord = true; border = JBUI.Borders.empty(8)
-    }
-
-    private val sendButton = JButton("Send").apply { toolTipText = "Send message (Ctrl+Enter)" }
-
-    /**
-     * Approve button: visible only in [InteractionMode.CLAUDE_CODE] when the active
-     * session is in [ClipboardSessionStatus.AWAITING_APPROVE]. Clicking it gathers
-     * the files the LLM requested and sends a follow-up to the same Claude Code process.
-     */
-    private val approveButton = JButton("\u2705 Approve").apply {
-        toolTipText = "Approve & gather requested files (Claude Code)"
-        isVisible = false
-        // Amber highlight so the button is unmissable the moment it pops up.
-        // Client properties are the platform way to recolor buttons (Darcula's
-        // ButtonUI ignores plain setBackground); JBColor adapts light/dark.
-        foreground = JBColor(java.awt.Color(0x3E2C00), java.awt.Color(0x241C00))
-        putClientProperty("JButton.backgroundColor", JBColor(java.awt.Color(0xF5C518), java.awt.Color(0xD4AC0D)))
-        putClientProperty("JButton.borderColor", JBColor(java.awt.Color(0xC9A227), java.awt.Color(0x9A7D0A)))
-    }
-
-    private val modeComboBox = ComboBox<ModeItem>().apply {
-        MaxVibesSettings.INTERACTION_MODES.forEach { (id, label) -> addItem(ModeItem(id, label)) }
-        toolTipText = "Interaction mode"
-    }
-
-    private val dryRunCheckbox = JBCheckBox("Dry run").apply { toolTipText = "Show plan without applying changes" }
-    private val planOnlyCheckbox = JBCheckBox("\uD83D\uDCAC Plan").apply { toolTipText = "Plan-only mode" }
-
-    /**
-     * "Add History" checkbox: when checked, the list of previously gathered file paths
-     * is included in the next Clipboard request (paths only, no content).
-     *
-     * Useful when starting a fresh LLM chat so the model knows which files were already
-     * in context and can re-request what it needs via [requestedFiles].
-     *
-     * Visible only in Clipboard mode; auto-resets to unchecked after each send (one-shot).
-     */
-    private val addHistoryCheckbox = JBCheckBox("Add History").apply {
-        toolTipText = "Share gathered file list with LLM (use when starting a new LLM chat)"
-        isVisible = false
-    }
-    private val copyJsonButton =
-        JButton("\uD83D\uDCCB Copy JSON").apply { toolTipText = "Re-copy last generated JSON"; isVisible = false }
-
-    private val attachErrorsButton = JButton("\uD83D\uDC1E Errors").apply {
-        toolTipText = "Attach IDE errors from open files"; font = font.deriveFont(11f)
-    }
-    private val errorsIndicator = JBLabel("").apply {
-        foreground = JBColor(Color(0xD32F2F), Color(0xEF5350)); font = font.deriveFont(Font.BOLD, 11f); isVisible =
-        false
-    }
-    private val clearErrorsButton = JButton("\u2715").apply {
-        toolTipText = "Remove attached errors"; font = font.deriveFont(9f); preferredSize =
-        Dimension(20, 20); isVisible = false
-    }
-    private val attachTraceButton = JButton("\uD83D\uDCCE Trace").apply {
-        toolTipText = "Paste error/stacktrace/logs (Ctrl+Shift+V)"; font = font.deriveFont(11f)
-    }
-    private val traceIndicator = JBLabel("").apply {
-        foreground = JBColor(Color(0xFF9800), Color(0xFFB74D)); font = font.deriveFont(Font.BOLD, 11f); isVisible =
-        false
-    }
-    private val clearTraceButton = JButton("\u2715").apply {
-        toolTipText = "Remove attached trace"; font = font.deriveFont(9f); preferredSize =
-        Dimension(20, 20); isVisible = false
-    }
-    private val attachmentsPanel = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
-        background = JBColor.background()
-        isVisible = false
-    }
-
     private val statusLabel = JBLabel("Ready").apply { foreground = JBColor.GRAY }
     private val tokenLabel = JBLabel("").apply {
         foreground = JBColor.GRAY
         font = font.deriveFont(10f)
         horizontalAlignment = SwingConstants.CENTER
-    }
-    private val modeIndicator = JBLabel("").apply {
-        foreground = JBColor(Color(0x2196F3), Color(0x64B5F6)); font = font.deriveFont(Font.BOLD, 11f); isVisible =
-        false
-    }
-
-    /**
-     * Clickable link to the per-dialog Claude Code transcript
-     * (`.maxvibes/logs/claude-code/<chatSessionId>.log`). Visible only in
-     * [InteractionMode.CLAUDE_CODE]; click opens the file in the editor
-     * via [openClaudeCodeLog].
-     */
-    private val ccLogLink = JBLabel("\uD83D\uDCC4 CC log").apply {
-        foreground = JBColor(Color(0x2196F3), Color(0x64B5F6))
-        font = font.deriveFont(11f)
-        cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-        toolTipText = "Open Claude Code dialog transcript (re-click to refresh)"
-        isVisible = false
     }
 
     /**
@@ -168,9 +77,6 @@ class ChatPanel(
         port = com.maxvibes.plugin.claudecode.ClaudeOAuthUsageAdapter(),
         onUsage = { usage -> limitsBar.onUsage(usage) }
     ).also { it.start() }
-
-    private val rateLimits =
-        java.util.concurrent.ConcurrentHashMap<String, com.maxvibes.application.port.output.AgentStreamEvent.RateLimitUpdate>()
 
     private fun updateLimitsChip(e: com.maxvibes.application.port.output.AgentStreamEvent.RateLimitUpdate) {
         MaxVibesLogger.info(
@@ -195,28 +101,6 @@ class ChatPanel(
         worstPct >= 60 -> JBColor(java.awt.Color(0xB7950B), java.awt.Color(0xF1C40F))
         else -> null // theme default
     }
-
-    private val breadcrumbPanel = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply { background = JBColor.background() }
-
-    private val sessionsButton =
-        JButton("\uD83D\uDCC2 Sessions").apply { font = font.deriveFont(11f); isFocusPainted = false }
-    private val branchButton = JButton("\u2442 Branch").apply { font = font.deriveFont(11f); isFocusPainted = false }
-    private val newChatButton = JButton("+ New").apply { font = font.deriveFont(11f); isFocusPainted = false }
-    private val deleteButton = JButton("\uD83D\uDDD1 Del").apply { font = font.deriveFont(11f); isFocusPainted = false }
-    private val promptsButton = JButton("\u2699").apply { toolTipText = "Edit prompts"; font = font.deriveFont(11f) }
-    private val contextFilesButton =
-        JButton("\uD83D\uDCCE Ctx").apply { font = font.deriveFont(11f); isFocusPainted = false }
-    private val claudeInstrButton =
-        JButton("\uD83D\uDCCB").apply { font = font.deriveFont(11f); isFocusPainted = false }
-    private val maximizeButton = JButton(AllIcons.General.ExpandComponent).apply {
-        toolTipText = "Maximize / Restore"; font = font.deriveFont(11f); isFocusPainted = false
-    }
-    private val windowedButton = JButton(AllIcons.Actions.MoveToWindow).apply {
-        toolTipText = "Floating Mode / Dock"; font = font.deriveFont(11f); isFocusPainted = false
-    }
-
-    /** Single dropdown button showing the active specific prompt name. */
-    private val promptNameLabel = JBLabel("") // unused placeholder \u2014 kept for binary compat
 
     /** Button to create a new specific prompt file. */
     private val newPromptButton = JButton("+").apply {
@@ -292,9 +176,6 @@ class ChatPanel(
         })
     }
 
-    /** Guards claudeModelCombo listeners during programmatic sync. */
-    private var suppressModelCombo = false
-
     private fun syncModelComboFromSettings() {
         cliSettingsBinder.syncModel { claudeModelCombo.selectedItem = it }
     }
@@ -324,8 +205,6 @@ class ChatPanel(
         })
     }
 
-    /** Guards claudeEffortCombo listener during programmatic sync. */
-    private var suppressEffortCombo = false
     private fun syncEffortComboFromSettings() {
         cliSettingsBinder.syncEffort { claudeEffortCombo.selectedItem = it }
     }
@@ -423,11 +302,49 @@ class ChatPanel(
     // Extracted here to keep ChatPanel free from knowledge of the internal message storage format.
     private val conversationRenderer = ConversationRenderer()
 
-    /**
-     * Holds the active force-activate MouseListener on [modeIndicator] so it can be
-     * removed before re-attaching on the next [updateModeUI] call, preventing listener accumulation.
-     */
-    private var forceActivateListener: MouseAdapter? = null
+    private val headerPanel = ChatHeaderPanel(
+        onModeSelected = ::handleModeSelection,
+        onIndicatorAction = ::handleIndicatorAction,
+        onOpenCcLog = ::openClaudeCodeLog,
+        onShowSessions = onShowSessions,
+        onNewChat = ::createNewChat,
+        onBranch = ::createBranch,
+        onDeleteChat = ::deleteCurrentChat,
+        onOpenPrompts = {
+            promptService.openOrCreatePrompts()
+            statusLabel.text = "Prompts opened"
+        },
+        onContextFiles = ::showContextFilesDialog,
+        onClaudeInstructions = { anchor ->
+            ChatDialogsHelper.showClaudeInstructionsPopup(project, anchor) {
+                statusLabel.text = it
+            }
+        },
+        onToggleMaximize = ::toggleMaximize,
+        onToggleWindowed = ::toggleWindowed,
+        onSelectSession = { sessionId ->
+            chatTreeService.setActiveSession(sessionId)
+            loadCurrentSession()
+        },
+        onRenameSession = { sessionId, title ->
+            messageController.renameSession(sessionId, title)
+            statusLabel.text = "Renamed to '$title'"
+        }
+    )
+    private val inputPanel = ChatInputPanel(
+        promptBar = buildPromptPanel(),
+        usageBar = limitsBar,
+        onSend = ::sendMessage,
+        onApprove = { messageController.approve() },
+        onCopyJson = { messageController.redoClipboardJson() },
+        onAttachTrace = ::attachTraceFromClipboard,
+        onClearTrace = { messageController.clearTrace() },
+        onAttachErrors = { messageController.fetchIdeErrors() },
+        onClearErrors = { messageController.clearErrors() },
+        onImagePasted = { image -> messageController.attachImage(image) },
+        onClearImages = { messageController.clearImages() },
+        onClearOneShot = { messageController.clearOneShot() }
+    )
 
     private val messageController: ChatMessageController by lazy {
         ChatMessageController(project, service, this)
@@ -493,7 +410,7 @@ class ChatPanel(
     ): QuestionBlockView = conversationPanel.addQuestionBubble(question, options, onAnswer)
 
     override fun sendUserMessage(text: String) {
-        inputArea.text = text
+        inputPanel.setText(text)
         sendMessage()
     }
 
@@ -510,28 +427,10 @@ class ChatPanel(
     }
 
     override fun setInputEnabled(enabled: Boolean) {
-        inputArea.isEnabled = enabled
-        sendButton.isEnabled = enabled
-        approveButton.isEnabled = enabled
-        dryRunCheckbox.isEnabled = enabled
-        planOnlyCheckbox.isEnabled = enabled
-        addHistoryCheckbox.isEnabled = enabled
-        copyJsonButton.isEnabled = enabled
-        attachTraceButton.isEnabled = enabled
-        clearTraceButton.isEnabled = enabled
-        attachErrorsButton.isEnabled = enabled
-        clearErrorsButton.isEnabled = enabled
-        promptsButton.isEnabled = enabled
-        modeComboBox.isEnabled = enabled
+        inputPanel.setControlsEnabled(enabled)
+        headerPanel.setControlsEnabled(enabled)
         claudeModelCombo.isEnabled = enabled
         claudeEffortCombo.isEnabled = enabled
-        sessionsButton.isEnabled = enabled
-        branchButton.isEnabled = enabled
-        newChatButton.isEnabled = enabled
-        deleteButton.isEnabled = enabled
-        contextFilesButton.isEnabled = enabled
-        claudeInstrButton.isEnabled = enabled
-        maximizeButton.isEnabled = enabled
         promptSelectButton.isEnabled = enabled
         newPromptButton.isEnabled = enabled
         editPromptButton.isEnabled = enabled
@@ -548,46 +447,8 @@ class ChatPanel(
     }
 
     override fun updateBreadcrumb() {
-        breadcrumbPanel.removeAll()
         val session = chatTreeService.getActiveSession()
-        val path = chatTreeService.getSessionPath(session.id)
-
-        for ((i, s) in path.withIndex()) {
-            val isLast = i == path.size - 1
-            if (i > 0) {
-                breadcrumbPanel.add(JBLabel(" \u203A ").apply {
-                    foreground = JBColor.GRAY; font = font.deriveFont(11f)
-                })
-            }
-            if (isLast) {
-                val titleText = s.title.take(30) + if (s.title.length > 30) ".." else ""
-                val label = JBLabel(titleText).apply {
-                    font = font.deriveFont(Font.BOLD, 11f); foreground = JBColor.foreground()
-                    border = JBUI.Borders.empty(2, 3); cursor = Cursor.getPredefinedCursor(Cursor.TEXT_CURSOR)
-                    toolTipText = "Click to rename"
-                }
-                label.addMouseListener(object : MouseAdapter() {
-                    override fun mouseClicked(e: MouseEvent) {
-                        startInlineRename(label, s.id, s.title)
-                    }
-                })
-                breadcrumbPanel.add(label)
-            } else {
-                val label = JBLabel(s.title.take(20) + if (s.title.length > 20) ".." else "").apply {
-                    font = font.deriveFont(11f)
-                    foreground = JBColor(Color(0x2196F3), Color(0x64B5F6))
-                    border = JBUI.Borders.empty(2, 3); cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-                }
-                val sid = s.id
-                label.addMouseListener(object : MouseAdapter() {
-                    override fun mouseClicked(e: MouseEvent) {
-                        chatTreeService.setActiveSession(sid); loadCurrentSession()
-                    }
-                })
-                breadcrumbPanel.add(label)
-            }
-        }
-        breadcrumbPanel.revalidate(); breadcrumbPanel.repaint()
+        headerPanel.updateBreadcrumb(chatTreeService.getSessionPath(session.id))
     }
 
     override fun registerElementPaths(modifications: List<ModificationResult>) {
@@ -644,11 +505,11 @@ class ChatPanel(
     }
 
     override fun setPlanOnlyMode(enabled: Boolean) {
-        planOnlyCheckbox.isSelected = enabled
+        inputPanel.setPlanOnly(enabled)
     }
 
     fun refreshHeader() {
-        updateBreadcrumb(); updateModeIndicator(); updateContextIndicator(); updateToolWindowIcons()
+        render(buildState())
     }
 
     fun loadCurrentSession() {
@@ -707,109 +568,6 @@ class ChatPanel(
         border = JBUI.Borders.empty()
         background = JBColor.background()
 
-        val headerPanel = JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            background = JBColor.background()
-            border = JBUI.Borders.compound(
-                JBUI.Borders.empty(4, 8),
-                JBUI.Borders.customLine(JBColor.border(), 0, 0, 1, 0)
-            )
-
-            val controlRow = JPanel(BorderLayout()).apply {
-                background = JBColor.background()
-                maximumSize = Dimension(Int.MAX_VALUE, 30)
-                val left = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
-                    background = JBColor.background()
-                    add(modeComboBox.apply {
-                        preferredSize = Dimension(180, 24)
-                        font = font.deriveFont(11f)
-                    })
-                    add(modeIndicator)
-                    add(ccLogLink)
-                }
-                val right = JPanel(FlowLayout(FlowLayout.RIGHT, 3, 0)).apply {
-                    background = JBColor.background()
-                    add(contextFilesButton.apply { preferredSize = Dimension(56, 24) })
-                    add(claudeInstrButton.apply { preferredSize = Dimension(26, 24) })
-                    add(windowedButton.apply { preferredSize = Dimension(26, 24) })
-                    add(maximizeButton.apply { preferredSize = Dimension(26, 24) })
-                    add(promptsButton.apply { preferredSize = Dimension(26, 24) })
-                }
-                add(left, BorderLayout.WEST)
-                add(right, BorderLayout.EAST)
-            }
-
-            val navRow = JPanel(BorderLayout(4, 0)).apply {
-                background = JBColor.background()
-                maximumSize = Dimension(Int.MAX_VALUE, 28)
-                border = JBUI.Borders.empty(2, 0, 0, 0)
-                val scroll = JScrollPane(breadcrumbPanel).apply {
-                    border = JBUI.Borders.empty()
-                    horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
-                    verticalScrollBarPolicy = ScrollPaneConstants.VERTICAL_SCROLLBAR_NEVER
-                    background = JBColor.background()
-                    viewport.background = JBColor.background()
-                }
-                val navButtons = JPanel(FlowLayout(FlowLayout.RIGHT, 3, 0)).apply {
-                    background = JBColor.background()
-                    add(newChatButton.apply { preferredSize = Dimension(52, 22) })
-                    add(branchButton.apply { preferredSize = Dimension(64, 22) })
-                    add(deleteButton.apply { preferredSize = Dimension(52, 22) })
-                    add(sessionsButton.apply { preferredSize = Dimension(86, 22) })
-                }
-                add(scroll, BorderLayout.CENTER)
-                add(navButtons, BorderLayout.EAST)
-            }
-
-            add(controlRow)
-            add(navRow)
-        }
-
-        val traceBar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
-            background = JBColor.background()
-            border = JBUI.Borders.empty(2, 8, 0, 8)
-            add(traceIndicator)
-            add(clearTraceButton)
-            add(errorsIndicator)
-            add(clearErrorsButton)
-            add(attachmentsPanel)
-            isVisible = false
-        }
-
-        val inputPanel = JPanel(BorderLayout(5, 4)).apply {
-            border = JBUI.Borders.empty(4, 8, 8, 8)
-            background = JBColor.background()
-            add(traceBar, BorderLayout.NORTH)
-            add(JPanel(BorderLayout()).apply {
-                border = JBUI.Borders.customLine(JBColor.border(), 1)
-                // Viewport wrapper: without it JBTextArea grows unbounded with content,
-                // the SOUTH block clips, and caret navigation above the fold misbehaves.
-                add(com.intellij.ui.components.JBScrollPane(inputArea).apply {
-                    border = JBUI.Borders.empty()
-                    preferredSize = Dimension(10, 96)
-                    verticalScrollBarPolicy = ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED
-                    horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
-                }, BorderLayout.CENTER)
-            }, BorderLayout.CENTER)
-            add(JPanel(BorderLayout()).apply {
-                background = JBColor.background()
-                add(buildPromptPanel(), BorderLayout.NORTH)
-                add(JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
-                    background = JBColor.background()
-                    add(attachErrorsButton.apply { preferredSize = Dimension(85, 26) })
-                    add(attachTraceButton.apply { preferredSize = Dimension(80, 26) })
-                    add(addHistoryCheckbox)
-                    add(planOnlyCheckbox)
-                    add(dryRunCheckbox)
-                    add(copyJsonButton)
-                    add(approveButton)
-                    add(sendButton)
-                }, BorderLayout.CENTER)
-                // Set 9: subscription usage row (5h / 7d bars) - full-width line under the buttons.
-                add(limitsBar, BorderLayout.SOUTH)
-            }, BorderLayout.SOUTH)
-        }
-
         val statusBar = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             border = JBUI.Borders.empty(2, 10, 2, 10)
@@ -826,19 +584,12 @@ class ChatPanel(
             })
         }
 
-        // Planner panel pinned above the conversation: both live inside the first
-        // splitter section so the plan scrolls with nothing — it stays fixed while
-        // only the conversation below it scrolls.
         val conversationWithPlan = JPanel(BorderLayout()).apply {
             background = JBColor.background()
             add(planPanel, BorderLayout.NORTH)
             add(conversationPanel, BorderLayout.CENTER)
         }
 
-        // Conversation on top, live turn block below, separated by a draggable one-pixel
-        // splitter. The proportion is persisted via PropertiesComponent, so a size dragged
-        // once survives IDE restarts. While the live panel is invisible between turns,
-        // the conversation takes the full available height.
         val conversationSplitter = com.intellij.ui.OnePixelSplitter(true, 0.72f).apply {
             firstComponent = conversationWithPlan
             secondComponent = liveTurnPanel
@@ -853,293 +604,58 @@ class ChatPanel(
         }, BorderLayout.SOUTH)
     }
 
-    /** Paste handler: a clipboard image becomes an attachment, anything else pastes as text. */
-    private fun pasteImageOrText() {
-        val img = ImageAttachments.fromClipboard()
-        if (img != null) messageController.attachImage(img) else inputArea.paste()
+    private fun attachTraceFromClipboard() {
+        val content = try {
+            java.awt.Toolkit.getDefaultToolkit().systemClipboard
+                .getData(java.awt.datatransfer.DataFlavor.stringFlavor) as? String
+        } catch (e: Exception) {
+            statusLabel.text = "Clipboard error: ${e.message}"
+            return
+        }
+
+        if (content.isNullOrBlank()) {
+            statusLabel.text = "Clipboard is empty"
+            return
+        }
+
+        messageController.attachTrace(content)
     }
 
     private fun setupListeners() {
-        fun attachFromClipboard() {
-            val content = try {
-                java.awt.Toolkit.getDefaultToolkit().systemClipboard
-                    .getData(java.awt.datatransfer.DataFlavor.stringFlavor) as? String
-            } catch (e: Exception) {
-                statusLabel.text = "Clipboard error: ${e.message}"; return
-            }
-            if (content.isNullOrBlank()) {
-                statusLabel.text = "Clipboard is empty"; return
-            }
-            messageController.attachTrace(content)
-        }
-
-        sendButton.addActionListener { sendMessage() }
-        approveButton.addActionListener { messageController.approve() }
-        ccLogLink.addMouseListener(object : MouseAdapter() {
-            override fun mouseClicked(e: MouseEvent) {
-                openClaudeCodeLog()
-            }
-        })
-        copyJsonButton.addActionListener { messageController.redoClipboardJson() }
-        sessionsButton.addActionListener { onShowSessions() }
         promptSelectButton.addActionListener { showPromptSelectionPopup() }
         newPromptButton.addActionListener { createNewPromptFile() }
         editPromptButton.addActionListener { editCurrentPromptFile() }
         deletePromptButton.addActionListener { deleteCurrentPromptFile() }
-
-        newChatButton.addActionListener {
-            messageController.clearAttachmentsAfterSend()
-            messageController.createNewSession()
-            statusLabel.text = "New dialog"
-        }
-
-        branchButton.addActionListener {
-            val active = chatTreeService.getActiveSession()
-            val title = JOptionPane.showInputDialog(
-                this, "Name for the new branch:", "New Branch", JOptionPane.PLAIN_MESSAGE,
-                null, null, "Branch: ${active.title.take(25)}"
-            ) as? String ?: return@addActionListener
-            messageController.clearAttachmentsAfterSend()
-            messageController.branchSession(active.id, title)
-            statusLabel.text = "Branch: $title"
-        }
-
-        deleteButton.addActionListener { deleteCurrentChat() }
-        promptsButton.addActionListener { promptService.openOrCreatePrompts(); statusLabel.text = "Prompts opened" }
-
-        contextFilesButton.addActionListener {
-            val result = ChatDialogsHelper.showContextFilesDialog(this, project, chatTreeService)
-            if (result != null) {
-                chatTreeService.setGlobalContextFiles(result)
-                updateContextIndicator(); statusLabel.text = "Context files: ${result.size}"
-            }
-        }
-
-        claudeInstrButton.addActionListener {
-            ChatDialogsHelper.showClaudeInstructionsPopup(project, claudeInstrButton) { statusLabel.text = it }
-        }
-
-        maximizeButton.addActionListener {
-            val manager = ToolWindowManager.getInstance(project)
-            val newState = !manager.isMaximized(toolWindow)
-            manager.setMaximized(toolWindow, newState)
-            updateToolWindowIcons()
-        }
-
-        windowedButton.addActionListener {
-            if (toolWindow.type == ToolWindowType.FLOATING || toolWindow.type == ToolWindowType.WINDOWED) {
-                toolWindow.setType(ToolWindowType.DOCKED, null)
-            } else {
-                toolWindow.setType(ToolWindowType.FLOATING, null)
-            }
-            updateToolWindowIcons()
-        }
-
-        attachTraceButton.addActionListener { attachFromClipboard() }
-        clearTraceButton.addActionListener { messageController.clearTrace() }
-        attachErrorsButton.addActionListener { messageController.fetchIdeErrors() }
-        clearErrorsButton.addActionListener { messageController.clearErrors() }
-
-        modeComboBox.addActionListener {
-            val selected = modeComboBox.selectedItem as? ModeItem ?: return@addActionListener
-            val newMode = try {
-                InteractionMode.valueOf(selected.id)
-            } catch (_: Exception) {
-                return@addActionListener
-            }
-            if (newMode == modeManager.currentMode) return@addActionListener
-            if (modeManager.currentMode == InteractionMode.CLIPBOARD &&
-                buildState().clipboardStatus == ClipboardSessionStatus.AWAITING_PASTE
-            ) {
-                val confirm = JOptionPane.showConfirmDialog(
-                    this, "Active clipboard session will be reset. Continue?",
-                    "Switch Mode", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE
-                )
-                if (confirm != JOptionPane.YES_OPTION) {
-                    syncComboBoxToMode(); return@addActionListener
-                }
-                val sessionId = chatTreeService.getActiveSession().id
-                service.clipboardService.reset(sessionId)
-            }
-            MaxVibesLogger.info(
-                "ChatPanel",
-                "switchMode",
-                mapOf("from" to modeManager.currentMode.name, "to" to newMode.name)
-            )
-            modeManager.switchMode(newMode)
-            val label = MaxVibesSettings.INTERACTION_MODES.find { it.first == newMode.name }?.second ?: newMode.name
-            statusLabel.text = "Mode: $label"
-            conversationPanel.addSystemBubble("\u2699\uFE0F Switched to $label")
-        }
-
-        inputArea.addKeyListener(object : KeyAdapter() {
-            override fun keyPressed(e: KeyEvent) {
-                if (e.keyCode == KeyEvent.VK_ENTER && e.isControlDown) {
-                    sendMessage(); e.consume()
-                } else if (e.keyCode == KeyEvent.VK_V && e.isControlDown && e.isShiftDown) {
-                    attachFromClipboard(); e.consume()
-                }
-            }
-        })
-
-        // IntelliJ's action system consumes Ctrl+V ($Paste via CutCopyPasteSupport for
-        // Swing text components) BEFORE Swing InputMap bindings, so the interception
-        // must be a component-registered action \u2014 those take precedence in the dispatcher.
-        val pasteOverride = object : DumbAwareAction() {
-            override fun actionPerformed(e: AnActionEvent) = pasteImageOrText()
-        }
-        pasteOverride.registerCustomShortcutSet(
-            ActionManager.getInstance().getAction(IdeActions.ACTION_PASTE).shortcutSet,
-            inputArea
-        )
-        // Belt and suspenders: Swing-level bindings to the same handler for focus states
-        // where the event does reach the component directly.
-        inputArea.actionMap.put("maxvibes-paste", object : javax.swing.AbstractAction() {
-            override fun actionPerformed(e: java.awt.event.ActionEvent) = pasteImageOrText()
-        })
-        inputArea.inputMap.put(javax.swing.KeyStroke.getKeyStroke("ctrl V"), "maxvibes-paste")
-        inputArea.inputMap.put(javax.swing.KeyStroke.getKeyStroke("shift INSERT"), "maxvibes-paste")
     }
 
     private fun sendMessage() {
-        val userInput = inputArea.text.trim()
-        if (userInput.isBlank()) return
-        val addHistory = addHistoryCheckbox.isSelected
+        val submission = inputPanel.takeSubmission() ?: return
         val state = buildState()
-        inputArea.text = ""
-        addHistoryCheckbox.isSelected = false
         messageController.sendMessage(
-            userInput,
-            planOnlyCheckbox.isSelected,
-            dryRunCheckbox.isSelected,
+            submission.text,
+            submission.planOnly,
+            submission.dryRun,
             modeManager.currentMode,
-            addHistory,
+            submission.addHistory,
             state.selectedSpecificPromptName
         )
     }
 
-    /**
-     * Syncs the combo box selection to match [modeManager].currentMode.
-     * Called after syncFromSettings to keep UI in sync without triggering the listener.
-     */
     private fun syncComboBoxToMode() {
-        val mode = modeManager.currentMode
-        for (i in 0 until modeComboBox.itemCount) {
-            if (modeComboBox.getItemAt(i).id == mode.name) {
-                modeComboBox.selectedIndex = i; break
-            }
-        }
+        headerPanel.selectMode(modeManager.currentMode)
     }
 
-    /**
-     * Applies the [ModeUiPolicy] decision for the current mode and clipboard status to the
-     * mode-specific widgets.
-     *
-     * The [forceActivateListener] is removed at the top of every call so it never accumulates
-     * across renders or leaks across mode switches (e.g. CLIPBOARD \u2192 CLAUDE_CODE).
-     */
     private fun updateModeUI(state: ChatPanelState) {
-        forceActivateListener?.let { modeIndicator.removeMouseListener(it) }
-        forceActivateListener = null
-
         val decision = ModeUiPolicy.decide(state.mode, state.clipboardStatus)
-
-        ccLogLink.isVisible = decision.ccLogLinkVisible
-        sendButton.text = decision.sendButtonText
-        dryRunCheckbox.isVisible = decision.dryRunVisible
-        copyJsonButton.isVisible = decision.copyJsonVisible
-        addHistoryCheckbox.isVisible = decision.addHistoryVisible
-        modeIndicator.isVisible = decision.indicatorVisible
-        decision.indicatorText?.let { modeIndicator.text = it }
-
-        val decoration = decision.indicatorDecoration ?: return
-        modeIndicator.cursor =
-            if (decoration.handCursor) Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-            else Cursor.getDefaultCursor()
-        modeIndicator.toolTipText = decoration.tooltip
-
-        val action = decoration.action ?: return
-        val listener = object : MouseAdapter() {
-            override fun mouseClicked(e: MouseEvent) {
-                val sessionId = chatTreeService.getActiveSession().id
-                when (action) {
-                    IndicatorAction.FORCE_ACTIVATE -> service.clipboardService.forceActivate(sessionId)
-                    IndicatorAction.FORCE_AWAIT_PASTE -> service.clipboardService.forceAwaitPaste(sessionId)
-                }
-                render(buildState())
-            }
-        }
-        forceActivateListener = listener
-        modeIndicator.addMouseListener(listener)
+        headerPanel.applyModeDecision(decision)
+        inputPanel.applyModeDecision(decision)
     }
 
     private fun updateIndicators() {
-        val trace = messageController.attachedTrace
-        val hasTrace = !trace.isNullOrBlank()
-        traceIndicator.isVisible = hasTrace
-        clearTraceButton.isVisible = hasTrace
-        if (hasTrace) traceIndicator.text = "\uD83D\uDCCE Trace: ${trace!!.lines().size}L"
-
-        val errs = messageController.attachedErrors
-        val hasErrs = !errs.isNullOrBlank()
-        errorsIndicator.isVisible = hasErrs
-        clearErrorsButton.isVisible = hasErrs
-        if (hasErrs) {
-            val count = errs!!.split("File:").size - 1
-            errorsIndicator.text = "\uD83D\uDC1E Errors: $count"
-        }
-
-        val showBar = hasTrace || hasErrs || attachmentsPanel.isVisible
-        val bar = traceIndicator.parent
-        bar?.isVisible = showBar
-        bar?.revalidate(); bar?.repaint()
-    }
-
-    private fun startInlineRename(label: JBLabel, sessionId: String, currentTitle: String) {
-        val parent = label.parent ?: return
-        val idx = (0 until parent.componentCount).firstOrNull { parent.getComponent(it) === label } ?: return
-
-        val textField = JTextField(currentTitle).apply {
-            font = label.font
-            preferredSize = Dimension(maxOf(label.preferredSize.width + 40, 120), label.preferredSize.height + 2)
-            border = JBUI.Borders.compound(
-                JBUI.Borders.customLine(JBColor(Color(0x2196F3), Color(0x64B5F6)), 1), JBUI.Borders.empty(1, 3)
-            )
-            selectAll()
-        }
-
-        var committed = false
-        fun commitRename() {
-            if (committed) return; committed = true
-            val newTitle = textField.text.trim()
-            if (newTitle.isNotBlank() && newTitle != currentTitle) {
-                messageController.renameSession(sessionId, newTitle)
-                statusLabel.text = "Renamed to \"$newTitle\""
-            } else {
-                updateBreadcrumb()
-            }
-        }
-
-        fun cancelRename() {
-            if (committed) return; committed = true; updateBreadcrumb()
-        }
-
-        textField.addActionListener { commitRename() }
-        textField.addKeyListener(object : KeyAdapter() {
-            override fun keyPressed(e: KeyEvent) {
-                if (e.keyCode == KeyEvent.VK_ESCAPE) {
-                    cancelRename(); e.consume()
-                }
-            }
-        })
-        textField.addFocusListener(object : java.awt.event.FocusAdapter() {
-            override fun focusLost(e: java.awt.event.FocusEvent?) {
-                commitRename()
-            }
-        })
-
-        parent.remove(idx); parent.add(textField, idx); parent.revalidate(); parent.repaint()
-        textField.requestFocusInWindow()
+        inputPanel.updateIndicators(
+            messageController.attachedTrace,
+            messageController.attachedErrors
+        )
     }
 
     private fun deleteCurrentChat() {
@@ -1162,8 +678,7 @@ class ChatPanel(
     }
 
     private fun updateContextIndicator() {
-        val count = chatTreeService.getGlobalContextFiles().size
-        contextFilesButton.text = if (count > 0) "\uD83D\uDCCE Ctx($count)" else "\uD83D\uDCCE Ctx"
+        headerPanel.updateContextCount(chatTreeService.getGlobalContextFiles().size)
     }
 
     private fun showWelcome() {
@@ -1184,11 +699,12 @@ class ChatPanel(
 
     private fun updateToolWindowIcons() {
         val manager = ToolWindowManager.getInstance(project)
-        maximizeButton.icon =
-            if (manager.isMaximized(toolWindow)) AllIcons.General.CollapseComponent else AllIcons.General.ExpandComponent
-        val isFloating = toolWindow.type == ToolWindowType.FLOATING || toolWindow.type == ToolWindowType.WINDOWED
-        windowedButton.icon = AllIcons.Actions.MoveToWindow
-        windowedButton.toolTipText = if (isFloating) "Dock Tool Window" else "Floating Mode"
+        val floating = toolWindow.type == ToolWindowType.FLOATING ||
+                toolWindow.type == ToolWindowType.WINDOWED
+        headerPanel.updateToolWindowIcons(
+            maximized = manager.isMaximized(toolWindow),
+            floating = floating
+        )
     }
 
     /**
@@ -1235,33 +751,28 @@ class ChatPanel(
     }
 
     fun render(state: ChatPanelState) {
-        updateBreadcrumb()
+        headerPanel.updateBreadcrumb(state.sessionPath)
         updateModeUI(state)
         planPanel.update(state.plan)
         claudeModelCombo.isVisible = state.mode == InteractionMode.CLAUDE_CODE
         claudeEffortCombo.isVisible = state.mode == InteractionMode.CLAUDE_CODE
-        updateIndicators()
-        updateTokenDisplay()
-        updateContextIndicator()
+        inputPanel.updateIndicators(state.attachedTrace, state.attachedErrors)
+        tokenLabel.text = state.currentSession?.tokenUsage?.formatDisplay().orEmpty()
+        headerPanel.updateContextCount(state.contextFilesCount)
         updateToolWindowIcons()
+
         val displayName = state.selectedSpecificPromptName ?: "Just Code"
         promptSelectButton.text = "$displayName ▾"
-        promptSelectButton.toolTipText = if (state.selectedSpecificPromptName != null)
+        promptSelectButton.toolTipText = if (state.selectedSpecificPromptName != null) {
             "Active prompt: $displayName — click to change"
-        else
+        } else {
             "No specific prompt active — click to select"
+        }
+
         val hasPrompt = state.selectedSpecificPromptName != null
         editPromptButton.isEnabled = hasPrompt
         deletePromptButton.isEnabled = hasPrompt
-
-        approveButton.isVisible = state.claudeCodeApproveVisible
-
-        if (state.claudeCodeApproveVisible) {
-            sendButton.isEnabled = false
-            sendButton.toolTipText = "Press Approve to continue, or start a new chat (+ New)"
-        } else {
-            sendButton.toolTipText = "Send message (Ctrl+Enter)"
-        }
+        inputPanel.applyApproveState(state.claudeCodeApproveVisible)
     }
 
     private fun buildPromptPanel(): JPanel {
@@ -1371,63 +882,8 @@ class ChatPanel(
         render(buildState())
     }
 
-    private fun createAttachmentThumbnail(image: AttachedImage, index: Int): JComponent {
-        val clearListener = object : MouseAdapter() {
-            override fun mouseClicked(e: MouseEvent) = messageController.clearImages()
-        }
-
-        val previewIcon = runCatching {
-            val bytes = java.util.Base64.getDecoder().decode(image.base64Data)
-            val buffered = javax.imageio.ImageIO.read(java.io.ByteArrayInputStream(bytes)) ?: return@runCatching null
-            val maxSize = 40
-            val scale = minOf(
-                maxSize.toDouble() / buffered.width.toDouble(),
-                maxSize.toDouble() / buffered.height.toDouble(),
-                1.0
-            )
-            val width = maxOf(1, (buffered.width * scale).toInt())
-            val height = maxOf(1, (buffered.height * scale).toInt())
-            ImageIcon(buffered.getScaledInstance(width, height, Image.SCALE_SMOOTH))
-        }.getOrNull()
-
-        return JPanel(FlowLayout(FlowLayout.LEFT, 3, 0)).apply {
-            background = JBColor.background()
-            border = JBUI.Borders.compound(
-                JBUI.Borders.customLine(JBColor.border(), 1),
-                JBUI.Borders.empty(2, 4)
-            )
-            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-            toolTipText = "Attached image ${index + 1} — click to remove"
-
-            val previewLabel = if (previewIcon != null) JBLabel(previewIcon) else JBLabel("\uD83D\uDDBC")
-            val indexLabel = JBLabel("#${index + 1}").apply {
-                foreground = JBColor.GRAY
-                font = font.deriveFont(10f)
-            }
-
-            add(previewLabel)
-            add(indexLabel)
-            addMouseListener(clearListener)
-            previewLabel.addMouseListener(clearListener)
-            indexLabel.addMouseListener(clearListener)
-        }
-    }
-
     override fun onImagesChanged(images: List<AttachedImage>) {
-        attachmentsPanel.removeAll()
-        images.forEachIndexed { index, image ->
-            attachmentsPanel.add(createAttachmentThumbnail(image, index))
-        }
-
-        val hasImages = images.isNotEmpty()
-        attachmentsPanel.isVisible = hasImages
-
-        val bar = attachmentsPanel.parent
-        bar?.isVisible = hasImages || traceIndicator.isVisible || errorsIndicator.isVisible
-        attachmentsPanel.revalidate()
-        attachmentsPanel.repaint()
-        bar?.revalidate()
-        bar?.repaint()
+        inputPanel.showImages(images)
     }
 
     override fun onError(message: String) {
@@ -1461,35 +917,8 @@ class ChatPanel(
         summary: String, details: String, onSend: () -> Unit, onDismiss: () -> Unit
     ): PostApplyErrorsView = conversationPanel.addPostApplyErrorsBubble(summary, details, onSend, onDismiss)
 
-    /** One-shot editor-skill chip; lazily added to [attachmentsPanel] on first use. */
-    private val oneShotChip = JBLabel("").apply {
-        foreground = JBColor(Color(0x7B1FA2), Color(0xBA68C8))
-        font = font.deriveFont(Font.BOLD, 11f)
-        isVisible = false
-    }
-
-    /** Cancels the armed one-shot skill. */
-    private val clearOneShotButton = JButton("\u2715").apply {
-        toolTipText = "Cancel one-shot skill"
-        font = font.deriveFont(9f)
-        preferredSize = Dimension(20, 20)
-        isVisible = false
-        addActionListener { messageController.clearOneShot() }
-    }
-
-    /**
-     * Accepts a prefill from an editor action: fills or appends the input and arms
-     * a one-shot skill/context when present. Does NOT send — the user reviews and
-     * presses Send. EDT only (invoked from the message-bus subscriber).
-     */
     fun acceptPrefill(prefill: EditorPrefill) {
-        if (prefill.append && inputArea.text.isNotBlank()) {
-            inputArea.text = inputArea.text.trimEnd() + " " + prefill.text
-        } else if (prefill.text.isNotBlank()) {
-            inputArea.text = prefill.text
-        }
-        inputArea.caretPosition = inputArea.text.length
-        inputArea.requestFocusInWindow()
+        inputPanel.prefill(prefill.text, prefill.append)
         if (prefill.oneShotSkillName != null || prefill.elementContext != null) {
             messageController.armOneShot(
                 prefill.oneShotSkillName,
@@ -1499,28 +928,8 @@ class ChatPanel(
         }
     }
 
-    /**
-     * Shows/hides the one-shot skill chip. Chip components are lazily added to
-     * [attachmentsPanel] on first call so the existing setupUI stays untouched.
-     * Known cosmetic limitation: an unrelated render() while armed may re-hide the
-     * attachments panel; the armed state lives in the controller, so Send still works.
-     */
     override fun onOneShotChanged(label: String?) {
-        if (oneShotChip.parent == null) {
-            attachmentsPanel.add(oneShotChip)
-            attachmentsPanel.add(clearOneShotButton)
-        }
-        val armed = label != null
-        oneShotChip.text = if (armed) "\u26A1 " + label + " (1\u00D7)" else ""
-        oneShotChip.isVisible = armed
-        clearOneShotButton.isVisible = armed
-        if (armed) {
-            attachmentsPanel.isVisible = true
-            attachmentsPanel.revalidate()
-            attachmentsPanel.repaint()
-        } else {
-            render(buildState())
-        }
+        inputPanel.showOneShot(label)
     }
 
     /**
@@ -1531,5 +940,88 @@ class ChatPanel(
         conversationPanel.addDiagramButton {
             DiagramViewerDialog(project, diagram).show()
         }
+    }
+    private fun handleModeSelection(newMode: InteractionMode) {
+        if (newMode == modeManager.currentMode) return
+
+        if (modeManager.currentMode == InteractionMode.CLIPBOARD &&
+            buildState().clipboardStatus == ClipboardSessionStatus.AWAITING_PASTE
+        ) {
+            val confirm = JOptionPane.showConfirmDialog(
+                this,
+                "Active clipboard session will be reset. Continue?",
+                "Switch Mode",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.WARNING_MESSAGE
+            )
+            if (confirm != JOptionPane.YES_OPTION) {
+                syncComboBoxToMode()
+                return
+            }
+            service.clipboardService.reset(chatTreeService.getActiveSession().id)
+        }
+
+        MaxVibesLogger.info(
+            "ChatPanel",
+            "switchMode",
+            mapOf("from" to modeManager.currentMode.name, "to" to newMode.name)
+        )
+        modeManager.switchMode(newMode)
+        val label = MaxVibesSettings.INTERACTION_MODES
+            .find { it.first == newMode.name }
+            ?.second
+            ?: newMode.name
+        statusLabel.text = "Mode: $label"
+        conversationPanel.addSystemBubble("⚙️ Switched to $label")
+    }
+    private fun handleIndicatorAction(action: IndicatorAction) {
+        val sessionId = chatTreeService.getActiveSession().id
+        when (action) {
+            IndicatorAction.FORCE_ACTIVATE -> service.clipboardService.forceActivate(sessionId)
+            IndicatorAction.FORCE_AWAIT_PASTE -> service.clipboardService.forceAwaitPaste(sessionId)
+        }
+        render(buildState())
+    }
+    private fun createNewChat() {
+        messageController.clearAttachmentsAfterSend()
+        messageController.createNewSession()
+        statusLabel.text = "New dialog"
+    }
+    private fun createBranch() {
+        val active = chatTreeService.getActiveSession()
+        val title = JOptionPane.showInputDialog(
+            this,
+            "Name for the new branch:",
+            "New Branch",
+            JOptionPane.PLAIN_MESSAGE,
+            null,
+            null,
+            "Branch: ${active.title.take(25)}"
+        ) as? String ?: return
+
+        messageController.clearAttachmentsAfterSend()
+        messageController.branchSession(active.id, title)
+        statusLabel.text = "Branch: $title"
+    }
+    private fun showContextFilesDialog() {
+        val result = ChatDialogsHelper.showContextFilesDialog(this, project, chatTreeService)
+            ?: return
+        chatTreeService.setGlobalContextFiles(result)
+        updateContextIndicator()
+        statusLabel.text = "Context files: ${result.size}"
+    }
+    private fun toggleMaximize() {
+        val manager = ToolWindowManager.getInstance(project)
+        manager.setMaximized(toolWindow, !manager.isMaximized(toolWindow))
+        updateToolWindowIcons()
+    }
+    private fun toggleWindowed() {
+        val floating = toolWindow.type == ToolWindowType.FLOATING ||
+                toolWindow.type == ToolWindowType.WINDOWED
+        toolWindow.setType(
+            if (floating) ToolWindowType.DOCKED else ToolWindowType.FLOATING,
+            null
+        )
+        updateToolWindowIcons()
     }
 }
