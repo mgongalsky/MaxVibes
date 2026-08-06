@@ -1,42 +1,22 @@
 package com.maxvibes.plugin.ui
 
-import com.intellij.icons.AllIcons
-import com.intellij.ide.DataManager
 import com.intellij.openapi.Disposable
-import com.intellij.openapi.actionSystem.ActionManager
-import com.intellij.openapi.actionSystem.AnActionEvent
-import com.intellij.openapi.actionSystem.IdeActions
-import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.util.Disposer
-import com.intellij.openapi.vcs.VcsConfiguration
-import com.intellij.openapi.vcs.VcsDataKeys
 import com.intellij.openapi.wm.ToolWindow
-import com.intellij.openapi.wm.ToolWindowManager
-import com.intellij.openapi.wm.ToolWindowType
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.*
 import com.intellij.util.ui.JBUI
-import com.maxvibes.domain.model.chat.ChatMessage
 import com.maxvibes.domain.model.chat.ChatSession
-import com.maxvibes.domain.model.chat.MessageRole
-import com.maxvibes.domain.model.code.ElementPath
 import com.maxvibes.domain.model.interaction.AttachedImage
 import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 import com.maxvibes.domain.model.interaction.InteractionMode
-import com.maxvibes.domain.model.modification.Modification
 import com.maxvibes.application.service.AgentStreamHub
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.plugin.service.MaxVibesLogger
 import com.maxvibes.plugin.service.MaxVibesService
-import com.maxvibes.plugin.service.PromptService
 import com.maxvibes.plugin.settings.MaxVibesSettings
 import java.awt.*
-import java.awt.event.KeyAdapter
-import java.awt.event.KeyEvent
-import java.awt.event.MouseAdapter
-import java.awt.event.MouseEvent
 import javax.swing.*
 import com.maxvibes.domain.model.planning.PlanDiagram
 import com.maxvibes.plugin.diagram.DiagramViewerDialog
@@ -97,21 +77,6 @@ class ChatPanel(
         limitsBar.onRateLimit(e)
     }
 
-    private fun fmtReset(epochSec: Long?): String? = epochSec?.let {
-        val t = java.time.Instant.ofEpochSecond(it).atZone(java.time.ZoneId.systemDefault())
-        val pattern = if (t.toLocalDate() == java.time.LocalDate.now()) "HH:mm" else "EEE HH:mm"
-        t.format(java.time.format.DateTimeFormatter.ofPattern(pattern))
-    }
-
-    private fun limitsColor(worstPct: Int, worstStatus: String): JBColor? = when {
-        worstStatus == "rejected" || worstStatus == "exceeded" || worstPct >= 95 ->
-            JBColor(java.awt.Color(0xC0392B), java.awt.Color(0xE74C3C))
-        worstStatus == "allowed_warning" || worstPct >= 80 ->
-            JBColor(java.awt.Color(0xCA6F1E), java.awt.Color(0xE67E22))
-        worstPct >= 60 -> JBColor(java.awt.Color(0xB7950B), java.awt.Color(0xF1C40F))
-        else -> null // theme default
-    }
-
     /**
      * Live in-progress block for the current Claude Code turn: header with elapsed
      * time and last-event age, streaming narration, tool feed, notices, Stop.
@@ -126,24 +91,16 @@ class ChatPanel(
         }
     )
 
-    /**
-     * Pinned planner panel: collapsible checklist of the active session's TaskPlan.
-     * Mounted above the conversation in [setupUI]; fed snapshots via [render].
-     * Manual checkbox toggles persist through ChatTreeService.setPlanStepStatus and
-     * reach the model with the next request (currentPlan field); doc links open
-     * PLAN.md / STEP_N.md via [openPlanDoc].
-     */
     private val planPanel = PlanPanel(
         onToggleStep = { stepId, newStatus ->
             chatTreeService.setPlanStepStatus(chatTreeService.getActiveSession().id, stepId, newStatus)
             render(buildState())
         },
-        onOpenDoc = { docPath -> openPlanDoc(docPath) }
+        onOpenDoc = { environmentActions.openPlanDoc(it) }
     )
 
     private val service: MaxVibesService by lazy { MaxVibesService.getInstance(project) }
     private val chatTreeService get() = service.chatTreeService
-    private val promptService: PromptService by lazy { PromptService.getInstance(project) }
     private val settings: MaxVibesSettings by lazy { MaxVibesSettings.getInstance() }
 
     /** Null when the project has no base path (default/light projects). */
@@ -196,6 +153,45 @@ class ChatPanel(
             onStatus = { statusLabel.text = it }
         )
     }
+    private val environmentActions: ChatPanelEnvironmentActions by lazy {
+        ChatPanelEnvironmentActions(
+            project = project,
+            toolWindow = toolWindow,
+            parent = this,
+            chatTreeService = chatTreeService,
+            promptService = service.promptService,
+            claudeCodeLogPath = { sessionId -> service.claudeCodeSessionLog.logFilePath(sessionId) },
+            attachTrace = { messageController.attachTrace(it) },
+            onContextChanged = { render(buildState()) },
+            onStatus = { statusLabel.text = it },
+            onToolWindowState = { maximized, floating ->
+                headerPanel.updateToolWindowIcons(maximized, floating)
+            }
+        )
+    }
+    private val sessionUiCoordinator: ChatSessionUiCoordinator by lazy {
+        ChatSessionUiCoordinator(
+            activeSession = { chatTreeService.getActiveSession() },
+            sessionPath = { chatTreeService.getSessionPath(it) },
+            parentSession = { chatTreeService.getParent(it) },
+            childCount = { chatTreeService.getChildCount(it) },
+            setActiveSession = { chatTreeService.setActiveSession(it) },
+            transcriptRenderer = SessionTranscriptRenderer(),
+            transcriptView = ConversationPanelTranscriptView(conversationPanel),
+            dialogs = SwingChatSessionDialogs(this),
+            currentMode = { modeManager.currentMode },
+            contextFilesCount = { chatTreeService.getGlobalContextFiles().size },
+            clearNavigation = { elementNavRegistry.clear() },
+            registerModifications = ::registerElementPaths,
+            clearAttachments = { messageController.clearAttachmentsAfterSend() },
+            createSession = { messageController.createNewSession() },
+            branchSession = { parentId, title -> messageController.branchSession(parentId, title) },
+            deleteSession = { messageController.deleteCurrentSession(it) },
+            renameSession = { sessionId, title -> messageController.renameSession(sessionId, title) },
+            onStatus = { statusLabel.text = it },
+            onRefresh = { render(buildState()) }
+        )
+    }
 
     /**
      * Routes AgentStreamHub events for the ACTIVE session into [liveTurnPanel].
@@ -221,36 +217,22 @@ class ChatPanel(
     }
 
     private val elementNavRegistry = mutableMapOf<String, String>()
-    private val sessionTranscriptRenderer = SessionTranscriptRenderer()
-    private val sessionTranscriptView = ConversationPanelTranscriptView(conversationPanel)
-
     private val headerPanel = ChatHeaderPanel(
         onModeSelected = ::handleModeSelection,
         onIndicatorAction = ::handleIndicatorAction,
-        onOpenCcLog = ::openClaudeCodeLog,
+        onOpenCcLog = { environmentActions.openClaudeCodeLog() },
         onShowSessions = onShowSessions,
-        onNewChat = ::createNewChat,
-        onBranch = ::createBranch,
-        onDeleteChat = ::deleteCurrentChat,
-        onOpenPrompts = {
-            promptService.openOrCreatePrompts()
-            statusLabel.text = "Prompts opened"
-        },
-        onContextFiles = ::showContextFilesDialog,
-        onClaudeInstructions = { anchor ->
-            ChatDialogsHelper.showClaudeInstructionsPopup(project, anchor) {
-                statusLabel.text = it
-            }
-        },
-        onToggleMaximize = ::toggleMaximize,
-        onToggleWindowed = ::toggleWindowed,
-        onSelectSession = { sessionId ->
-            chatTreeService.setActiveSession(sessionId)
-            loadCurrentSession()
-        },
+        onNewChat = { sessionUiCoordinator.createNewChat() },
+        onBranch = { sessionUiCoordinator.createBranch() },
+        onDeleteChat = { sessionUiCoordinator.deleteCurrentChat() },
+        onOpenPrompts = { environmentActions.openPrompts() },
+        onContextFiles = { environmentActions.showContextFilesDialog() },
+        onClaudeInstructions = { anchor -> environmentActions.showClaudeInstructions(anchor) },
+        onToggleMaximize = { environmentActions.toggleMaximize() },
+        onToggleWindowed = { environmentActions.toggleWindowed() },
+        onSelectSession = { sessionUiCoordinator.selectSession(it) },
         onRenameSession = { sessionId, title ->
-            messageController.renameSession(sessionId, title)
-            statusLabel.text = "Renamed to '$title'"
+            sessionUiCoordinator.renameSession(sessionId, title)
         }
     )
     private val inputPanel = ChatInputPanel(
@@ -259,7 +241,7 @@ class ChatPanel(
         onSend = ::sendMessage,
         onApprove = { messageController.approve() },
         onCopyJson = { messageController.redoClipboardJson() },
-        onAttachTrace = ::attachTraceFromClipboard,
+        onAttachTrace = { environmentActions.attachTraceFromClipboard() },
         onClearTrace = { messageController.clearTrace() },
         onAttachErrors = { messageController.fetchIdeErrors() },
         onClearErrors = { messageController.clearErrors() },
@@ -270,17 +252,6 @@ class ChatPanel(
 
     private val messageController: ChatMessageController by lazy {
         ChatMessageController(project, service, this)
-    }
-
-    init {
-        setupUI(); setupListeners()
-        loadCurrentSession()
-        modeManager.syncFromSettings()
-        syncComboBoxToMode()
-        service.agentStreamHub.addListener(streamListener)
-        // Tie our teardown to the tool window's lifetime \u2014 when the tool window
-        // closes, IntelliJ disposes its children, which triggers our dispose().
-        Disposer.register(toolWindow.disposable, this)
     }
 
     override fun appendToChat(text: String) {
@@ -380,45 +351,7 @@ class ChatPanel(
     }
 
     override fun setCommitMessage(message: String) {
-        try {
-            VcsConfiguration.getInstance(project).saveCommitMessage(message)
-
-            fun tryInject(component: java.awt.Component): Boolean {
-                val dataContext = DataManager.getInstance().getDataContext(component)
-                val control = dataContext.getData(VcsDataKeys.COMMIT_MESSAGE_CONTROL) ?: return false
-                return try {
-                    control.javaClass.getMethod("setCommitMessage", String::class.java).invoke(control, message)
-                    true
-                } catch (_: Exception) {
-                    false
-                }
-            }
-
-            val frame = com.intellij.openapi.wm.WindowManager.getInstance().getFrame(project)
-            if (frame != null && tryInject(frame)) {
-                MaxVibesLogger.info("ChatPanel", "setCommitMessage: injected via frame", mapOf("len" to message.length))
-                return
-            }
-
-            val commitTw = ToolWindowManager.getInstance(project).getToolWindow("Commit")
-            val contentComponent = commitTw?.takeIf { it.isVisible }?.contentManager?.selectedContent?.component
-            if (contentComponent != null && tryInject(contentComponent)) {
-                MaxVibesLogger.info(
-                    "ChatPanel",
-                    "setCommitMessage: injected via Commit tool window",
-                    mapOf("len" to message.length)
-                )
-                return
-            }
-
-            MaxVibesLogger.info(
-                "ChatPanel",
-                "setCommitMessage: saved to VCS history (commit UI not open)",
-                mapOf("len" to message.length)
-            )
-        } catch (e: Exception) {
-            MaxVibesLogger.error("ChatPanel", "setCommitMessage failed", e)
-        }
+        environmentActions.setCommitMessage(message)
     }
 
     override fun setPlanOnlyMode(enabled: Boolean) {
@@ -430,25 +363,7 @@ class ChatPanel(
     }
 
     fun loadCurrentSession() {
-        val session = chatTreeService.getActiveSession()
-        val sessionPath = chatTreeService.getSessionPath(session.id)
-        elementNavRegistry.clear()
-
-        updateBreadcrumb()
-        updateModeIndicator()
-        updateContextIndicator()
-        updateTokenDisplay()
-        updateToolWindowIcons()
-
-        val transcriptRendered = sessionTranscriptRenderer.render(
-            session = session,
-            sessionPath = sessionPath,
-            view = sessionTranscriptView,
-            onModificationsRestored = ::registerElementPaths
-        )
-        if (!transcriptRendered) showWelcome()
-
-        render(buildState())
+        sessionUiCoordinator.loadCurrentSession()
     }
 
     private fun setupUI() {
@@ -491,25 +406,6 @@ class ChatPanel(
         }, BorderLayout.SOUTH)
     }
 
-    private fun attachTraceFromClipboard() {
-        val content = try {
-            java.awt.Toolkit.getDefaultToolkit().systemClipboard
-                .getData(java.awt.datatransfer.DataFlavor.stringFlavor) as? String
-        } catch (e: Exception) {
-            statusLabel.text = "Clipboard error: ${e.message}"
-            return
-        }
-
-        if (content.isNullOrBlank()) {
-            statusLabel.text = "Clipboard is empty"
-            return
-        }
-
-        messageController.attachTrace(content)
-    }
-
-    private fun setupListeners() = Unit
-
     private fun sendMessage() {
         val submission = inputPanel.takeSubmission() ?: return
         val state = buildState()
@@ -533,105 +429,6 @@ class ChatPanel(
         inputPanel.applyModeDecision(decision)
     }
 
-    private fun updateIndicators() {
-        inputPanel.updateIndicators(
-            messageController.attachedTrace,
-            messageController.attachedErrors
-        )
-    }
-
-    private fun deleteCurrentChat() {
-        val session = chatTreeService.getActiveSession()
-        val childCount = chatTreeService.getChildCount(session.id)
-        val msg =
-            if (childCount > 0) "Delete \"${session.title}\"?\n$childCount branch(es) will be re-attached to parent."
-            else "Delete \"${session.title}\"?"
-        val confirm = JOptionPane.showConfirmDialog(
-            this,
-            msg,
-            "Delete Chat",
-            JOptionPane.YES_NO_OPTION,
-            JOptionPane.WARNING_MESSAGE
-        )
-        if (confirm != JOptionPane.YES_OPTION) return
-        messageController.clearAttachmentsAfterSend()
-        messageController.deleteCurrentSession(session.id)
-        statusLabel.text = "Chat deleted"
-    }
-
-    private fun updateContextIndicator() {
-        headerPanel.updateContextCount(chatTreeService.getGlobalContextFiles().size)
-    }
-
-    private fun showWelcome() {
-        val mode = when (modeManager.currentMode) {
-            InteractionMode.API -> "API \u2014 direct LLM calls"
-            InteractionMode.CLIPBOARD -> "Clipboard \u2014 paste JSON into Claude/ChatGPT"
-            InteractionMode.CHEAP_API -> "Cheap API \u2014 budget model"
-            InteractionMode.CLAUDE_CODE -> "Claude Code \u2014 local CLI process"
-        }
-        val session = chatTreeService.getActiveSession()
-        val ctxCount = chatTreeService.getGlobalContextFiles().size
-        val lines = mutableListOf("MaxVibes  \u2022  $mode")
-        if (session.depth > 0) lines += "\u2514 Branch from: \"${chatTreeService.getParent(session.id)?.title ?: "?\""}"
-        if (ctxCount > 0) lines += "\uD83D\uDCCE $ctxCount global context file(s) active"
-        lines += "Type your task \u2022 Ctrl+Enter to send"
-        lines.forEach { conversationPanel.addSystemBubble(it) }
-    }
-
-    private fun updateToolWindowIcons() {
-        val manager = ToolWindowManager.getInstance(project)
-        val floating = toolWindow.type == ToolWindowType.FLOATING ||
-                toolWindow.type == ToolWindowType.WINDOWED
-        headerPanel.updateToolWindowIcons(
-            maximized = manager.isMaximized(toolWindow),
-            floating = floating
-        )
-    }
-
-    /**
-     * Opens the per-dialog Claude Code transcript for the active session in the editor.
-     *
-     * The transcript is appended by an external writer ([com.maxvibes.plugin.claudecode.ClaudeCodeSessionLogWriter]),
-     * so the VFS copy may be stale \u2014 `refresh(false, false)` before opening picks up
-     * everything written so far. While a send is in flight, re-clicking the link
-     * refreshes the editor content again.
-     */
-    private fun openClaudeCodeLog() {
-        val sessionId = chatTreeService.getActiveSession().id
-        val path = service.claudeCodeSessionLog.logFilePath(sessionId)
-        if (path == null) {
-            statusLabel.text = "No Claude Code log for this dialog yet \u2014 send a message first"
-            return
-        }
-        val vFile = com.intellij.openapi.vfs.LocalFileSystem.getInstance()
-            .refreshAndFindFileByIoFile(java.io.File(path))
-        if (vFile == null) {
-            statusLabel.text = "Log file not found: $path"
-            return
-        }
-        vFile.refresh(false, false)
-        com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project).openFile(vFile, true)
-        statusLabel.text = "Opened Claude Code log"
-    }
-
-    /**
-     * Opens a plan document (PLAN.md / STEP_N.md) referenced from the planner panel.
-     * Paths are project-relative. A missing file reports to the status bar instead of
-     * throwing — the LLM may reference docs it has not created yet.
-     */
-    private fun openPlanDoc(docPath: String) {
-        val basePath = project.basePath ?: return
-        val vFile = com.intellij.openapi.vfs.LocalFileSystem.getInstance()
-            .refreshAndFindFileByIoFile(java.io.File(basePath, docPath))
-        if (vFile == null) {
-            statusLabel.text = "Doc not found: $docPath"
-            return
-        }
-        com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project).openFile(vFile, true)
-        statusLabel.text = "Opened $docPath"
-    }
-
     fun render(state: ChatPanelState) {
         headerPanel.updateBreadcrumb(state.sessionPath)
         updateModeUI(state)
@@ -642,7 +439,7 @@ class ChatPanel(
         inputPanel.updateIndicators(state.attachedTrace, state.attachedErrors)
         tokenLabel.text = state.currentSession?.tokenUsage?.formatDisplay().orEmpty()
         headerPanel.updateContextCount(state.contextFilesCount)
-        updateToolWindowIcons()
+        environmentActions.refreshToolWindowState()
         specificPromptPanel.render(
             availablePrompts = state.availablePrompts,
             selectedPromptName = state.selectedSpecificPromptName
@@ -694,7 +491,7 @@ class ChatPanel(
     }
 
     override fun onSessionChanged(session: ChatSession?) {
-        loadCurrentSession()
+        sessionUiCoordinator.loadCurrentSession()
     }
 
     override fun onSessionRenamed(session: ChatSession) {
@@ -702,7 +499,7 @@ class ChatPanel(
     }
 
     override fun onShowWelcome() {
-        showWelcome()
+        sessionUiCoordinator.showWelcome()
     }
 
     /**
@@ -785,46 +582,5 @@ class ChatPanel(
         }
         render(buildState())
     }
-    private fun createNewChat() {
-        messageController.clearAttachmentsAfterSend()
-        messageController.createNewSession()
-        statusLabel.text = "New dialog"
-    }
-    private fun createBranch() {
-        val active = chatTreeService.getActiveSession()
-        val title = JOptionPane.showInputDialog(
-            this,
-            "Name for the new branch:",
-            "New Branch",
-            JOptionPane.PLAIN_MESSAGE,
-            null,
-            null,
-            "Branch: ${active.title.take(25)}"
-        ) as? String ?: return
 
-        messageController.clearAttachmentsAfterSend()
-        messageController.branchSession(active.id, title)
-        statusLabel.text = "Branch: $title"
-    }
-    private fun showContextFilesDialog() {
-        val result = ChatDialogsHelper.showContextFilesDialog(this, project, chatTreeService)
-            ?: return
-        chatTreeService.setGlobalContextFiles(result)
-        updateContextIndicator()
-        statusLabel.text = "Context files: ${result.size}"
-    }
-    private fun toggleMaximize() {
-        val manager = ToolWindowManager.getInstance(project)
-        manager.setMaximized(toolWindow, !manager.isMaximized(toolWindow))
-        updateToolWindowIcons()
-    }
-    private fun toggleWindowed() {
-        val floating = toolWindow.type == ToolWindowType.FLOATING ||
-                toolWindow.type == ToolWindowType.WINDOWED
-        toolWindow.setType(
-            if (floating) ToolWindowType.DOCKED else ToolWindowType.FLOATING,
-            null
-        )
-        updateToolWindowIcons()
-    }
 }
