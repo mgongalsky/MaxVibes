@@ -66,9 +66,9 @@ class ChatPanel(
     private val limitsBar = LimitsBarPanel()
     private val specificPromptPanel = SpecificPromptPanel(
         onSelectPrompt = { name -> messageController.selectSpecificPrompt(name) },
-        onCreatePrompt = ::createNewPromptFile,
-        onEditPrompt = ::editCurrentPromptFile,
-        onDeletePrompt = ::deleteCurrentPromptFile,
+        onCreatePrompt = { specificPromptFileActions.create() },
+        onEditPrompt = { specificPromptFileActions.edit() },
+        onDeletePrompt = { specificPromptFileActions.delete() },
         onManagePrompts = {
             SkillManagerDialog(project, service.specificPromptRepository).show()
             render(buildState())
@@ -150,6 +150,34 @@ class ChatPanel(
     private val specificPromptFiles: SpecificPromptFiles? by lazy {
         project.basePath?.let { SpecificPromptFiles(it) }
     }
+    private val specificPromptFileActions: SpecificPromptFileActions by lazy {
+        SpecificPromptFileActions(
+            files = specificPromptFiles,
+            selectedPromptName = { buildState().selectedSpecificPromptName },
+            persistedPromptName = { chatTreeService.getActiveSession().selectedSpecificPromptName },
+            openFile = { file ->
+                com.intellij.openapi.vfs.LocalFileSystem.getInstance()
+                    .refreshAndFindFileByIoFile(file)
+                    ?.let {
+                        com.intellij.openapi.fileEditor.FileEditorManager
+                            .getInstance(project)
+                            .openFile(it, true)
+                    }
+            },
+            confirmDelete = { name ->
+                JOptionPane.showConfirmDialog(
+                    this,
+                    "Delete prompt '$name'? The file will be permanently removed from disk.",
+                    "Delete Prompt",
+                    JOptionPane.YES_NO_OPTION,
+                    JOptionPane.WARNING_MESSAGE
+                ) == JOptionPane.YES_OPTION
+            },
+            onClearSelection = { messageController.selectSpecificPrompt(null) },
+            onStatus = { statusLabel.text = it },
+            onRefresh = { render(buildState()) }
+        )
+    }
     private val claudeCliSettingsPanel: ClaudeCliSettingsPanel by lazy {
         ClaudeCliSettingsPanel(
             settings = object : ClaudeCliSettings {
@@ -193,10 +221,8 @@ class ChatPanel(
     }
 
     private val elementNavRegistry = mutableMapOf<String, String>()
-
-    // ConversationRenderer handles all message filtering and formatting for display.
-    // Extracted here to keep ChatPanel free from knowledge of the internal message storage format.
-    private val conversationRenderer = ConversationRenderer()
+    private val sessionTranscriptRenderer = SessionTranscriptRenderer()
+    private val sessionTranscriptView = ConversationPanelTranscriptView(conversationPanel)
 
     private val headerPanel = ChatHeaderPanel(
         onModeSelected = ::handleModeSelection,
@@ -405,53 +431,23 @@ class ChatPanel(
 
     fun loadCurrentSession() {
         val session = chatTreeService.getActiveSession()
-        conversationPanel.clearMessages()
+        val sessionPath = chatTreeService.getSessionPath(session.id)
         elementNavRegistry.clear()
-        updateBreadcrumb(); updateModeIndicator(); updateContextIndicator(); updateTokenDisplay(); updateToolWindowIcons()
 
-        if (session.messages.isEmpty()) {
-            showWelcome()
-        } else {
-            val path = chatTreeService.getSessionPath(session.id)
-            if (path.size > 1) {
-                val chain = path.dropLast(1).joinToString(" \u203A ") { it.title.take(25) }
-                conversationPanel.addSystemBubble("\u2514 Branch of: $chain")
-            }
+        updateBreadcrumb()
+        updateModeIndicator()
+        updateContextIndicator()
+        updateTokenDisplay()
+        updateToolWindowIcons()
 
-            conversationRenderer.render(session.messages).forEach { msg ->
-                when (msg.role) {
-                    MessageRole.USER -> conversationPanel.addUserBubble(msg.content)
+        val transcriptRendered = sessionTranscriptRenderer.render(
+            session = session,
+            sessionPath = sessionPath,
+            view = sessionTranscriptView,
+            onModificationsRestored = ::registerElementPaths
+        )
+        if (!transcriptRendered) showWelcome()
 
-                    MessageRole.ASSISTANT -> {
-                        val persistedMods = msg.appliedModificationPaths.mapNotNull { pathStr ->
-                            runCatching {
-                                val elemPath = com.maxvibes.domain.model.code.ElementPath(pathStr)
-                                ModificationResult.Success(
-                                    modification = com.maxvibes.domain.model.modification.Modification.ReplaceElement(
-                                        targetPath = elemPath,
-                                        newContent = ""
-                                    ),
-                                    affectedPath = elemPath,
-                                    resultContent = null
-                                )
-                            }.getOrNull()
-                        }
-                        conversationPanel.addAssistantBubble(
-                            text = msg.content,
-                            tokenInfo = msg.tokenInfo,
-                            modifications = persistedMods,
-                            metaFiles = msg.attachedFiles,
-                            reasoning = msg.reasoning,
-                            requestedViews = msg.requestedViews,
-                            appliedModifications = msg.appliedModifications
-                        )
-                        registerElementPaths(persistedMods)
-                    }
-
-                    MessageRole.SYSTEM -> conversationPanel.addSystemBubble(msg.content)
-                }
-            }
-        }
         render(buildState())
     }
 
@@ -660,52 +656,6 @@ class ChatPanel(
             add(claudeCliSettingsPanel)
             add(specificPromptPanel)
         }
-    }
-
-    private fun createNewPromptFile() {
-        val files = specificPromptFiles ?: return
-        files.create().fold(
-            onSuccess = { file ->
-                com.intellij.openapi.vfs.LocalFileSystem.getInstance()
-                    .refreshAndFindFileByIoFile(file)
-                    ?.let { com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project).openFile(it, true) }
-                statusLabel.text = "Created: ${file.name} \u2014 add your prompt text and save"
-                render(buildState())
-            },
-            onFailure = { statusLabel.text = "Failed to create prompt file: ${it.message}" }
-        )
-    }
-
-    private fun editCurrentPromptFile() {
-        val name = buildState().selectedSpecificPromptName ?: return
-        val file = specificPromptFiles?.resolve(name) ?: return
-        com.intellij.openapi.vfs.LocalFileSystem.getInstance()
-            .refreshAndFindFileByIoFile(file)
-            ?.let { com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project).openFile(it, true) }
-    }
-
-    private fun deleteCurrentPromptFile() {
-        val name = buildState().selectedSpecificPromptName ?: return
-        val confirm = JOptionPane.showConfirmDialog(
-            this,
-            "Delete prompt \"$name\"?\nThe file will be permanently removed from disk.",
-            "Delete Prompt",
-            JOptionPane.YES_NO_OPTION,
-            JOptionPane.WARNING_MESSAGE
-        )
-        if (confirm != JOptionPane.YES_OPTION) return
-
-        if (specificPromptFiles?.delete(name) != true) {
-            statusLabel.text = "Failed to delete prompt file"
-            return
-        }
-
-        if (chatTreeService.getActiveSession().selectedSpecificPromptName == name) {
-            messageController.selectSpecificPrompt(null)
-        }
-
-        statusLabel.text = "Deleted prompt: $name"
-        render(buildState())
     }
 
     private fun buildState(): ChatPanelState {
