@@ -64,6 +64,16 @@ class ChatPanel(
      * rate_limit_event. All rendering, colors and thresholds live in [LimitsBarPanel].
      */
     private val limitsBar = LimitsBarPanel()
+    private val specificPromptPanel = SpecificPromptPanel(
+        onSelectPrompt = { name -> messageController.selectSpecificPrompt(name) },
+        onCreatePrompt = ::createNewPromptFile,
+        onEditPrompt = ::editCurrentPromptFile,
+        onDeletePrompt = ::deleteCurrentPromptFile,
+        onManagePrompts = {
+            SkillManagerDialog(project, service.specificPromptRepository).show()
+            render(buildState())
+        }
+    )
 
     /**
      * OAuth usage poller (Set 9): every 60s reads the Claude CLI's own token from
@@ -100,52 +110,6 @@ class ChatPanel(
             JBColor(java.awt.Color(0xCA6F1E), java.awt.Color(0xE67E22))
         worstPct >= 60 -> JBColor(java.awt.Color(0xB7950B), java.awt.Color(0xF1C40F))
         else -> null // theme default
-    }
-
-    /** Button to create a new specific prompt file. */
-    private val newPromptButton = JButton("+").apply {
-        font = font.deriveFont(Font.BOLD, 12f)
-        toolTipText = "Create new task prompt file in .maxvibes/prompts/specific/"
-        preferredSize = Dimension(26, 22)
-        isFocusPainted = false
-    }
-
-    /** Button to edit the currently selected specific prompt file. */
-    private val editPromptButton = JButton("\u270F").apply {
-        font = font.deriveFont(12f)
-        toolTipText = "Open current prompt file for editing"
-        preferredSize = Dimension(26, 22)
-        isFocusPainted = false
-        isEnabled = false
-    }
-
-    /** Button to delete the currently selected specific prompt file. */
-    private val deletePromptButton = JButton("\u2212").apply {
-        font = font.deriveFont(Font.BOLD, 13f)
-        toolTipText = "Delete current prompt file"
-        preferredSize = Dimension(26, 22)
-        isFocusPainted = false
-        isEnabled = false
-    }
-
-    /** Button to open the skill/specific prompt manager. */
-    private val manageSpecificButton = JButton("\u2699").apply {
-        font = font.deriveFont(12f)
-        toolTipText = "Manage skills & prompts"
-        preferredSize = Dimension(26, 22)
-        isFocusPainted = false
-        addActionListener {
-            SkillManagerDialog(project, service.specificPromptRepository).show()
-            render(buildState())
-        }
-    }
-
-    /** Single dropdown button showing the active specific prompt. */
-    private val promptSelectButton = JButton("Just Code \u25BE").apply {
-        font = font.deriveFont(11f)
-        toolTipText = "Select task prompt"
-        preferredSize = Dimension(200, 22)
-        isFocusPainted = false
     }
 
     /**
@@ -429,13 +393,9 @@ class ChatPanel(
     override fun setInputEnabled(enabled: Boolean) {
         inputPanel.setControlsEnabled(enabled)
         headerPanel.setControlsEnabled(enabled)
+        specificPromptPanel.setControlsEnabled(enabled)
         claudeModelCombo.isEnabled = enabled
         claudeEffortCombo.isEnabled = enabled
-        promptSelectButton.isEnabled = enabled
-        newPromptButton.isEnabled = enabled
-        editPromptButton.isEnabled = enabled
-        deletePromptButton.isEnabled = enabled
-        manageSpecificButton.isEnabled = enabled
     }
 
     override fun setStatus(text: String) {
@@ -621,12 +581,7 @@ class ChatPanel(
         messageController.attachTrace(content)
     }
 
-    private fun setupListeners() {
-        promptSelectButton.addActionListener { showPromptSelectionPopup() }
-        newPromptButton.addActionListener { createNewPromptFile() }
-        editPromptButton.addActionListener { editCurrentPromptFile() }
-        deletePromptButton.addActionListener { deleteCurrentPromptFile() }
-    }
+    private fun setupListeners() = Unit
 
     private fun sendMessage() {
         val submission = inputPanel.takeSubmission() ?: return
@@ -760,18 +715,10 @@ class ChatPanel(
         tokenLabel.text = state.currentSession?.tokenUsage?.formatDisplay().orEmpty()
         headerPanel.updateContextCount(state.contextFilesCount)
         updateToolWindowIcons()
-
-        val displayName = state.selectedSpecificPromptName ?: "Just Code"
-        promptSelectButton.text = "$displayName ▾"
-        promptSelectButton.toolTipText = if (state.selectedSpecificPromptName != null) {
-            "Active prompt: $displayName — click to change"
-        } else {
-            "No specific prompt active — click to select"
-        }
-
-        val hasPrompt = state.selectedSpecificPromptName != null
-        editPromptButton.isEnabled = hasPrompt
-        deletePromptButton.isEnabled = hasPrompt
+        specificPromptPanel.render(
+            availablePrompts = state.availablePrompts,
+            selectedPromptName = state.selectedSpecificPromptName
+        )
         inputPanel.applyApproveState(state.claudeCodeApproveVisible)
     }
 
@@ -780,33 +727,8 @@ class ChatPanel(
             background = JBColor.background()
             add(claudeModelCombo)
             add(claudeEffortCombo)
-            add(newPromptButton)
-            add(editPromptButton)
-            add(deletePromptButton)
-            add(manageSpecificButton)
-            add(promptSelectButton)
+            add(specificPromptPanel)
         }
-    }
-
-    private fun showPromptSelectionPopup() {
-        val state = buildState()
-        val items = mutableListOf("Just Code") + state.availablePrompts
-        val popup = JPopupMenu()
-        items.forEach { name ->
-            val item = JMenuItem(name).apply {
-                val isSelected = if (name == "Just Code")
-                    state.selectedSpecificPromptName == null
-                else
-                    name == state.selectedSpecificPromptName
-                font = if (isSelected) font.deriveFont(Font.BOLD) else font
-                addActionListener {
-                    val selectedName = if (name == "Just Code") null else name
-                    messageController.selectSpecificPrompt(selectedName)
-                }
-            }
-            popup.add(item)
-        }
-        popup.show(promptSelectButton, 0, promptSelectButton.height)
     }
 
     private fun createNewPromptFile() {
