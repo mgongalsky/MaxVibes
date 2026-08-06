@@ -113,71 +113,6 @@ class ChatPanel(
     }
 
     /**
-     * Claude Code CLI model selector. Writes to settings.claudeCodeModel; the
-     * adapter's SpawnConfig snapshot check picks the change up on the next send
-     * and respawns the process. Visible only in CLAUDE_CODE mode.
-     */
-    private val claudeModelCombo = ComboBox<String>().apply {
-        isEditable = true
-        addItem("Auto")
-        addItem("haiku")
-        addItem("sonnet")
-        addItem("opus")
-        preferredSize = Dimension(120, 22)
-        font = font.deriveFont(11f)
-        toolTipText =
-            "Claude Code CLI model. Auto = CLI default; type a full model name for anything else. Applies on next send."
-        isVisible = false
-
-        addActionListener { commitModelComboToSettings() }
-        editor.editorComponent.addFocusListener(object : java.awt.event.FocusAdapter() {
-            override fun focusLost(e: java.awt.event.FocusEvent?) = commitModelComboToSettings()
-        })
-        addPopupMenuListener(object : javax.swing.event.PopupMenuListener {
-            override fun popupMenuWillBecomeVisible(e: javax.swing.event.PopupMenuEvent?) = syncModelComboFromSettings()
-            override fun popupMenuWillBecomeInvisible(e: javax.swing.event.PopupMenuEvent?) {}
-            override fun popupMenuCanceled(e: javax.swing.event.PopupMenuEvent?) {}
-        })
-    }
-
-    private fun syncModelComboFromSettings() {
-        cliSettingsBinder.syncModel { claudeModelCombo.selectedItem = it }
-    }
-
-    private fun commitModelComboToSettings() {
-        cliSettingsBinder.commitModel(claudeModelCombo.editor.item ?: claudeModelCombo.selectedItem)
-    }
-
-    /**
-     * Claude Code reasoning-effort selector (CLAUDE_CODE_EFFORT_LEVEL). Same
-     * lifecycle as the model selector: writes to settings, adapter respawns on
-     * next send. Unsupported levels clamp down; pre-4.6 models ignore effort.
-     */
-    private val claudeEffortCombo = ComboBox(arrayOf("Auto", "low", "medium", "high", "xhigh", "max")).apply {
-        preferredSize = Dimension(90, 22)
-        font = font.deriveFont(11f)
-        toolTipText = "Reasoning effort (Claude Code). Auto = model default. Applies on next send."
-        isVisible = false
-
-        addActionListener { commitEffortComboToSettings() }
-        addPopupMenuListener(object : javax.swing.event.PopupMenuListener {
-            override fun popupMenuWillBecomeVisible(e: javax.swing.event.PopupMenuEvent?) =
-                syncEffortComboFromSettings()
-
-            override fun popupMenuWillBecomeInvisible(e: javax.swing.event.PopupMenuEvent?) {}
-            override fun popupMenuCanceled(e: javax.swing.event.PopupMenuEvent?) {}
-        })
-    }
-
-    private fun syncEffortComboFromSettings() {
-        cliSettingsBinder.syncEffort { claudeEffortCombo.selectedItem = it }
-    }
-
-    private fun commitEffortComboToSettings() {
-        cliSettingsBinder.commitEffort(claudeEffortCombo.selectedItem)
-    }
-
-    /**
      * Live in-progress block for the current Claude Code turn: header with elapsed
      * time and last-event age, streaming narration, tool feed, notices, Stop.
      * Event-driven via [streamListener]; hides itself on Completed and flushes the
@@ -215,14 +150,15 @@ class ChatPanel(
     private val specificPromptFiles: SpecificPromptFiles? by lazy {
         project.basePath?.let { SpecificPromptFiles(it) }
     }
-    private val cliSettingsBinder: ClaudeCliSettingsBinder by lazy {
-        ClaudeCliSettingsBinder(
+    private val claudeCliSettingsPanel: ClaudeCliSettingsPanel by lazy {
+        ClaudeCliSettingsPanel(
             settings = object : ClaudeCliSettings {
                 override var model: String
                     get() = settings.claudeCodeModel
                     set(value) {
                         settings.claudeCodeModel = value
                     }
+
                 override var effortLevel: String
                     get() = settings.claudeCodeEffortLevel
                     set(value) {
@@ -231,10 +167,6 @@ class ChatPanel(
             },
             onStatus = { statusLabel.text = it }
         )
-    }
-    private val initialModelComboSync: Unit = run {
-        syncModelComboFromSettings()
-        syncEffortComboFromSettings()
     }
 
     /**
@@ -394,8 +326,7 @@ class ChatPanel(
         inputPanel.setControlsEnabled(enabled)
         headerPanel.setControlsEnabled(enabled)
         specificPromptPanel.setControlsEnabled(enabled)
-        claudeModelCombo.isEnabled = enabled
-        claudeEffortCombo.isEnabled = enabled
+        claudeCliSettingsPanel.setControlsEnabled(enabled)
     }
 
     override fun setStatus(text: String) {
@@ -709,8 +640,9 @@ class ChatPanel(
         headerPanel.updateBreadcrumb(state.sessionPath)
         updateModeUI(state)
         planPanel.update(state.plan)
-        claudeModelCombo.isVisible = state.mode == InteractionMode.CLAUDE_CODE
-        claudeEffortCombo.isVisible = state.mode == InteractionMode.CLAUDE_CODE
+        claudeCliSettingsPanel.setClaudeCodeVisible(
+            state.mode == InteractionMode.CLAUDE_CODE
+        )
         inputPanel.updateIndicators(state.attachedTrace, state.attachedErrors)
         tokenLabel.text = state.currentSession?.tokenUsage?.formatDisplay().orEmpty()
         headerPanel.updateContextCount(state.contextFilesCount)
@@ -725,8 +657,7 @@ class ChatPanel(
     private fun buildPromptPanel(): JPanel {
         return JPanel(FlowLayout(FlowLayout.RIGHT, 4, 2)).apply {
             background = JBColor.background()
-            add(claudeModelCombo)
-            add(claudeEffortCombo)
+            add(claudeCliSettingsPanel)
             add(specificPromptPanel)
         }
     }
