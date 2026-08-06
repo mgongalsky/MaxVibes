@@ -7,11 +7,10 @@ import com.intellij.openapi.wm.ToolWindow
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
 import com.intellij.util.ui.JBUI
-import com.maxvibes.application.service.AgentStreamHub
-import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 import com.maxvibes.domain.model.interaction.InteractionMode
+import com.maxvibes.plugin.claudecode.ClaudeOAuthUsageAdapter
+import com.maxvibes.plugin.claudecode.SubscriptionUsagePoller
 import com.maxvibes.plugin.diagram.DiagramViewerDialog
-import com.maxvibes.plugin.service.MaxVibesLogger
 import com.maxvibes.plugin.service.MaxVibesService
 import com.maxvibes.plugin.settings.MaxVibesSettings
 import java.awt.BorderLayout
@@ -39,6 +38,7 @@ class ChatPanel(
     }
 
     private val limitsBar = LimitsBarPanel()
+
     private val specificPromptPanel = SpecificPromptPanel(
         onSelectPrompt = { name -> messageController.selectSpecificPrompt(name) },
         onCreatePrompt = { specificPromptFileActions.create() },
@@ -49,11 +49,6 @@ class ChatPanel(
             render(buildState())
         }
     )
-
-    private val usagePoller = com.maxvibes.plugin.claudecode.SubscriptionUsagePoller(
-        port = com.maxvibes.plugin.claudecode.ClaudeOAuthUsageAdapter(),
-        onUsage = { usage -> limitsBar.onUsage(usage) }
-    ).also { it.start() }
 
     private val liveTurnPanel = LiveTurnPanel(
         onStop = { service.abortClaudeCode() },
@@ -156,7 +151,7 @@ class ChatPanel(
             transcriptRenderer = SessionTranscriptRenderer(),
             transcriptView = ConversationPanelTranscriptView(conversationPanel),
             dialogs = SwingChatSessionDialogs(this),
-            currentMode = { modeManager.currentMode },
+            currentMode = { modeCoordinator.currentMode },
             contextFilesCount = { chatTreeService.getGlobalContextFiles().size },
             clearNavigation = { elementNavRegistry.clear() },
             registerModifications = {
@@ -176,17 +171,8 @@ class ChatPanel(
         )
     }
 
-    private val streamListener = AgentStreamHub.Listener { sessionId, event ->
-        if (sessionId == chatTreeService.getActiveSession().id) {
-            liveTurnPanel.onEvent(event)
-        }
-        if (event is com.maxvibes.application.port.output.AgentStreamEvent.RateLimitUpdate) {
-            updateLimitsChip(event)
-        }
-    }
-
-    private val modeManager: InteractionModeManager by lazy {
-        InteractionModeManager(
+    private val modeCoordinator: ChatModeCoordinator by lazy {
+        val modeState = InteractionModeManager(
             settings = settings,
             onModeChanged = { mode ->
                 settings.interactionMode = mode.name
@@ -197,13 +183,45 @@ class ChatPanel(
                 render(buildState())
             }
         )
+        ChatModeCoordinator(
+            modeState = modeState,
+            dialogs = SwingChatModeDialogs(this),
+            clipboardStatus = { chatTreeService.getActiveSession().clipboardStatus },
+            activeSessionId = { chatTreeService.getActiveSession().id },
+            resetClipboard = { service.clipboardService.reset(it) },
+            forceActivate = { service.clipboardService.forceActivate(it) },
+            forceAwaitPaste = { service.clipboardService.forceAwaitPaste(it) },
+            onSelectMode = { headerPanel.selectMode(it) },
+            onApplyDecision = { decision ->
+                headerPanel.applyModeDecision(decision)
+                inputPanel.applyModeDecision(decision)
+            },
+            onStatus = { statusLabel.text = it },
+            onSystemMessage = { conversationPanel.addSystemBubble(it) },
+            onRefresh = { render(buildState()) }
+        )
+    }
+
+    private val runtimeCoordinator: ChatRuntimeCoordinator by lazy {
+        val usagePoller = SubscriptionUsagePoller(
+            port = ClaudeOAuthUsageAdapter(),
+            onUsage = { limitsBar.onUsage(it) }
+        )
+        ChatRuntimeCoordinator(
+            streamHub = service.agentStreamHub,
+            activeSessionId = { chatTreeService.getActiveSession().id },
+            onActiveEvent = { liveTurnPanel.onEvent(it) },
+            onRateLimit = { limitsBar.onRateLimit(it) },
+            startUsagePolling = usagePoller::start,
+            stopUsagePolling = usagePoller::stop
+        )
     }
 
     private val elementNavRegistry = mutableMapOf<String, String>()
 
     private val headerPanel = ChatHeaderPanel(
-        onModeSelected = ::handleModeSelection,
-        onIndicatorAction = ::handleIndicatorAction,
+        onModeSelected = { modeCoordinator.handleSelection(it) },
+        onIndicatorAction = { modeCoordinator.handleIndicatorAction(it) },
         onOpenCcLog = { environmentActions.openClaudeCodeLog() },
         onShowSessions = onShowSessions,
         onNewChat = { sessionUiCoordinator.createNewChat() },
@@ -239,7 +257,7 @@ class ChatPanel(
         ChatPanelStateFactory(
             activeSession = { chatTreeService.getActiveSession() },
             sessionPath = { chatTreeService.getSessionPath(it) },
-            currentMode = { modeManager.currentMode },
+            currentMode = { modeCoordinator.currentMode },
             attachedTrace = { messageController.attachedTrace },
             attachedErrors = { messageController.attachedErrors },
             contextFilesCount = { chatTreeService.getGlobalContextFiles().size },
@@ -283,25 +301,9 @@ class ChatPanel(
     init {
         setupUI()
         sessionUiCoordinator.loadCurrentSession()
-        modeManager.syncFromSettings()
-        syncComboBoxToMode()
-        service.agentStreamHub.addListener(streamListener)
+        modeCoordinator.initialize()
+        runtimeCoordinator.start()
         Disposer.register(toolWindow.disposable, this)
-    }
-
-    private fun updateLimitsChip(
-        event: com.maxvibes.application.port.output.AgentStreamEvent.RateLimitUpdate
-    ) {
-        MaxVibesLogger.info(
-            "ChatPanel",
-            "limits event",
-            mapOf(
-                "kind" to event.kind,
-                "pct" to (event.utilizationPct ?: -1),
-                "status" to event.status
-            )
-        )
-        limitsBar.onRateLimit(event)
     }
 
     private fun setupUI() {
@@ -351,25 +353,15 @@ class ChatPanel(
             submission.text,
             submission.planOnly,
             submission.dryRun,
-            modeManager.currentMode,
+            modeCoordinator.currentMode,
             submission.addHistory,
             state.selectedSpecificPromptName
         )
     }
 
-    private fun syncComboBoxToMode() {
-        headerPanel.selectMode(modeManager.currentMode)
-    }
-
-    private fun updateModeUI(state: ChatPanelState) {
-        val decision = ModeUiPolicy.decide(state.mode, state.clipboardStatus)
-        headerPanel.applyModeDecision(decision)
-        inputPanel.applyModeDecision(decision)
-    }
-
     fun render(state: ChatPanelState) {
         headerPanel.updateBreadcrumb(state.sessionPath)
-        updateModeUI(state)
+        modeCoordinator.applyUi(state.mode, state.clipboardStatus)
         planPanel.update(state.plan)
         claudeCliSettingsPanel.setClaudeCodeVisible(
             state.mode == InteractionMode.CLAUDE_CODE
@@ -414,58 +406,7 @@ class ChatPanel(
     }
 
     override fun dispose() {
-        runCatching { service.agentStreamHub.removeListener(streamListener) }
+        runCatching { runtimeCoordinator.dispose() }
         runCatching { liveTurnPanel.dispose() }
-        runCatching { usagePoller.stop() }
-    }
-
-    private fun handleModeSelection(newMode: InteractionMode) {
-        if (newMode == modeManager.currentMode) return
-
-        if (
-            modeManager.currentMode == InteractionMode.CLIPBOARD &&
-            buildState().clipboardStatus == ClipboardSessionStatus.AWAITING_PASTE
-        ) {
-            val confirmed = JOptionPane.showConfirmDialog(
-                this,
-                "Active clipboard session will be reset. Continue?",
-                "Switch Mode",
-                JOptionPane.YES_NO_OPTION,
-                JOptionPane.WARNING_MESSAGE
-            )
-            if (confirmed != JOptionPane.YES_OPTION) {
-                syncComboBoxToMode()
-                return
-            }
-            service.clipboardService.reset(chatTreeService.getActiveSession().id)
-        }
-
-        MaxVibesLogger.info(
-            "ChatPanel",
-            "switchMode",
-            mapOf(
-                "from" to modeManager.currentMode.name,
-                "to" to newMode.name
-            )
-        )
-        modeManager.switchMode(newMode)
-        val label = MaxVibesSettings.INTERACTION_MODES
-            .find { it.first == newMode.name }
-            ?.second
-            ?: newMode.name
-        statusLabel.text = "Mode: $label"
-        conversationPanel.addSystemBubble("⚙️ Switched to $label")
-    }
-
-    private fun handleIndicatorAction(action: IndicatorAction) {
-        val sessionId = chatTreeService.getActiveSession().id
-        when (action) {
-            IndicatorAction.FORCE_ACTIVATE ->
-                service.clipboardService.forceActivate(sessionId)
-
-            IndicatorAction.FORCE_AWAIT_PASTE ->
-                service.clipboardService.forceAwaitPaste(sessionId)
-        }
-        render(buildState())
     }
 }

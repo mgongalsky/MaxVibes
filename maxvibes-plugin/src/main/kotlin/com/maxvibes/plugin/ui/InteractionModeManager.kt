@@ -3,58 +3,42 @@ package com.maxvibes.plugin.ui
 import com.maxvibes.domain.model.interaction.InteractionMode
 import com.maxvibes.plugin.settings.MaxVibesSettings
 
+interface InteractionModeState {
+    val currentMode: InteractionMode
+    fun switchMode(newMode: InteractionMode)
+    fun syncFromSettings()
+}
+
 /**
- * Управляет состоянием режима взаимодействия (API / Clipboard / CheapAPI / ClaudeCode).
- * Инкапсулирует логику переключения и синхронизации с настройками.
- *
- * @param settings настройки плагина для чтения сохранённого режима
- * @param onModeChanged колбек, вызываемый при каждом изменении режима
+ * Manages the persisted interaction mode state.
  */
 class InteractionModeManager(
     private val settings: MaxVibesSettings,
     private val onModeChanged: (InteractionMode) -> Unit
-) {
+) : InteractionModeState {
 
-    var currentMode: InteractionMode = InteractionMode.API
+    override var currentMode: InteractionMode = InteractionMode.API
         private set
 
-    /**
-     * Переключает режим на указанный. Вызывает onModeChanged если режим изменился.
-     */
-    fun switchMode(newMode: InteractionMode) {
+    override fun switchMode(newMode: InteractionMode) {
         if (currentMode == newMode) return
         currentMode = newMode
         onModeChanged(newMode)
     }
 
-    /**
-     * Читает сохранённый режим из настроек и применяет его.
-     * Вызывается при инициализации панели.
-     */
-    fun syncFromSettings() {
+    override fun syncFromSettings() {
         val savedMode = readModeFromSettings()
         currentMode = savedMode
         onModeChanged(savedMode)
     }
 
-    /**
-     * Возвращает true если текущий режим — Clipboard.
-     */
     fun isClipboardMode(): Boolean = currentMode == InteractionMode.CLIPBOARD
 
-    /**
-     * Возвращает true если текущий режим — API (обычный или дешёвый).
-     */
-    fun isApiMode(): Boolean = currentMode == InteractionMode.API || currentMode == InteractionMode.CHEAP_API
+    fun isApiMode(): Boolean =
+        currentMode == InteractionMode.API || currentMode == InteractionMode.CHEAP_API
 
-    /**
-     * Возвращает true если текущий режим — CheapAPI.
-     */
     fun isCheapApiMode(): Boolean = currentMode == InteractionMode.CHEAP_API
 
-    /**
-     * Returns true if the current mode is Claude Code (local CLI process).
-     */
     fun isClaudeCodeMode(): Boolean = currentMode == InteractionMode.CLAUDE_CODE
 
     private fun readModeFromSettings(): InteractionMode {
