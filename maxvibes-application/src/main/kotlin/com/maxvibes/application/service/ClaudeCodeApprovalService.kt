@@ -11,13 +11,6 @@ import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 import com.maxvibes.domain.model.interaction.InteractionModification
 import com.maxvibes.domain.model.modification.ModificationResult
 
-/**
- * Owns Claude Code approval semantics.
- *
- * This includes approving requested views, applying held modifications, releasing held
- * commands, and rejecting a pending modification set when the user types a new message.
- * Transport continuation is returned as a ClaudeCodeTurnCommand and executed by the facade.
- */
 internal class ClaudeCodeApprovalService(
     private val chatSessionRepository: ChatSessionRepository,
     private val sessionManager: ClipboardSessionManager,
@@ -29,7 +22,6 @@ internal class ClaudeCodeApprovalService(
     private val sessionLog: ClaudeCodeSessionLogPort? = null,
     private val logger: LoggerPort? = null
 ) {
-
     fun rejectPending(command: UserInputCommand): UserInputCommand? {
         val pending = pendingStore.take(command.sessionId) ?: return null
         val rejectedCount = pending.modifications.size
@@ -125,7 +117,7 @@ internal class ClaudeCodeApprovalService(
         sessionManager.transition(sessionId, ClipboardEvent.Approved)
 
         return ClaudeCodeApprovalOutcome.Continue(
-            ClaudeCodeTurnCommand(
+            CodingAgentTurnCommand(
                 sessionId = sessionId,
                 freshFiles = freshFiles,
                 attachedContext = attachedContext,
@@ -217,7 +209,7 @@ internal class ClaudeCodeApprovalService(
 
 internal sealed interface ClaudeCodeApprovalOutcome {
     data class Continue(
-        val command: ClaudeCodeTurnCommand
+        val command: CodingAgentTurnCommand
     ) : ClaudeCodeApprovalOutcome
 
     data class Immediate(

@@ -2,34 +2,50 @@
 
 ## Status
 
-PENDING until Step 3 is verified green.
+IN PROGRESS.
 
 ## Goal
 
-Move provider -independent orchestration out of Claude - specific application names without changing behavior .
+Move provider-independent orchestration out of Claude-specific application names without changing behavior.
 
-## Target names
+## Cut 1 — transport-facing flow models
 
-        Likely shared types:
+Introduce physical generic models:
 
--`CodingAgentInteractionService`
--`CodingAgentTurnExecutor`
--`CodingAgentTurnCommand`
--`ReceivedCodingAgentTurn`
--`CodingAgentStepResult`
--`CodingAgentApprovalService`
--`CodingAgentWorkspaceService`
--`CodingAgentViewResolver`
+- `CodingAgentTurnCommand`
+- `ReceivedCodingAgentTurn`
 
-Provider - specific types remain explicit :
+Keep temporary source-compatible aliases:
 
--`ClaudeCodeProcessAdapter`
--`StreamJsonEventParser`
--future `CodexAppServerAdapter`
-        -future `CodexAppServerEventParser`
+- `ClaudeCodeTurnCommand` -> `CodingAgentTurnCommand`
+- `ReceivedClaudeTurn` -> `ReceivedCodingAgentTurn`
 
-## Migration rule
+Migrate the existing facade collaborators to consume the generic models:
 
-        Do not perform a single repository -wide rename . Migrate one collaboration boundary at a time and keep compatibility aliases where they materially reduce blast radius .
+- `ClaudeCodeTurnExecutor`
+- `ClaudeCodeInteractionService`
+- `ClaudeCodeApprovalService`
+- `ClaudeCodeResponseHandler`
 
-Before renaming existing widely -used stream or UI types, inspect usages and migrate them as a separate characterized cut .
+Also expose `CodingAgentCliPort` and `CodingAgentCliSendResult` directly at the application transport boundary.
+
+This cut intentionally does not rename the owning services yet. Runtime behavior, Claude session persistence, request construction, logging and response semantics remain unchanged.
+
+## Why sealed results are deferred
+
+The following types own nested classifiers and cannot be safely migrated through a simple Kotlin typealias:
+
+- `ClaudeCodeStepResult`
+- `ClaudeCodeResponseProcessor.Context`
+- `ClaudeCodeResponseProcessor.Intent`
+- `ClaudeCodeTurnExecutionResult`
+- `ClaudeCodeApprovalOutcome`
+- `ClaudeCodeWorkspaceResult`
+
+They require a characterized migration of their call sites, similar to the earlier `ClaudeCodeError` issue.
+
+## Next cuts
+
+1. Migrate one sealed application result hierarchy with all usages in one compile-safe batch.
+2. Rename provider-independent service classes to `CodingAgent*`.
+3. Leave provider-specific transport, persistence and prompt semantics for Step 5 and Step 6.

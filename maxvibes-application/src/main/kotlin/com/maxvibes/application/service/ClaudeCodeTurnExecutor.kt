@@ -2,31 +2,23 @@ package com.maxvibes.application.service
 
 import com.maxvibes.application.port.output.ChatSessionRepository
 import com.maxvibes.application.port.output.ClaudeCodeError
-import com.maxvibes.application.port.output.ClaudeCodePort
-import com.maxvibes.application.port.output.ClaudeCodeSendResult
 import com.maxvibes.application.port.output.ClaudeCodeSessionLogPort
 import com.maxvibes.application.port.output.LoggerPort
 import com.maxvibes.application.port.output.NotificationPort
 import com.maxvibes.shared.result.Result
+import com.maxvibes.application.port.output.CodingAgentCliPort
+import com.maxvibes.application.port.output.CodingAgentCliSendResult
 
-/**
- * Executes one transport-level Claude Code turn.
- *
- * Owns request assembly, process startup/resume fallback, token accounting,
- * transport execution and persisted Claude session metadata. Response semantics
- * are intentionally delegated to ClaudeCodeResponseHandler.
- */
 internal class ClaudeCodeTurnExecutor(
-    private val claudeCodePort: ClaudeCodePort,
+    private val claudeCodePort: CodingAgentCliPort,
     private val chatSessionRepository: ChatSessionRepository,
     private val notificationPort: NotificationPort,
     private val sessionLog: ClaudeCodeSessionLogPort? = null,
     private val streamHub: AgentStreamHub? = null,
     private val logger: LoggerPort? = null
 ) {
-
     suspend fun execute(
-        command: ClaudeCodeTurnCommand,
+        command: CodingAgentTurnCommand,
         state: ClipboardSessionState
     ): ClaudeCodeTurnExecutionResult {
         val sessionId = command.sessionId
@@ -120,12 +112,12 @@ internal class ClaudeCodeTurnExecutor(
 
         return when (sendResult) {
             is Result.Success -> {
-                val payload: ClaudeCodeSendResult = sendResult.value
+                val payload: CodingAgentCliSendResult = sendResult.value
                 persistObservedSession(payload, session)
                 val stats = payload.stats
 
                 ClaudeCodeTurnExecutionResult.Success(
-                    ReceivedClaudeTurn(
+                    ReceivedCodingAgentTurn(
                         response = payload.response,
                         inputTokens = stats?.inputTokens?.takeIf { it > 0 }
                             ?: estimatedInputTokens,
@@ -169,7 +161,7 @@ internal class ClaudeCodeTurnExecutor(
     }
 
     private fun persistObservedSession(
-        payload: ClaudeCodeSendResult,
+        payload: CodingAgentCliSendResult,
         session: com.maxvibes.domain.model.chat.ChatSession
     ) {
         val observedId = payload.observedSessionId

@@ -9,13 +9,6 @@ import com.maxvibes.domain.model.chat.MessageRole
 import com.maxvibes.domain.model.code.CodeViewRequest
 import com.maxvibes.domain.model.code.RequestedViewInfo
 
-/**
- * Executes the ordered side-effect intents produced by ClaudeCodeResponseProcessor.
- *
- * Transport concerns stay outside this class. The handler only interprets a normalized
- * ReceivedClaudeTurn, mutates dialog state, persists protocol metadata, and drives the
- * clipboard state machine.
- */
 internal class ClaudeCodeResponseHandler(
     private val chatSessionRepository: ChatSessionRepository,
     private val sessionManager: ClipboardSessionManager,
@@ -23,10 +16,9 @@ internal class ClaudeCodeResponseHandler(
     private val sessionLog: ClaudeCodeSessionLogPort? = null,
     private val logger: LoggerPort? = null
 ) {
-
     fun handle(
         sessionId: String,
-        turn: ReceivedClaudeTurn,
+        turn: ReceivedCodingAgentTurn,
         state: ClipboardSessionState
     ): ClaudeCodeStepResult {
         val response = turn.response

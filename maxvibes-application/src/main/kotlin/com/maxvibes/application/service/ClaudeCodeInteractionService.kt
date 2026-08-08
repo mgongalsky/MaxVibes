@@ -2,7 +2,6 @@ package com.maxvibes.application.service
 
 import com.maxvibes.application.port.output.ChatMessageDTO
 import com.maxvibes.application.port.output.ChatSessionRepository
-import com.maxvibes.application.port.output.ClaudeCodePort
 import com.maxvibes.application.port.output.ClaudeCodeSessionLogPort
 import com.maxvibes.application.port.output.CodeRepository
 import com.maxvibes.application.port.output.LoggerPort
@@ -11,17 +10,11 @@ import com.maxvibes.application.port.output.ProjectContextPort
 import com.maxvibes.application.port.output.PromptPort
 import com.maxvibes.domain.model.interaction.AttachedImage
 import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
+import com.maxvibes.application.port.output.CodingAgentCliPort
 
-/**
- * Thin application facade for Claude Code dialog mode.
- *
- * It routes public operations and coordinates specialized collaborators:
- * workspace lifecycle, requested views, transport turns, response handling,
- * and user approval. The facade is single-threaded by contract.
- */
 class ClaudeCodeInteractionService(
     contextProvider: ProjectContextPort,
-    claudeCodePort: ClaudeCodePort,
+    claudeCodePort: CodingAgentCliPort,
     codeRepository: CodeRepository,
     notificationPort: NotificationPort,
     promptPort: PromptPort,
@@ -140,7 +133,7 @@ class ClaudeCodeInteractionService(
         }
 
         return send(
-            ClaudeCodeTurnCommand(
+            CodingAgentTurnCommand(
                 sessionId = sessionId,
                 commandResults = resultsForLlm
             )
@@ -234,7 +227,7 @@ class ClaudeCodeInteractionService(
         }
 
         return send(
-            ClaudeCodeTurnCommand(
+            CodingAgentTurnCommand(
                 sessionId = command.sessionId,
                 freshFiles = freshFiles,
                 firstMessage = isFirst,
@@ -247,7 +240,7 @@ class ClaudeCodeInteractionService(
     }
 
     private suspend fun send(
-        command: ClaudeCodeTurnCommand
+        command: CodingAgentTurnCommand
     ): ClaudeCodeStepResult {
         val state = workspaceService.state
             ?: return error("No active workspace")
