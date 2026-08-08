@@ -35,7 +35,7 @@ class ClaudeCodeInteractionService(
         logger = logger
     )
 
-    private val responseHandler = ClaudeCodeResponseHandler(
+    private val responseHandler = CodingAgentResponseHandler(
         chatSessionRepository = chatSessionRepository,
         sessionManager = sessionManager,
         pendingStore = pendingStore,

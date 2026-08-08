@@ -34,7 +34,7 @@ class ClaudeCodeResponseHandlerTest {
     private lateinit var sessionManager: ClipboardSessionManager
     private lateinit var pendingStore: PendingModificationsStore
     private lateinit var sessionLog: RecordingClaudeCodeSessionLogPort
-    private lateinit var handler: ClaudeCodeResponseHandler
+    private lateinit var handler: CodingAgentResponseHandler
 
     @BeforeEach
     fun setUp() {
@@ -49,7 +49,7 @@ class ClaudeCodeResponseHandlerTest {
         sessionManager = ClipboardSessionManager(repository)
         pendingStore = PendingModificationsStore()
         sessionLog = RecordingClaudeCodeSessionLogPort()
-        handler = ClaudeCodeResponseHandler(
+        handler = CodingAgentResponseHandler(
             chatSessionRepository = repository,
             sessionManager = sessionManager,
             pendingStore = pendingStore,
