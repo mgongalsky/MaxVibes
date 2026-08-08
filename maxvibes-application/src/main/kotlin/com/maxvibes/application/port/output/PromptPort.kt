@@ -1,5 +1,7 @@
 package com.maxvibes.application.port.output
 
+import com.maxvibes.domain.model.chat.CodingAgentProvider
+
 /**
  * Набор промптов для LLM
  */
@@ -46,4 +48,8 @@ interface PromptPort {
      * packaged classpath resource `/prompts/claude-code-system.md`.
      */
     fun claudeCodeSystem(): String
+    fun codingAgentSystem(provider: CodingAgentProvider): String = when (provider) {
+        CodingAgentProvider.CLAUDE_CODE -> claudeCodeSystem()
+        CodingAgentProvider.CODEX -> error("System prompt is not configured for coding agent provider: ${provider.name}")
+    }
 }

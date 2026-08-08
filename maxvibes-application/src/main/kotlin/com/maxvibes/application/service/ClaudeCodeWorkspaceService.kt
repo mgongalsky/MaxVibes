@@ -10,6 +10,7 @@ import com.maxvibes.application.port.output.PromptPort
 import com.maxvibes.application.port.output.PromptTemplates
 import com.maxvibes.domain.model.chat.MessageRole
 import com.maxvibes.shared.result.Result
+import com.maxvibes.domain.model.chat.CodingAgentProvider
 
 /**
  * Owns the in-memory Claude Code workspace and its reconstruction from persisted chat data.
@@ -47,10 +48,10 @@ internal class ClaudeCodeWorkspaceService(
         }
 
         val projectContext = (projectContextResult as Result.Success).value
-        val claudeSystem = promptPort.claudeCodeSystem()
+        val codingAgentSystem = promptPort.codingAgentSystem(CodingAgentProvider.CLAUDE_CODE)
         val prompts = PromptTemplates(
-            chatSystem = claudeSystem,
-            planningSystem = claudeSystem
+            chatSystem = codingAgentSystem,
+            planningSystem = codingAgentSystem
         )
         val newState = ClipboardSessionState(
             currentMessage = command.userInput,
@@ -116,10 +117,10 @@ internal class ClaudeCodeWorkspaceService(
         }
 
         val projectContext = (projectContextResult as Result.Success).value
-        val claudeSystem = promptPort.claudeCodeSystem()
+        val codingAgentSystem = promptPort.codingAgentSystem(CodingAgentProvider.CLAUDE_CODE)
         val prompts = PromptTemplates(
-            chatSystem = claudeSystem,
-            planningSystem = claudeSystem
+            chatSystem = codingAgentSystem,
+            planningSystem = codingAgentSystem
         )
         val restoredState = ClipboardSessionState(
             currentMessage = lastUserMessage,
