@@ -9,13 +9,13 @@ import com.maxvibes.domain.model.code.CodeViewRequest
 import com.maxvibes.shared.result.Result
 
 /**
- * Resolves Claude Code requested views from their three backing sources.
+ * Resolves coding-agent requested views from their three backing sources.
  *
  * FULL views are read from the live project through ProjectContextPort,
  * partial PSI views through CodeRepository, and SKILL views through
  * SpecificPromptService. Full-file reads also update workspace bookkeeping.
  */
-internal class ClaudeCodeViewResolver(
+internal class CodingAgentViewResolver(
     private val contextProvider: ProjectContextPort,
     private val codeRepository: CodeRepository,
     private val specificPromptService: SpecificPromptService?,
@@ -102,3 +102,5 @@ internal class ClaudeCodeViewResolver(
         logger?.info("ClaudeCode", message)
     }
 }
+
+internal typealias ClaudeCodeViewResolver = CodingAgentViewResolver

@@ -27,7 +27,7 @@ class ClaudeCodeInteractionService(
 ) {
     private val pendingStore = PendingModificationsStore()
 
-    private val viewResolver = ClaudeCodeViewResolver(
+    private val viewResolver = CodingAgentViewResolver(
         contextProvider = contextProvider,
         codeRepository = codeRepository,
         specificPromptService = specificPromptService,

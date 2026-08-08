@@ -41,7 +41,7 @@ class ClaudeCodeApprovalServiceTest {
     private lateinit var sessionManager: ClipboardSessionManager
     private lateinit var pendingStore: PendingModificationsStore
     private lateinit var workspaceService: ClaudeCodeWorkspaceService
-    private lateinit var viewResolver: ClaudeCodeViewResolver
+    private lateinit var viewResolver: CodingAgentViewResolver
     private lateinit var codeRepository: CodeRepository
     private lateinit var notifications: RecordingNotificationPort
     private lateinit var sessionLog: RecordingClaudeCodeSessionLogPort
