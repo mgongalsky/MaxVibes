@@ -1,4 +1,4 @@
 package com.maxvibes.application.port.output
 
-/** Compatibility alias; new provider-independent code should use [AgentCliSendResult]. */
-typealias ClaudeCodeSendResult = AgentCliSendResult
+// Compatibility alias while the existing Claude Code flow migrates to the generic contract.
+typealias ClaudeCodeSendResult = CodingAgentCliSendResult

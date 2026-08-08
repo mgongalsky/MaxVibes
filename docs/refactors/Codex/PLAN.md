@@ -1,86 +1,86 @@
-# Codex / Generic Coding -Agent Integration
+# Codex / Generic Coding-Agent Integration
 
 ## Goal
 
-Add OpenAI Codex alongside Claude Code without creating a second copy of the existing interaction stack .
+Add OpenAI Codex alongside Claude Code without creating a second copy of the existing interaction stack.
 
-The target architecture has one provider -independent coding -agent application flow and separate provider adapters.
+The target architecture has one provider-independent coding-agent application flow and separate provider adapters.
 
 ## Terminology
 
--* * Coding agent * * — generic product category . Claude Code and Codex are coding agents .
--* * Agent provider * * — selected implementation / vendor, for example Claude Code or Codex.
--* * Agent CLI * * — local transport boundary used by MaxVibes to communicate with a coding agent runtime .
--* * Agent adapter * * — provider -specific implementation of the common transport contract.Preferred generic names:
+- Coding agent — generic product category. Claude Code and Codex are coding agents.
+- Coding-agent provider — selected implementation, for example Claude Code or Codex.
+- Coding-agent CLI — local transport boundary used by MaxVibes to communicate with a coding-agent runtime.
+- Provider adapter — provider-specific implementation of the common transport contract.
 
--`AgentCliPort`
--`AgentCliError`
--`AgentCliSendResult`
--`AgentProvider`
--`AgentInteractionService`
--`AgentStreamEvent`
--`AgentStreamHub`
--`AgentSessionRef` or equivalent provider -aware session metadata
+Preferred generic names:
 
-Provider - specific names stay explicit :
+- `CodingAgentCliPort`
+- `CodingAgentCliError`
+- `CodingAgentCliSendResult`
+- `CodingAgentProvider`
+- `CodingAgentInteractionService`
+- `CodingAgentStreamEvent`
+- `CodingAgentStreamHub`
+- `CodingAgentSessionRef` or equivalent provider-aware session metadata
 
--`ClaudeCodeProcessAdapter`
--`StreamJsonEventParser`
--`CodexAppServerAdapter`
--`CodexAppServerEventParser`
+Provider-specific names stay explicit:
 
-Do not use `LLM` for this abstraction . Claude Code and Codex expose session lifecycle, streaming, interruption and agent runtime behavior beyond a plain model call .
+- `ClaudeCodeProcessAdapter`
+- `StreamJsonEventParser`
+- `CodexAppServerAdapter`
+- `CodexAppServerEventParser`
+
+Do not use `LLM` for this abstraction. Claude Code and Codex expose session lifecycle, streaming, interruption and coding-agent runtime behavior beyond a plain model call.
 
 ## Architectural rule
 
-        Generic above the transport seam, provider - specific below it.
+Generic above the transport seam, provider-specific below it.
 
 `text
 UI
--> AgentInteractionService
--> AgentCliPort
+-> CodingAgentInteractionService
+-> CodingAgentCliPort
 -> ClaudeCodeProcessAdapter
 -> CodexAppServerAdapter
 
-Both adapters emit:
--> AgentStreamEvent
-
-Both adapters exchange MaxVibes protocol objects :
--> ClipboardRequest / InteractionResponse
+Both adapters emit normalized coding-agent stream events.
+Both adapters exchange the common MaxVibes request/response protocol.
 `
 
-The raw Claude stream -JSON parser and Codex JSON - RPC parser must remain separate.Their common output is the normalized `AgentStreamEvent` model, not a shared wire parser.
+The raw Claude stream-JSON parser and Codex JSON-RPC parser remain separate. Their common output is a normalized coding-agent event model, not a shared wire parser.
 
 ## Current state
 
-        The first compatibility seam is complete and tests are green :
+The first compatibility seam exists and the application tests were green before the terminology adjustment.
 
--added `AgentCliPort`
-        -added `AgentCliError`
-        -added `AgentCliSendResult`
-        -retained temporary `ClaudeCode*` typealiases
-
-        This is intentionally runtime - neutral.Existing Claude Code behavior is unchanged .
+Canonical names are now being changed from `AgentCli*` to `CodingAgentCli*`. Temporary aliases preserve compatibility while the rest of the application migrates incrementally.
 
 ## Refactor sequence
 
-        1.* * Current architecture * * — map the existing Claude Code vertical slice . DONE .
-2.* * Seams * * — identify generic vs provider -specific responsibilities . DONE .
-3.* * Agent CLI contract * * — introduce provider -independent transport types with Claude compatibility aliases.DONE.4.* * Agent interaction * * — migrate the application orchestration from Claude - specific names to a shared agent flow.5.* * Session and prompts * * — replace Claude -only persisted session metadata and prompt lookup with provider - aware structures while preserving XML backward compatibility .
-6.* * Codex adapter * * — implement Codex App Server transport and map JSON - RPC notifications to `AgentStreamEvent` .
-7.* * Wiring and UI * * — add provider selection without duplicating dispatcher / background / approve flows.8.* * Tests * * — run characterization tests for the generic flow plus provider contract tests and Codex smoke tests.9.* * Extension guide * * — document what a future coding -agent adapter must implement .
+1. Current architecture — map the existing Claude Code vertical slice. DONE.
+2. Seams — identify generic vs provider-specific responsibilities. DONE.
+3. CodingAgent CLI contract — introduce provider-independent transport types with compatibility aliases.
+4. CodingAgent interaction — migrate application orchestration from Claude-specific names to a shared coding-agent flow.
+5. Session and prompts — replace Claude-only persisted session metadata and prompt lookup with provider-aware structures while preserving XML backward compatibility.
+6. Codex adapter — implement Codex App Server transport and map JSON-RPC notifications to normalized coding-agent events.
+7. Wiring and UI — add provider selection without duplicating dispatcher, background execution or approval flows.
+8. Tests — preserve characterization coverage, add provider contract tests and run Codex smoke tests.
+9. Extension guide — document what a future coding-agent adapter must implement.
 
 ## Constraints
 
--Keep Claude Code green after every step.
--No second full `CodexInteractionService` / `CodexDispatcher` stack.
--No provider -specific fields such as `codexThreadId` added independently to `ChatSession`.
--Preserve old XML sessions during persistence migration.
--Do not generalize raw provider protocols prematurely.
--Prefer small compatibility seams over one large rename .
+- Keep Claude Code green after every step.
+- No second full `CodexInteractionService` or `CodexDispatcher` stack.
+- No provider-specific fields such as `codexThreadId` added independently to `ChatSession`.
+- Preserve old XML sessions during persistence migration.
+- Do not generalize raw provider protocols prematurely.
+- Prefer small compatibility seams over one large rename.
 
 ## Commit checkpoints
 
-        The completed generic transport seam is worth committing independently before migrating the application layer.Suggested commit :
+The generic transport seam should be committed independently after the `CodingAgent*` terminology is applied and tests are green.
 
-`refactor: introduce generic agent CLI contract`
+Suggested commit:
+
+`refactor: introduce generic coding agent CLI contract`
