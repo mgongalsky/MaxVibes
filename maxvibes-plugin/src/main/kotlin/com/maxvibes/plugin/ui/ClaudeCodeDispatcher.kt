@@ -3,7 +3,6 @@ package com.maxvibes.plugin.ui
 import com.maxvibes.adapter.llm.dto.toChatMessageDTO
 import com.maxvibes.application.service.ChatTreeService
 import com.maxvibes.application.service.ClaudeCodeInteractionService
-import com.maxvibes.application.service.ClaudeCodeStepResult
 import com.maxvibes.domain.model.chat.ChatSession
 import com.maxvibes.domain.model.chat.MessageRole
 import com.maxvibes.domain.model.command.CommandRequest
@@ -14,6 +13,7 @@ import com.maxvibes.domain.model.modification.AppliedModInfo
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.domain.model.modification.toCategory
 import com.maxvibes.plugin.service.MaxVibesLogger
+import com.maxvibes.application.service.ClaudeCodeStepResult
 
 /**
  * Claude Code mode dispatcher extracted from [ChatMessageController].

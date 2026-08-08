@@ -3,11 +3,11 @@ package com.maxvibes.plugin.ui
 import com.intellij.openapi.progress.ProcessCanceledException
 import com.maxvibes.application.port.input.ContextAwareRequest
 import com.maxvibes.application.port.input.ContextAwareResult
-import com.maxvibes.application.service.ClaudeCodeStepResult
 import com.maxvibes.application.service.ClipboardStepResult
 import com.maxvibes.domain.model.chat.ChatSession
 import com.maxvibes.domain.model.command.CommandExecution
 import com.maxvibes.plugin.service.MaxVibesLogger
+import com.maxvibes.application.service.ClaudeCodeStepResult
 
 /**
  * Owns interaction-specific background execution policy on top of

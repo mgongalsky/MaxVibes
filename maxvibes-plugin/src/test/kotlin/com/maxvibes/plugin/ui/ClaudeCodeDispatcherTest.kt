@@ -1,7 +1,6 @@
 package com.maxvibes.plugin.ui
 
 import com.maxvibes.application.service.ChatTreeService
-import com.maxvibes.application.service.ClaudeCodeStepResult
 import com.maxvibes.domain.model.chat.ChatSession
 import com.maxvibes.domain.model.chat.MessageRole
 import com.maxvibes.domain.model.command.CommandRequest
@@ -15,6 +14,7 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import com.maxvibes.application.service.ClaudeCodeStepResult
 
 /**
  * Claude Code dispatch/approve/result flow against a real [ChatTreeService]

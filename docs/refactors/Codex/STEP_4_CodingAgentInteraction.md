@@ -17,8 +17,6 @@ Introduced:
 - `CodingAgentTurnCommand`
 - `ReceivedCodingAgentTurn`
 
-Existing orchestration consumes `CodingAgentCliPort` and `CodingAgentCliSendResult` directly.
-
 ### Cut 2 — workspace result hierarchy
 
 Physically migrated:
@@ -37,33 +35,51 @@ Physically migrated:
 
 - `ClaudeCodeTurnExecutionResult` -> `CodingAgentTurnExecutionResult`
 
-## Cut 5 — response processor
+### Cut 5 — response processor
 
-Introduce the canonical provider-independent processor:
+Introduced canonical provider-independent:
 
 - `CodingAgentResponseProcessor`
 - `CodingAgentResponseProcessor.Context`
 - `CodingAgentResponseProcessor.Intent`
 - `CodingAgentResponseProcessor.Outcome`
 
-`ClaudeCodeResponseHandler` and processor characterization tests migrate to the generic object in the same cut.
+## Step-result migration constraint
 
-The old `ClaudeCodeResponseProcessor` remains only as a deprecated forwarding facade for simple `process` calls. It does not own compatibility copies of the nested classifiers.
+`ClaudeCodeStepResult` is used as a cross-module application-to-plugin contract and its nested variants have many consumers.
+
+A physical rename was attempted, but using Kotlin import aliases as a migration shortcut is not supported by the current MaxVibes `ADD_IMPORT` PSI operation. The operation treated the alias clause as part of the imported reference and produced invalid imports.
+
+The hierarchy therefore remains physically named `ClaudeCodeStepResult` for now.
+
+A provider-neutral type alias is available for signatures:
+
+`typealias CodingAgentStepResult = ClaudeCodeStepResult`
+
+Because Kotlin typealiases do not expose nested classifiers as a namespace, constructors and type checks must still use `ClaudeCodeStepResult.Completed`, `ClaudeCodeStepResult.Error`, and the other physical nested variants until all usages are migrated directly in one coordinated cut.
 
 ## Migration rule
 
-For top-level data classes without nested classifiers, compatibility aliases are acceptable.
+Do not use Kotlin typealias or import-alias shortcuts to migrate sealed hierarchies whose nested classifiers are referenced widely.
 
-For sealed classes, sealed interfaces, or objects whose nested classifiers are referenced directly, migrate the physical declaration and all nested-type usages together. Do not rely on a typealias.
+For such hierarchies:
 
-## Main remaining application result
+1. collect all usages;
+2. load all affected consumers;
+3. migrate references directly;
+4. physically rename the hierarchy in the same cut.
 
-The major remaining provider-specific result hierarchy is:
+## Remaining Step 4 work
 
-- `ClaudeCodeStepResult`
+The main provider-independent services still carry Claude-specific class names:
 
-It is used across the application service layer, tests and UI-facing integration, so it requires a dedicated characterized cut.
+- `ClaudeCodeInteractionService`
+- `ClaudeCodeResponseHandler`
+- `ClaudeCodeApprovalService`
+- `ClaudeCodeWorkspaceService`
+- `ClaudeCodeTurnExecutor`
+- `ClaudeCodeViewResolver`
 
-## Next cut
+The physical `ClaudeCodeStepResult` rename is also still pending.
 
-Physically migrate `ClaudeCodeStepResult` to `CodingAgentStepResult` with all direct compile-time usages in one batch. After that, rename the provider-independent service classes themselves to `CodingAgent*` while keeping Claude-specific transport and persistence details explicit until later steps.
+Provider-specific transport, logging, prompt and persistence details remain explicit for Steps 5–6.

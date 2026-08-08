@@ -38,7 +38,7 @@ object CodingAgentResponseProcessor {
     }
 
     data class Outcome(
-        val result: ClaudeCodeStepResult,
+        val result: CodingAgentStepResult,
         val intents: List<Intent>
     )
 
