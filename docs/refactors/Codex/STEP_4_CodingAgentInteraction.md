@@ -8,56 +8,62 @@ IN PROGRESS.
 
 Move provider-independent orchestration out of Claude-specific application names without changing behavior.
 
-## Cut 1 — transport-facing flow models
+## Completed cuts
 
-Introduced physical generic models:
+### Cut 1 — transport-facing flow models
+
+Introduced:
 
 - `CodingAgentTurnCommand`
 - `ReceivedCodingAgentTurn`
 
-Temporary source-compatible aliases remain for the previous Claude-specific model names.
+Existing orchestration consumes `CodingAgentCliPort` and `CodingAgentCliSendResult` directly.
 
-Existing orchestration consumes the generic transport-facing models and `CodingAgentCliPort` / `CodingAgentCliSendResult` directly.
+### Cut 2 — workspace result hierarchy
 
-## Cut 2 — workspace result hierarchy
-
-Physically renamed:
+Physically migrated:
 
 - `ClaudeCodeWorkspaceResult` -> `CodingAgentWorkspaceResult`
 
-All production and test usages were migrated together.
+### Cut 3 — approval outcome hierarchy
 
-## Cut 3 — approval outcome hierarchy
-
-Physically renamed:
+Physically migrated:
 
 - `ClaudeCodeApprovalOutcome` -> `CodingAgentApprovalOutcome`
 
-All production and test usages were migrated together.
+### Cut 4 — turn execution result hierarchy
 
-## Cut 4 — turn execution result hierarchy
-
-Physically rename:
+Physically migrated:
 
 - `ClaudeCodeTurnExecutionResult` -> `CodingAgentTurnExecutionResult`
 
-The executor, interaction facade and executor tests migrate in the same cut. No typealias is used because callers reference the nested `Success` and `Failure` classifiers directly.
+## Cut 5 — response processor
+
+Introduce the canonical provider-independent processor:
+
+- `CodingAgentResponseProcessor`
+- `CodingAgentResponseProcessor.Context`
+- `CodingAgentResponseProcessor.Intent`
+- `CodingAgentResponseProcessor.Outcome`
+
+`ClaudeCodeResponseHandler` and processor characterization tests migrate to the generic object in the same cut.
+
+The old `ClaudeCodeResponseProcessor` remains only as a deprecated forwarding facade for simple `process` calls. It does not own compatibility copies of the nested classifiers.
 
 ## Migration rule
 
 For top-level data classes without nested classifiers, compatibility aliases are acceptable.
 
-For sealed classes, sealed interfaces, or objects whose nested types are referenced by callers, migrate the physical declaration and all usages together. Do not rely on a typealias.
+For sealed classes, sealed interfaces, or objects whose nested classifiers are referenced directly, migrate the physical declaration and all nested-type usages together. Do not rely on a typealias.
 
-## Deferred hierarchy
+## Main remaining application result
 
-The main remaining application-level Claude-specific result/parser pair is:
+The major remaining provider-specific result hierarchy is:
 
 - `ClaudeCodeStepResult`
-- `ClaudeCodeResponseProcessor`
 
-These have a much larger blast radius and should be migrated as separate characterized cuts.
+It is used across the application service layer, tests and UI-facing integration, so it requires a dedicated characterized cut.
 
 ## Next cut
 
-After `CodingAgentTurnExecutionResult` is verified green, migrate `ClaudeCodeStepResult` physically with all direct production/test/UI usages, then migrate `ClaudeCodeResponseProcessor` and finally rename the provider-independent service classes themselves.
+Physically migrate `ClaudeCodeStepResult` to `CodingAgentStepResult` with all direct compile-time usages in one batch. After that, rename the provider-independent service classes themselves to `CodingAgent*` while keeping Claude-specific transport and persistence details explicit until later steps.

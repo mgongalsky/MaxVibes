@@ -1,7 +1,7 @@
 package com.maxvibes.application.service
 
-import com.maxvibes.application.service.ClaudeCodeResponseProcessor.Context
-import com.maxvibes.application.service.ClaudeCodeResponseProcessor.Intent
+import com.maxvibes.application.service.CodingAgentResponseProcessor.Context
+import com.maxvibes.application.service.CodingAgentResponseProcessor.Intent
 import com.maxvibes.domain.model.code.CodeGranularity
 import com.maxvibes.domain.model.code.CodeViewRequest
 import com.maxvibes.domain.model.interaction.InteractionCommand
@@ -18,25 +18,42 @@ import kotlin.test.assertTrue
 
 class ClaudeCodeResponseProcessorTest {
 
-    private val mod = InteractionModification(type = "CREATE_FILE", path = "file:src/New.kt", content = "class New")
+    private val mod = InteractionModification(
+        type = "CREATE_FILE",
+        path = "file:src/New.kt",
+        content = "class New"
+    )
     private val view = CodeViewRequest("src/Foo.kt", CodeGranularity.FULL)
-    private val command = InteractionCommand(command = "gradlew test", reason = "verify")
+    private val command = InteractionCommand(
+        command = "gradlew test",
+        reason = "verify"
+    )
 
     @Test
     fun `text-only response completes with history and inactive transition`() {
-        val outcome = ClaudeCodeResponseProcessor.process(InteractionResponse(message = "hi"), Context())
+        val outcome = CodingAgentResponseProcessor.process(
+            InteractionResponse(message = "hi"),
+            Context()
+        )
 
         assertIs<ClaudeCodeStepResult.Completed>(outcome.result)
         assertEquals(
-            listOf(Intent.AppendAssistantHistory("hi"), Intent.Transition(hasRequestedViews = false)),
+            listOf(
+                Intent.AppendAssistantHistory("hi"),
+                Intent.Transition(hasRequestedViews = false)
+            ),
             outcome.intents
         )
     }
 
     @Test
     fun `views response waits for approve and persists views`() {
-        val outcome = ClaudeCodeResponseProcessor.process(
-            InteractionResponse(message = "need", codeViewRequests = listOf(view), commands = listOf(command)),
+        val outcome = CodingAgentResponseProcessor.process(
+            InteractionResponse(
+                message = "need",
+                codeViewRequests = listOf(view),
+                commands = listOf(command)
+            ),
             Context()
         )
 
@@ -55,7 +72,7 @@ class ClaudeCodeResponseProcessorTest {
 
     @Test
     fun `modifications are held with commands and commit message`() {
-        val outcome = ClaudeCodeResponseProcessor.process(
+        val outcome = CodingAgentResponseProcessor.process(
             InteractionResponse(
                 message = "prop",
                 modifications = listOf(mod),
@@ -71,13 +88,20 @@ class ClaudeCodeResponseProcessorTest {
         assertEquals(listOf(mod), hold.modifications)
         assertEquals("feat: x", hold.commitMessage)
         assertEquals("gradlew test", hold.commands.single().command)
-        assertEquals(Intent.Transition(hasRequestedViews = true), outcome.intents[outcome.intents.size - 2])
+        assertEquals(
+            Intent.Transition(hasRequestedViews = true),
+            outcome.intents[outcome.intents.size - 2]
+        )
     }
 
     @Test
     fun `views mixed with modifications are skipped and not persisted`() {
-        val outcome = ClaudeCodeResponseProcessor.process(
-            InteractionResponse(message = "m", modifications = listOf(mod), codeViewRequests = listOf(view)),
+        val outcome = CodingAgentResponseProcessor.process(
+            InteractionResponse(
+                message = "m",
+                modifications = listOf(mod),
+                codeViewRequests = listOf(view)
+            ),
             Context()
         )
 
@@ -88,10 +112,15 @@ class ClaudeCodeResponseProcessorTest {
 
     @Test
     fun `questions drop mixed commands`() {
-        val outcome = ClaudeCodeResponseProcessor.process(
+        val outcome = CodingAgentResponseProcessor.process(
             InteractionResponse(
                 message = "q",
-                questions = listOf(InteractionQuestion(id = "q1", question = "A or B?")),
+                questions = listOf(
+                    InteractionQuestion(
+                        id = "q1",
+                        question = "A or B?"
+                    )
+                ),
                 commands = listOf(command)
             ),
             Context()
@@ -99,66 +128,120 @@ class ClaudeCodeResponseProcessorTest {
 
         val awaiting = assertIs<ClaudeCodeStepResult.AwaitingQuestions>(outcome.result)
         assertEquals(listOf("q1"), awaiting.questions.map { it.id })
-        assertEquals(Intent.Transition(hasRequestedViews = false), outcome.intents.last())
+        assertEquals(
+            Intent.Transition(hasRequestedViews = false),
+            outcome.intents.last()
+        )
     }
 
     @Test
     fun `plan-only mode neither holds nor applies modifications`() {
-        val outcome = ClaudeCodeResponseProcessor.process(
-            InteractionResponse(message = "talk", modifications = listOf(mod)),
+        val outcome = CodingAgentResponseProcessor.process(
+            InteractionResponse(
+                message = "talk",
+                modifications = listOf(mod)
+            ),
             Context(planOnly = true)
         )
 
         val completed = assertIs<ClaudeCodeStepResult.Completed>(outcome.result)
         assertTrue(completed.modifications.isEmpty())
         assertTrue(outcome.intents.none { it is Intent.HoldPending })
-        assertEquals(Intent.Transition(hasRequestedViews = false), outcome.intents.last())
+        assertEquals(
+            Intent.Transition(hasRequestedViews = false),
+            outcome.intents.last()
+        )
     }
 
     @Test
     fun `plan snapshot maps to SavePlan and empty steps clear it`() {
-        val withSteps = ClaudeCodeResponseProcessor.process(
-            InteractionResponse(message = "m", plan = TaskPlan("X", steps = listOf(PlanStep("1", "s")))),
+        val withSteps = CodingAgentResponseProcessor.process(
+            InteractionResponse(
+                message = "m",
+                plan = TaskPlan(
+                    "X",
+                    steps = listOf(PlanStep("1", "s"))
+                )
+            ),
             Context()
         )
         val savePlan = assertIs<Intent.SavePlan>(withSteps.intents.first())
         assertEquals("X", savePlan.plan?.title)
 
-        val cleared = ClaudeCodeResponseProcessor.process(
-            InteractionResponse(message = "m", plan = TaskPlan("empty")),
+        val cleared = CodingAgentResponseProcessor.process(
+            InteractionResponse(
+                message = "m",
+                plan = TaskPlan("empty")
+            ),
             Context()
         )
-        assertNull(assertIs<Intent.SavePlan>(cleared.intents.first()).plan)
+        assertNull(
+            assertIs<Intent.SavePlan>(cleared.intents.first()).plan
+        )
 
-        val absent = ClaudeCodeResponseProcessor.process(InteractionResponse(message = "m"), Context())
+        val absent = CodingAgentResponseProcessor.process(
+            InteractionResponse(message = "m"),
+            Context()
+        )
         assertTrue(absent.intents.none { it is Intent.SavePlan })
     }
 
     @Test
     fun `blank message falls back to Done and skips history`() {
-        val outcome = ClaudeCodeResponseProcessor.process(InteractionResponse(message = ""), Context())
+        val outcome = CodingAgentResponseProcessor.process(
+            InteractionResponse(message = ""),
+            Context()
+        )
 
-        assertEquals("Done.", assertIs<ClaudeCodeStepResult.Completed>(outcome.result).message)
-        assertTrue(outcome.intents.none { it is Intent.AppendAssistantHistory })
+        assertEquals(
+            "Done.",
+            assertIs<ClaudeCodeStepResult.Completed>(outcome.result).message
+        )
+        assertTrue(
+            outcome.intents.none {
+                it is Intent.AppendAssistantHistory
+            }
+        )
     }
 
     @Test
     fun `thinking and reasoning are combined with blank line`() {
-        val outcome = ClaudeCodeResponseProcessor.process(
-            InteractionResponse(message = "m", reasoning = "R"),
+        val outcome = CodingAgentResponseProcessor.process(
+            InteractionResponse(
+                message = "m",
+                reasoning = "R"
+            ),
             Context(thinkingText = "T")
         )
 
-        assertEquals("T\n\nR", assertIs<ClaudeCodeStepResult.Completed>(outcome.result).llmReasoning)
+        val expected = listOf("T", "R")
+            .joinToString(10.toChar().toString().repeat(2))
+
+        assertEquals(
+            expected,
+            assertIs<ClaudeCodeStepResult.Completed>(outcome.result).llmReasoning
+        )
     }
 
     @Test
     fun `blank commands are dropped by conversion`() {
-        val outcome = ClaudeCodeResponseProcessor.process(
-            InteractionResponse(message = "m", commands = listOf(InteractionCommand(command = "", reason = "r"))),
+        val outcome = CodingAgentResponseProcessor.process(
+            InteractionResponse(
+                message = "m",
+                commands = listOf(
+                    InteractionCommand(
+                        command = "",
+                        reason = "r"
+                    )
+                )
+            ),
             Context()
         )
 
-        assertTrue(assertIs<ClaudeCodeStepResult.Completed>(outcome.result).commands.isEmpty())
+        assertTrue(
+            assertIs<ClaudeCodeStepResult.Completed>(outcome.result)
+                .commands
+                .isEmpty()
+        )
     }
 }

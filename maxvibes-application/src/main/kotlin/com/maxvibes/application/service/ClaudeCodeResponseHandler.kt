@@ -39,9 +39,9 @@ internal class ClaudeCodeResponseHandler(
             )
         )
 
-        val outcome = ClaudeCodeResponseProcessor.process(
+        val outcome = CodingAgentResponseProcessor.process(
             response,
-            ClaudeCodeResponseProcessor.Context(
+            CodingAgentResponseProcessor.Context(
                 planOnly = state.planOnly,
                 inputTokens = turn.inputTokens,
                 outputTokens = turn.outputTokens,
@@ -54,7 +54,7 @@ internal class ClaudeCodeResponseHandler(
 
         outcome.intents.forEach { intent ->
             when (intent) {
-                is ClaudeCodeResponseProcessor.Intent.SavePlan ->
+                is CodingAgentResponseProcessor.Intent.SavePlan ->
                     chatSessionRepository.getSessionById(sessionId)?.let { current ->
                         chatSessionRepository.saveSession(current.withPlan(intent.plan))
                         log(
@@ -70,7 +70,7 @@ internal class ClaudeCodeResponseHandler(
                         )
                     }
 
-                is ClaudeCodeResponseProcessor.Intent.AppendAssistantHistory ->
+                is CodingAgentResponseProcessor.Intent.AppendAssistantHistory ->
                     state.dialogHistory.add(
                         ChatMessageDTO(
                             role = ChatRole.ASSISTANT,
@@ -78,10 +78,10 @@ internal class ClaudeCodeResponseHandler(
                         )
                     )
 
-                is ClaudeCodeResponseProcessor.Intent.PersistRequestedViews ->
+                is CodingAgentResponseProcessor.Intent.PersistRequestedViews ->
                     persistRequestedViews(sessionId, intent.views)
 
-                is ClaudeCodeResponseProcessor.Intent.Transition ->
+                is CodingAgentResponseProcessor.Intent.Transition ->
                     sessionManager.transition(
                         sessionId,
                         ClipboardEvent.ResponseReceived(
@@ -89,7 +89,7 @@ internal class ClaudeCodeResponseHandler(
                         )
                     )
 
-                is ClaudeCodeResponseProcessor.Intent.HoldPending -> {
+                is CodingAgentResponseProcessor.Intent.HoldPending -> {
                     pendingStore.hold(
                         sessionId = sessionId,
                         modifications = intent.modifications,
