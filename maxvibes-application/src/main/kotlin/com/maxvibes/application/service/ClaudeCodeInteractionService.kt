@@ -246,14 +246,14 @@ class ClaudeCodeInteractionService(
             ?: return error("No active workspace")
 
         return when (val execution = turnExecutor.execute(command, state)) {
-            is ClaudeCodeTurnExecutionResult.Success ->
+            is CodingAgentTurnExecutionResult.Success ->
                 responseHandler.handle(
                     sessionId = command.sessionId,
                     turn = execution.turn,
                     state = state
                 )
 
-            is ClaudeCodeTurnExecutionResult.Failure ->
+            is CodingAgentTurnExecutionResult.Failure ->
                 execution.result
         }
     }

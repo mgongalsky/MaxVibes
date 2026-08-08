@@ -51,7 +51,7 @@ class ClaudeCodeTurnExecutorTest {
             state()
         )
 
-        val failure = assertIs<ClaudeCodeTurnExecutionResult.Failure>(result)
+        val failure = assertIs<CodingAgentTurnExecutionResult.Failure>(result)
         assertEquals(
             "Session not found: $sessionId",
             assertIs<ClaudeCodeStepResult.Error>(failure.result).message
@@ -83,7 +83,7 @@ class ClaudeCodeTurnExecutorTest {
             state
         )
 
-        assertIs<ClaudeCodeTurnExecutionResult.Success>(result)
+        assertIs<CodingAgentTurnExecutionResult.Success>(result)
         val request = transport.sentRequests.single()
         assertTrue(request.fileTree.isNotBlank())
         assertEquals(listOf("Task"), request.chatHistory.map { it.content })
@@ -116,7 +116,7 @@ class ClaudeCodeTurnExecutorTest {
             state(message = "Continue")
         )
 
-        assertIs<ClaudeCodeTurnExecutionResult.Success>(result)
+        assertIs<CodingAgentTurnExecutionResult.Success>(result)
         val request = transport.sentRequests.single()
         assertEquals("", request.fileTree)
         assertTrue(request.chatHistory.isEmpty())
@@ -145,7 +145,7 @@ class ClaudeCodeTurnExecutorTest {
             state(message = "Continue")
         )
 
-        assertIs<ClaudeCodeTurnExecutionResult.Success>(result)
+        assertIs<CodingAgentTurnExecutionResult.Success>(result)
         val request = transport.sentRequests.single()
         assertTrue(request.fileTree.isNotBlank())
         assertEquals(listOf("Continue"), request.chatHistory.map { it.content })
@@ -163,7 +163,7 @@ class ClaudeCodeTurnExecutorTest {
             state()
         )
 
-        val failure = assertIs<ClaudeCodeTurnExecutionResult.Failure>(result)
+        val failure = assertIs<CodingAgentTurnExecutionResult.Failure>(result)
         assertEquals(
             "Claude Code binary not found. Check the path in MaxVibes settings.",
             assertIs<ClaudeCodeStepResult.TransportError>(failure.result).detail
@@ -200,7 +200,7 @@ class ClaudeCodeTurnExecutorTest {
             state(message = "Continue")
         )
 
-        assertIs<ClaudeCodeTurnExecutionResult.Success>(result)
+        assertIs<CodingAgentTurnExecutionResult.Success>(result)
         assertEquals(
             listOf("old-claude", null),
             transport.ensureCalls.map { it.resumeSessionId }
@@ -255,7 +255,7 @@ class ClaudeCodeTurnExecutorTest {
             state()
         )
 
-        val failure = assertIs<ClaudeCodeTurnExecutionResult.Failure>(result)
+        val failure = assertIs<CodingAgentTurnExecutionResult.Failure>(result)
         val detail = assertIs<ClaudeCodeStepResult.TransportError>(failure.result).detail
         assertTrue(detail.contains("exited with code 2"))
         assertTrue(detail.contains("startup failed"))
@@ -282,7 +282,7 @@ class ClaudeCodeTurnExecutorTest {
             state()
         )
 
-        val failure = assertIs<ClaudeCodeTurnExecutionResult.Failure>(result)
+        val failure = assertIs<CodingAgentTurnExecutionResult.Failure>(result)
         assertEquals(
             "Claude Code did not respond in time.",
             assertIs<ClaudeCodeStepResult.TransportError>(failure.result).detail
@@ -313,7 +313,7 @@ class ClaudeCodeTurnExecutorTest {
             state()
         )
 
-        assertIs<ClaudeCodeTurnExecutionResult.Success>(result)
+        assertIs<CodingAgentTurnExecutionResult.Success>(result)
         val persisted = repository.getSessionById(sessionId)!!
         assertEquals("claude-new", persisted.claudeCodeSessionId)
         assertFalse(persisted.claudeCodeNeedsFullContext)
@@ -342,7 +342,7 @@ class ClaudeCodeTurnExecutorTest {
             state()
         )
 
-        assertIs<ClaudeCodeTurnExecutionResult.Success>(result)
+        assertIs<CodingAgentTurnExecutionResult.Success>(result)
         val persisted = repository.getSessionById(sessionId)!!
         assertEquals("claude-existing", persisted.claudeCodeSessionId)
         assertFalse(persisted.claudeCodeNeedsFullContext)

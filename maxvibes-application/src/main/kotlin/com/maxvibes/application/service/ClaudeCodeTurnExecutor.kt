@@ -20,11 +20,11 @@ internal class ClaudeCodeTurnExecutor(
     suspend fun execute(
         command: CodingAgentTurnCommand,
         state: ClipboardSessionState
-    ): ClaudeCodeTurnExecutionResult {
+    ): CodingAgentTurnExecutionResult {
         val sessionId = command.sessionId
         streamHub?.begin(sessionId)
         var session = chatSessionRepository.getSessionById(sessionId)
-            ?: return ClaudeCodeTurnExecutionResult.Failure(
+            ?: return CodingAgentTurnExecutionResult.Failure(
                 ClaudeCodeStepResult.Error("Session not found: $sessionId")
             )
 
@@ -81,7 +81,7 @@ internal class ClaudeCodeTurnExecutor(
         }
 
         if (ensureResult is Result.Failure) {
-            return ClaudeCodeTurnExecutionResult.Failure(
+            return CodingAgentTurnExecutionResult.Failure(
                 ClaudeCodeStepResult.TransportError(
                     transportErrorMessage(ensureResult.error)
                 )
@@ -116,7 +116,7 @@ internal class ClaudeCodeTurnExecutor(
                 persistObservedSession(payload, session)
                 val stats = payload.stats
 
-                ClaudeCodeTurnExecutionResult.Success(
+                CodingAgentTurnExecutionResult.Success(
                     ReceivedCodingAgentTurn(
                         response = payload.response,
                         inputTokens = stats?.inputTokens?.takeIf { it > 0 }
@@ -141,7 +141,7 @@ internal class ClaudeCodeTurnExecutor(
                         "elapsedMs" to measuredDurationMs
                     )
                 )
-                ClaudeCodeTurnExecutionResult.Failure(
+                CodingAgentTurnExecutionResult.Failure(
                     ClaudeCodeStepResult.TransportError(
                         transportErrorMessage(sendResult.error)
                     )
@@ -207,12 +207,12 @@ internal class ClaudeCodeTurnExecutor(
     }
 }
 
-internal sealed interface ClaudeCodeTurnExecutionResult {
+internal sealed interface CodingAgentTurnExecutionResult {
     data class Success(
-        val turn: ReceivedClaudeTurn
-    ) : ClaudeCodeTurnExecutionResult
+        val turn: ReceivedCodingAgentTurn
+    ) : CodingAgentTurnExecutionResult
 
     data class Failure(
         val result: ClaudeCodeStepResult
-    ) : ClaudeCodeTurnExecutionResult
+    ) : CodingAgentTurnExecutionResult
 }
