@@ -12,7 +12,7 @@ import com.maxvibes.domain.model.interaction.AttachedImage
 import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 import com.maxvibes.application.port.output.CodingAgentCliPort
 
-class ClaudeCodeInteractionService(
+class CodingAgentInteractionService(
     contextProvider: ProjectContextPort,
     claudeCodePort: CodingAgentCliPort,
     codeRepository: CodeRepository,
@@ -269,3 +269,5 @@ class ClaudeCodeInteractionService(
         return ClaudeCodeStepResult.Error(message)
     }
 }
+
+typealias ClaudeCodeInteractionService = CodingAgentInteractionService
