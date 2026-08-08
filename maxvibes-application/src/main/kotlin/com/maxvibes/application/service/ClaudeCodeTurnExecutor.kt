@@ -8,6 +8,8 @@ import com.maxvibes.application.port.output.NotificationPort
 import com.maxvibes.shared.result.Result
 import com.maxvibes.application.port.output.CodingAgentCliPort
 import com.maxvibes.application.port.output.CodingAgentCliSendResult
+import com.maxvibes.domain.model.chat.CodingAgentProvider
+import com.maxvibes.domain.model.chat.CodingAgentSessionRef
 
 internal class ClaudeCodeTurnExecutor(
     private val claudeCodePort: CodingAgentCliPort,
@@ -28,7 +30,8 @@ internal class ClaudeCodeTurnExecutor(
                 ClaudeCodeStepResult.Error("Session not found: $sessionId")
             )
 
-        val needsFull = command.firstMessage || session.claudeCodeNeedsFullContext
+        var sessionRef = session.resolvedCodingAgentSession(CodingAgentProvider.CLAUDE_CODE)
+        val needsFull = command.firstMessage || sessionRef?.needsFullContext != false
         var request = ClaudeCodeRequestFactory.create(
             state = state,
             freshFiles = command.freshFiles,
@@ -42,7 +45,7 @@ internal class ClaudeCodeTurnExecutor(
         )
 
         var ensureResult = claudeCodePort.ensureStarted(
-            resumeSessionId = session.claudeCodeSessionId,
+            resumeSessionId = sessionRef?.remoteSessionId,
             systemPrompt = state.prompts.chatSystem
         )
 
@@ -57,10 +60,12 @@ internal class ClaudeCodeTurnExecutor(
                 mapOf("claudeSessionId" to resumeFailure.sessionId)
             )
 
-            session = session.copy(
-                claudeCodeSessionId = null,
-                claudeCodeNeedsFullContext = true
+            sessionRef = CodingAgentSessionRef(
+                provider = CodingAgentProvider.CLAUDE_CODE,
+                remoteSessionId = null,
+                needsFullContext = true
             )
+            session = session.withCodingAgentSession(sessionRef)
             chatSessionRepository.saveSession(session)
 
             request = ClaudeCodeRequestFactory.create(
@@ -164,12 +169,16 @@ internal class ClaudeCodeTurnExecutor(
         payload: CodingAgentCliSendResult,
         session: com.maxvibes.domain.model.chat.ChatSession
     ) {
+        val current = session.resolvedCodingAgentSession(CodingAgentProvider.CLAUDE_CODE)
         val observedId = payload.observedSessionId
-        if (observedId != null || session.claudeCodeNeedsFullContext) {
+        if (observedId != null || current == null || current.needsFullContext) {
             chatSessionRepository.saveSession(
-                session.copy(
-                    claudeCodeSessionId = observedId ?: session.claudeCodeSessionId,
-                    claudeCodeNeedsFullContext = false
+                session.withCodingAgentSession(
+                    CodingAgentSessionRef(
+                        provider = CodingAgentProvider.CLAUDE_CODE,
+                        remoteSessionId = observedId ?: current?.remoteSessionId,
+                        needsFullContext = false
+                    )
                 )
             )
         }
