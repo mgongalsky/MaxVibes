@@ -109,4 +109,28 @@ data class ChatSession(
      */
     fun withPlan(plan: TaskPlan?): ChatSession =
         copy(plan = plan, updatedAt = Instant.now().toEpochMilli())
+    fun resolvedCodingAgentSession(provider: CodingAgentProvider): CodingAgentSessionRef? {
+        codingAgentSession?.let { current ->
+            return current.takeIf { it.provider == provider }
+        }
+
+        if (provider != CodingAgentProvider.CLAUDE_CODE) return null
+        if (claudeCodeSessionId == null && claudeCodeNeedsFullContext) return null
+
+        return CodingAgentSessionRef(
+            provider = CodingAgentProvider.CLAUDE_CODE,
+            remoteSessionId = claudeCodeSessionId,
+            needsFullContext = claudeCodeNeedsFullContext
+        )
+    }
+    fun withCodingAgentSession(sessionRef: CodingAgentSessionRef): ChatSession =
+        if (sessionRef.provider == CodingAgentProvider.CLAUDE_CODE) {
+            copy(
+                codingAgentSession = sessionRef,
+                claudeCodeSessionId = sessionRef.remoteSessionId,
+                claudeCodeNeedsFullContext = sessionRef.needsFullContext
+            )
+        } else {
+            copy(codingAgentSession = sessionRef)
+        }
 }
