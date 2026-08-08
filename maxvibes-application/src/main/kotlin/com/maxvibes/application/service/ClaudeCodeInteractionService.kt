@@ -212,8 +212,8 @@ class ClaudeCodeInteractionService(
             workspaceService.continueSession(command)
         }
         val state = when (workspaceResult) {
-            is ClaudeCodeWorkspaceResult.Ready -> workspaceResult.state
-            is ClaudeCodeWorkspaceResult.Failure ->
+            is CodingAgentWorkspaceResult.Ready -> workspaceResult.state
+            is CodingAgentWorkspaceResult.Failure ->
                 return error(workspaceResult.message)
         }
 

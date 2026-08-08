@@ -10,42 +10,43 @@ Move provider-independent orchestration out of Claude-specific application names
 
 ## Cut 1 — transport-facing flow models
 
-Introduce physical generic models:
+Introduced physical generic models:
 
 - `CodingAgentTurnCommand`
 - `ReceivedCodingAgentTurn`
 
-Keep temporary source-compatible aliases:
+Temporary source-compatible aliases remain for the previous Claude-specific model names.
 
-- `ClaudeCodeTurnCommand` -> `CodingAgentTurnCommand`
-- `ReceivedClaudeTurn` -> `ReceivedCodingAgentTurn`
+Existing orchestration now consumes the generic transport-facing models and `CodingAgentCliPort` / `CodingAgentCliSendResult` directly.
 
-Migrate the existing facade collaborators to consume the generic models:
+## Cut 2 — workspace result hierarchy
 
-- `ClaudeCodeTurnExecutor`
-- `ClaudeCodeInteractionService`
-- `ClaudeCodeApprovalService`
-- `ClaudeCodeResponseHandler`
+Physically rename:
 
-Also expose `CodingAgentCliPort` and `CodingAgentCliSendResult` directly at the application transport boundary.
+- `ClaudeCodeWorkspaceResult` -> `CodingAgentWorkspaceResult`
 
-This cut intentionally does not rename the owning services yet. Runtime behavior, Claude session persistence, request construction, logging and response semantics remain unchanged.
+All production and test usages are migrated in the same cut.
 
-## Why sealed results are deferred
+No typealias is used for this hierarchy. Kotlin aliases do not expose nested classifiers such as `Ready` and `Failure`, so a physical rename with synchronized caller migration is the safe pattern.
 
-The following types own nested classifiers and cannot be safely migrated through a simple Kotlin typealias:
+This cut is intentionally small and serves as the template for the remaining internal sealed hierarchies.
 
+## Deferred hierarchies
+
+The following remain Claude-named until their own characterized cuts:
+
+- `ClaudeCodeApprovalOutcome`
+- `ClaudeCodeTurnExecutionResult`
 - `ClaudeCodeStepResult`
 - `ClaudeCodeResponseProcessor.Context`
 - `ClaudeCodeResponseProcessor.Intent`
-- `ClaudeCodeTurnExecutionResult`
-- `ClaudeCodeApprovalOutcome`
-- `ClaudeCodeWorkspaceResult`
 
-They require a characterized migration of their call sites, similar to the earlier `ClaudeCodeError` issue.
+## Migration rule
 
-## Next cuts
+For top-level data classes without nested classifiers, compatibility aliases are acceptable.
 
-1. Migrate one sealed application result hierarchy with all usages in one compile-safe batch.
-2. Rename provider-independent service classes to `CodingAgent*`.
-3. Leave provider-specific transport, persistence and prompt semantics for Step 5 and Step 6.
+For sealed classes, sealed interfaces, or objects whose nested types are referenced by callers, migrate the physical declaration and all usages together. Do not rely on a typealias.
+
+## Next cut
+
+After `CodingAgentWorkspaceResult` is verified green, migrate `ClaudeCodeApprovalOutcome` and then `ClaudeCodeTurnExecutionResult` using the same pattern.

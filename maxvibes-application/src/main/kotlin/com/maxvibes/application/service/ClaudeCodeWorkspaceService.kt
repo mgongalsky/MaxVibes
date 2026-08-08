@@ -37,11 +37,11 @@ internal class ClaudeCodeWorkspaceService(
 
     suspend fun start(
         command: UserInputCommand
-    ): ClaudeCodeWorkspaceResult {
+    ): CodingAgentWorkspaceResult {
         notificationPort.showProgress("Gathering project context...", 0.1)
         val projectContextResult = contextProvider.getProjectContext()
         if (projectContextResult is Result.Failure) {
-            return ClaudeCodeWorkspaceResult.Failure(
+            return CodingAgentWorkspaceResult.Failure(
                 "Failed to get project context: ${projectContextResult.error.message}"
             )
         }
@@ -63,20 +63,20 @@ internal class ClaudeCodeWorkspaceService(
 
         workspace.install(command.sessionId, newState)
         appendHistory(ChatRole.USER, command.userInput)
-        return ClaudeCodeWorkspaceResult.Ready(newState)
+        return CodingAgentWorkspaceResult.Ready(newState)
     }
 
     suspend fun continueSession(
         command: UserInputCommand
-    ): ClaudeCodeWorkspaceResult {
+    ): CodingAgentWorkspaceResult {
         if (!workspace.isOwnedBy(command.sessionId) && !restore(command.sessionId)) {
-            return ClaudeCodeWorkspaceResult.Failure(
+            return CodingAgentWorkspaceResult.Failure(
                 "Cannot restore session state for session ${command.sessionId}. Please start a new task."
             )
         }
 
         val currentState = workspace.state
-            ?: return ClaudeCodeWorkspaceResult.Failure("No active workspace")
+            ?: return CodingAgentWorkspaceResult.Failure("No active workspace")
         val updatedState = currentState.copy(
             currentMessage = command.userInput,
             planOnly = command.planOnly
@@ -84,7 +84,7 @@ internal class ClaudeCodeWorkspaceService(
 
         workspace.install(command.sessionId, updatedState)
         appendHistory(ChatRole.USER, command.userInput)
-        return ClaudeCodeWorkspaceResult.Ready(updatedState)
+        return CodingAgentWorkspaceResult.Ready(updatedState)
     }
 
     suspend fun ensure(sessionId: String): Boolean {
@@ -165,12 +165,12 @@ internal class ClaudeCodeWorkspaceService(
     }
 }
 
-internal sealed interface ClaudeCodeWorkspaceResult {
+internal sealed interface CodingAgentWorkspaceResult {
     data class Ready(
         val state: ClipboardSessionState
-    ) : ClaudeCodeWorkspaceResult
+    ) : CodingAgentWorkspaceResult
 
     data class Failure(
         val message: String
-    ) : ClaudeCodeWorkspaceResult
+    ) : CodingAgentWorkspaceResult
 }
