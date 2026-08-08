@@ -109,8 +109,8 @@ class ClaudeCodeInteractionService(
             specificPromptContent = specificPromptContent
         )
     ) {
-        is ClaudeCodeApprovalOutcome.Continue -> send(outcome.command)
-        is ClaudeCodeApprovalOutcome.Immediate -> outcome.result
+        is CodingAgentApprovalOutcome.Continue -> send(outcome.command)
+        is CodingAgentApprovalOutcome.Immediate -> outcome.result
     }
 
     suspend fun submitCommandResults(

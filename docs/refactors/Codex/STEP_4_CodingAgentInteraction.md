@@ -21,25 +21,19 @@ Existing orchestration now consumes the generic transport-facing models and `Cod
 
 ## Cut 2 — workspace result hierarchy
 
-Physically rename:
+Physically renamed:
 
 - `ClaudeCodeWorkspaceResult` -> `CodingAgentWorkspaceResult`
 
-All production and test usages are migrated in the same cut.
+All production and test usages were migrated together. No typealias is used because nested classifiers such as `Ready` and `Failure` are referenced directly.
 
-No typealias is used for this hierarchy. Kotlin aliases do not expose nested classifiers such as `Ready` and `Failure`, so a physical rename with synchronized caller migration is the safe pattern.
+## Cut 3 — approval outcome hierarchy
 
-This cut is intentionally small and serves as the template for the remaining internal sealed hierarchies.
+Physically rename:
 
-## Deferred hierarchies
+- `ClaudeCodeApprovalOutcome` -> `CodingAgentApprovalOutcome`
 
-The following remain Claude-named until their own characterized cuts:
-
-- `ClaudeCodeApprovalOutcome`
-- `ClaudeCodeTurnExecutionResult`
-- `ClaudeCodeStepResult`
-- `ClaudeCodeResponseProcessor.Context`
-- `ClaudeCodeResponseProcessor.Intent`
+All production and test usages move in the same cut. The owning `ClaudeCodeApprovalService` remains unchanged for now; service-class renaming is deferred until the internal models are generic.
 
 ## Migration rule
 
@@ -47,6 +41,15 @@ For top-level data classes without nested classifiers, compatibility aliases are
 
 For sealed classes, sealed interfaces, or objects whose nested types are referenced by callers, migrate the physical declaration and all usages together. Do not rely on a typealias.
 
+## Deferred hierarchies
+
+The following remain Claude-named until their own characterized cuts:
+
+- `ClaudeCodeTurnExecutionResult`
+- `ClaudeCodeStepResult`
+- `ClaudeCodeResponseProcessor.Context`
+- `ClaudeCodeResponseProcessor.Intent`
+
 ## Next cut
 
-After `CodingAgentWorkspaceResult` is verified green, migrate `ClaudeCodeApprovalOutcome` and then `ClaudeCodeTurnExecutionResult` using the same pattern.
+After `CodingAgentApprovalOutcome` is verified green, migrate `ClaudeCodeTurnExecutionResult` using the same physical-rename pattern.

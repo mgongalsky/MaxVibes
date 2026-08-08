@@ -59,7 +59,7 @@ internal class ClaudeCodeApprovalService(
         attachedContext: String? = null,
         ideErrors: String? = null,
         specificPromptContent: String? = null
-    ): ClaudeCodeApprovalOutcome {
+    ): CodingAgentApprovalOutcome {
         sessionLog?.begin(sessionId)
         sessionLog?.event(
             "approve",
@@ -71,7 +71,7 @@ internal class ClaudeCodeApprovalService(
         }
 
         if (pendingStore.hasPendingFor(sessionId)) {
-            return ClaudeCodeApprovalOutcome.Immediate(
+            return CodingAgentApprovalOutcome.Immediate(
                 approvePendingModifications(sessionId)
             )
         }
@@ -116,7 +116,7 @@ internal class ClaudeCodeApprovalService(
 
         sessionManager.transition(sessionId, ClipboardEvent.Approved)
 
-        return ClaudeCodeApprovalOutcome.Continue(
+        return CodingAgentApprovalOutcome.Continue(
             CodingAgentTurnCommand(
                 sessionId = sessionId,
                 freshFiles = freshFiles,
@@ -192,8 +192,8 @@ internal class ClaudeCodeApprovalService(
         return results
     }
 
-    private fun immediateError(message: String): ClaudeCodeApprovalOutcome.Immediate =
-        ClaudeCodeApprovalOutcome.Immediate(error(message))
+    private fun immediateError(message: String): CodingAgentApprovalOutcome.Immediate =
+        CodingAgentApprovalOutcome.Immediate(error(message))
 
     private fun error(message: String): ClaudeCodeStepResult.Error {
         println("[MaxVibes ClaudeCode] ERROR: $message")
@@ -207,12 +207,12 @@ internal class ClaudeCodeApprovalService(
     }
 }
 
-internal sealed interface ClaudeCodeApprovalOutcome {
+internal sealed interface CodingAgentApprovalOutcome {
     data class Continue(
         val command: CodingAgentTurnCommand
-    ) : ClaudeCodeApprovalOutcome
+    ) : CodingAgentApprovalOutcome
 
     data class Immediate(
         val result: ClaudeCodeStepResult
-    ) : ClaudeCodeApprovalOutcome
+    ) : CodingAgentApprovalOutcome
 }

@@ -137,7 +137,7 @@ class ClaudeCodeApprovalServiceTest {
 
         val outcome = service.approve(sessionId)
 
-        val immediate = assertIs<ClaudeCodeApprovalOutcome.Immediate>(outcome)
+        val immediate = assertIs<CodingAgentApprovalOutcome.Immediate>(outcome)
         assertEquals(
             "Approve is only valid in AWAITING_APPROVE state",
             assertIs<ClaudeCodeStepResult.Error>(immediate.result).message
@@ -171,7 +171,7 @@ class ClaudeCodeApprovalServiceTest {
 
         val outcome = service.approve(sessionId)
 
-        val immediate = assertIs<ClaudeCodeApprovalOutcome.Immediate>(outcome)
+        val immediate = assertIs<CodingAgentApprovalOutcome.Immediate>(outcome)
         val completed = assertIs<ClaudeCodeStepResult.Completed>(immediate.result)
         assertTrue(completed.success)
         assertEquals("feat: add New", completed.commitMessage)
@@ -230,7 +230,7 @@ class ClaudeCodeApprovalServiceTest {
         val outcome = service.approve(sessionId)
 
         val completed = assertIs<ClaudeCodeStepResult.Completed>(
-            assertIs<ClaudeCodeApprovalOutcome.Immediate>(outcome).result
+            assertIs<CodingAgentApprovalOutcome.Immediate>(outcome).result
         )
         assertFalse(completed.success)
         assertEquals(2, completed.modifications.size)
@@ -262,7 +262,7 @@ class ClaudeCodeApprovalServiceTest {
         val outcome = service.approve(sessionId)
 
         val completed = assertIs<ClaudeCodeStepResult.Completed>(
-            assertIs<ClaudeCodeApprovalOutcome.Immediate>(outcome).result
+            assertIs<CodingAgentApprovalOutcome.Immediate>(outcome).result
         )
         assertTrue(completed.success)
         assertTrue(completed.modifications.isEmpty())
@@ -311,7 +311,7 @@ class ClaudeCodeApprovalServiceTest {
             specificPromptContent = "review"
         )
 
-        val continuation = assertIs<ClaudeCodeApprovalOutcome.Continue>(outcome)
+        val continuation = assertIs<CodingAgentApprovalOutcome.Continue>(outcome)
         assertEquals(sessionId, continuation.command.sessionId)
         assertEquals(
             mapOf("src/Foo.kt" to "class Foo"),
@@ -345,7 +345,7 @@ class ClaudeCodeApprovalServiceTest {
 
         val outcome = service.approve(sessionId)
 
-        assertIs<ClaudeCodeApprovalOutcome.Continue>(outcome)
+        assertIs<CodingAgentApprovalOutcome.Continue>(outcome)
         coVerify(exactly = 1) { workspaceService.ensure(sessionId) }
         coVerify(exactly = 1) { viewResolver.resolve(any(), restoredState) }
     }
@@ -362,7 +362,7 @@ class ClaudeCodeApprovalServiceTest {
         val outcome = service.approve(sessionId)
 
         val error = assertIs<ClaudeCodeStepResult.Error>(
-            assertIs<ClaudeCodeApprovalOutcome.Immediate>(outcome).result
+            assertIs<CodingAgentApprovalOutcome.Immediate>(outcome).result
         )
         assertTrue(error.message.contains("Cannot restore session state"))
         assertEquals(
@@ -397,7 +397,7 @@ class ClaudeCodeApprovalServiceTest {
         val outcome = missingService.approve("missing")
 
         val error = assertIs<ClaudeCodeStepResult.Error>(
-            assertIs<ClaudeCodeApprovalOutcome.Immediate>(outcome).result
+            assertIs<CodingAgentApprovalOutcome.Immediate>(outcome).result
         )
         assertTrue(
             error.message == "Approve is only valid in AWAITING_APPROVE state" ||
@@ -424,7 +424,7 @@ class ClaudeCodeApprovalServiceTest {
         assertEquals(
             "No assistant message to approve",
             assertIs<ClaudeCodeStepResult.Error>(
-                assertIs<ClaudeCodeApprovalOutcome.Immediate>(outcome).result
+                assertIs<CodingAgentApprovalOutcome.Immediate>(outcome).result
             ).message
         )
         coVerify(exactly = 0) { viewResolver.resolve(any(), any()) }
@@ -449,7 +449,7 @@ class ClaudeCodeApprovalServiceTest {
         assertEquals(
             "Last assistant message has no requestedViews to approve",
             assertIs<ClaudeCodeStepResult.Error>(
-                assertIs<ClaudeCodeApprovalOutcome.Immediate>(outcome).result
+                assertIs<CodingAgentApprovalOutcome.Immediate>(outcome).result
             ).message
         )
         coVerify(exactly = 0) { viewResolver.resolve(any(), any()) }
@@ -471,7 +471,7 @@ class ClaudeCodeApprovalServiceTest {
         assertEquals(
             "Failed to gather requested files",
             assertIs<ClaudeCodeStepResult.Error>(
-                assertIs<ClaudeCodeApprovalOutcome.Immediate>(outcome).result
+                assertIs<CodingAgentApprovalOutcome.Immediate>(outcome).result
             ).message
         )
         assertEquals(
@@ -499,7 +499,7 @@ class ClaudeCodeApprovalServiceTest {
 
         val outcome = service.approve(sessionId)
 
-        assertIs<ClaudeCodeApprovalOutcome.Continue>(outcome)
+        assertIs<CodingAgentApprovalOutcome.Continue>(outcome)
         verify(exactly = 0) {
             workspaceService.appendAssistantHistory(any())
         }
