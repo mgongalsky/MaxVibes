@@ -52,17 +52,19 @@ The raw Claude stream-JSON parser and Codex JSON-RPC parser remain separate. The
 
 ## Current state
 
-The first compatibility seam exists and the application tests were green before the terminology adjustment.
+Steps 1–4 are complete.
 
-Canonical names are now being changed from `AgentCli*` to `CodingAgentCli*`. Temporary aliases preserve compatibility while the rest of the application migrates incrementally.
+The application flow now exposes the canonical `CodingAgentInteractionService` and provider-independent response, approval and requested-view components. Claude-specific workspace, turn execution, session metadata, prompts, logging and transport remain explicit where they still encode provider behavior.
+
+Step 5 is now active: migrate persisted session metadata and prompt selection to provider-aware structures while preserving existing Claude sessions.
 
 ## Refactor sequence
 
 1. Current architecture — map the existing Claude Code vertical slice. DONE.
 2. Seams — identify generic vs provider-specific responsibilities. DONE.
-3. CodingAgent CLI contract — introduce provider-independent transport types with compatibility aliases.
-4. CodingAgent interaction — migrate application orchestration from Claude-specific names to a shared coding-agent flow.
-5. Session and prompts — replace Claude-only persisted session metadata and prompt lookup with provider-aware structures while preserving XML backward compatibility.
+3. CodingAgent CLI contract — introduce provider-independent transport types with compatibility aliases. DONE.
+4. CodingAgent interaction — migrate application orchestration from Claude-specific names to a shared coding-agent flow. DONE.
+5. Session and prompts — replace Claude-only persisted session metadata and prompt lookup with provider-aware structures while preserving XML backward compatibility. IN PROGRESS.
 6. Codex adapter — implement Codex App Server transport and map JSON-RPC notifications to normalized coding-agent events.
 7. Wiring and UI — add provider selection without duplicating dispatcher, background execution or approval flows.
 8. Tests — preserve characterization coverage, add provider contract tests and run Codex smoke tests.
@@ -79,8 +81,8 @@ Canonical names are now being changed from `AgentCli*` to `CodingAgentCli*`. Tem
 
 ## Commit checkpoints
 
-The generic transport seam should be committed independently after the `CodingAgent*` terminology is applied and tests are green.
+The generic transport seam and generic application flow are now established independently.
 
-Suggested commit:
+Next checkpoint:
 
-`refactor: introduce generic coding agent CLI contract`
+`refactor: add provider-aware coding agent sessions`
