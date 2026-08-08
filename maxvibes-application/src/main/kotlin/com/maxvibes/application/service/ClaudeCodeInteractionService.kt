@@ -60,7 +60,7 @@ class ClaudeCodeInteractionService(
         logger = logger
     )
 
-    private val approvalService = ClaudeCodeApprovalService(
+    private val approvalService = CodingAgentApprovalService(
         chatSessionRepository = chatSessionRepository,
         sessionManager = sessionManager,
         pendingStore = pendingStore,

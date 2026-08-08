@@ -45,7 +45,7 @@ class ClaudeCodeApprovalServiceTest {
     private lateinit var codeRepository: CodeRepository
     private lateinit var notifications: RecordingNotificationPort
     private lateinit var sessionLog: RecordingClaudeCodeSessionLogPort
-    private lateinit var service: ClaudeCodeApprovalService
+    private lateinit var service: CodingAgentApprovalService
 
     @BeforeEach
     fun setUp() {
@@ -57,7 +57,7 @@ class ClaudeCodeApprovalServiceTest {
         codeRepository = mockk(relaxed = true)
         notifications = RecordingNotificationPort()
         sessionLog = RecordingClaudeCodeSessionLogPort()
-        service = ClaudeCodeApprovalService(
+        service = CodingAgentApprovalService(
             chatSessionRepository = repository,
             sessionManager = sessionManager,
             pendingStore = pendingStore,
@@ -381,7 +381,7 @@ class ClaudeCodeApprovalServiceTest {
             )
         )
         val managerForMissingSession = ClipboardSessionManager(repository)
-        val missingService = ClaudeCodeApprovalService(
+        val missingService = CodingAgentApprovalService(
             chatSessionRepository = repository,
             sessionManager = managerForMissingSession,
             pendingStore = pendingStore,

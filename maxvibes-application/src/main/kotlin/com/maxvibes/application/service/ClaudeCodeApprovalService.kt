@@ -11,12 +11,12 @@ import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 import com.maxvibes.domain.model.interaction.InteractionModification
 import com.maxvibes.domain.model.modification.ModificationResult
 
-internal class ClaudeCodeApprovalService(
+internal class CodingAgentApprovalService(
     private val chatSessionRepository: ChatSessionRepository,
     private val sessionManager: ClipboardSessionManager,
     private val pendingStore: PendingModificationsStore,
     private val workspaceService: ClaudeCodeWorkspaceService,
-    private val viewResolver: ClaudeCodeViewResolver,
+    private val viewResolver: CodingAgentViewResolver,
     private val codeRepository: CodeRepository,
     private val notificationPort: NotificationPort,
     private val sessionLog: ClaudeCodeSessionLogPort? = null,
