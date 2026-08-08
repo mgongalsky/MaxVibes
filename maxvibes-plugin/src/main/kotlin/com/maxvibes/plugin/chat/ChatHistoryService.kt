@@ -25,6 +25,8 @@ import java.util.UUID
 import com.maxvibes.domain.model.planning.TaskPlan
 import com.maxvibes.domain.model.planning.PlanStep
 import com.maxvibes.domain.model.planning.PlanStepStatus
+import com.maxvibes.domain.model.chat.CodingAgentProvider
+import com.maxvibes.domain.model.chat.CodingAgentSessionRef
 
 @Tag("requestedView")
 class XmlRequestedViewInfo {
@@ -347,25 +349,52 @@ class XmlChatSession {
         chatOutput = chatOutputTokens
     )
 
-    fun toDomain(): ChatSession = ChatSession(
-        id = id,
-        title = title,
-        parentId = parentId,
-        depth = depth,
-        messages = messages.map { it.toDomain() },
-        tokenUsage = toTokenUsage(),
-        createdAt = createdAt,
-        updatedAt = updatedAt,
-        clipboardStatus = try {
-            ClipboardSessionStatus.valueOf(clipboardStatus)
-        } catch (_: IllegalArgumentException) {
-            ClipboardSessionStatus.IDLE
-        },
-        selectedSpecificPromptName = selectedSpecificPromptName.takeIf { it.isNotEmpty() },
-        claudeCodeSessionId = claudeCodeSessionId,
-        claudeCodeNeedsFullContext = claudeCodeNeedsFullContext,
-        plan = plan?.toDomain()
-    )
+    fun toDomain(): ChatSession {
+        val genericProvider = codingAgentProvider?.let { name ->
+            runCatching { CodingAgentProvider.valueOf(name) }.getOrNull()
+        }
+        val genericSession = genericProvider?.let { provider ->
+            CodingAgentSessionRef(
+                provider = provider,
+                remoteSessionId = codingAgentRemoteSessionId,
+                needsFullContext = codingAgentNeedsFullContext
+            )
+        }
+        val legacySession = if (claudeCodeSessionId != null || !claudeCodeNeedsFullContext) {
+            CodingAgentSessionRef(
+                provider = CodingAgentProvider.CLAUDE_CODE,
+                remoteSessionId = claudeCodeSessionId,
+                needsFullContext = claudeCodeNeedsFullContext
+            )
+        } else {
+            null
+        }
+        val resolvedSession = genericSession ?: legacySession
+        val resolvedClaudeSession = resolvedSession
+            ?.takeIf { it.provider == CodingAgentProvider.CLAUDE_CODE }
+
+        return ChatSession(
+            id = id,
+            title = title,
+            parentId = parentId,
+            depth = depth,
+            messages = messages.map { it.toDomain() },
+            tokenUsage = toTokenUsage(),
+            createdAt = createdAt,
+            updatedAt = updatedAt,
+            clipboardStatus = try {
+                ClipboardSessionStatus.valueOf(clipboardStatus)
+            } catch (_: IllegalArgumentException) {
+                ClipboardSessionStatus.IDLE
+            },
+            selectedSpecificPromptName = selectedSpecificPromptName.takeIf { it.isNotEmpty() },
+            codingAgentSession = resolvedSession,
+            claudeCodeSessionId = resolvedClaudeSession?.remoteSessionId ?: claudeCodeSessionId,
+            claudeCodeNeedsFullContext = resolvedClaudeSession?.needsFullContext
+                ?: claudeCodeNeedsFullContext,
+            plan = plan?.toDomain()
+        )
+    }
 
     companion object {
         fun fromDomain(session: ChatSession): XmlChatSession {
@@ -383,12 +412,46 @@ class XmlChatSession {
             xml.updatedAt = session.updatedAt
             xml.clipboardStatus = session.clipboardStatus.name
             xml.selectedSpecificPromptName = session.selectedSpecificPromptName ?: ""
-            xml.claudeCodeSessionId = session.claudeCodeSessionId
-            xml.claudeCodeNeedsFullContext = session.claudeCodeNeedsFullContext
+
+            val resolvedSession = session.codingAgentSession ?: if (
+                session.claudeCodeSessionId != null || !session.claudeCodeNeedsFullContext
+            ) {
+                CodingAgentSessionRef(
+                    provider = CodingAgentProvider.CLAUDE_CODE,
+                    remoteSessionId = session.claudeCodeSessionId,
+                    needsFullContext = session.claudeCodeNeedsFullContext
+                )
+            } else {
+                null
+            }
+
+            xml.codingAgentProvider = resolvedSession?.provider?.name
+            xml.codingAgentRemoteSessionId = resolvedSession?.remoteSessionId
+            xml.codingAgentNeedsFullContext = resolvedSession?.needsFullContext ?: true
+
+            val claudeSession = resolvedSession
+                ?.takeIf { it.provider == CodingAgentProvider.CLAUDE_CODE }
+            if (claudeSession != null) {
+                xml.claudeCodeSessionId = claudeSession.remoteSessionId
+                xml.claudeCodeNeedsFullContext = claudeSession.needsFullContext
+            } else {
+                xml.claudeCodeSessionId = session.claudeCodeSessionId
+                xml.claudeCodeNeedsFullContext = session.claudeCodeNeedsFullContext
+            }
+
             xml.plan = session.plan?.let { XmlTaskPlan.fromDomain(it) }
             return xml
         }
     }
+
+    @Attribute("codingAgentProvider")
+    var codingAgentProvider: String? = null
+
+    @Attribute("codingAgentRemoteSessionId")
+    var codingAgentRemoteSessionId: String? = null
+
+    @Attribute("codingAgentNeedsFullContext")
+    var codingAgentNeedsFullContext: Boolean = true
 }
 
 class ChatHistoryState {
