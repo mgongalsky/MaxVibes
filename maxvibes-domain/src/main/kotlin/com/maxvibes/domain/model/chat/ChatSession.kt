@@ -17,17 +17,23 @@ data class ChatSession(
     val clipboardStatus: ClipboardSessionStatus = ClipboardSessionStatus.IDLE,
     val selectedSpecificPromptName: String? = null,
     /**
-     * Claude Code session id returned by the CLI's first system event.
-     * Used for `claude --resume <id>` after IDE/process restart.
-     * Null if no Claude Code exchange has happened yet for this session.
+     * Provider-aware remote coding-agent session metadata.
+     *
+     * Null for sessions that have not started a coding-agent exchange yet.
+     * During migration, legacy Claude-specific fields below remain available
+     * so existing XML sessions and runtime code continue to work unchanged.
+     */
+    val codingAgentSession: CodingAgentSessionRef? = null,
+    /**
+     * Legacy Claude Code session id returned by the CLI's first system event.
+     * Kept temporarily for backward compatibility while persistence/runtime
+     * migrate to [codingAgentSession].
      */
     val claudeCodeSessionId: String? = null,
     /**
-     * When true, the next Claude Code send must include the full context
-     * (system prompt, history, file tree). Set to true:
-     *  - when the session is created (no claude-side state yet),
-     *  - after a failed `--resume` attempt that fell back to a fresh process.
-     * Cleared to false after the first successful send.
+     * Legacy Claude Code full-context flag.
+     * Kept temporarily for backward compatibility while persistence/runtime
+     * migrate to [codingAgentSession].
      */
     val claudeCodeNeedsFullContext: Boolean = true,
     /**
