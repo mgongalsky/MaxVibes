@@ -9,24 +9,16 @@ import com.maxvibes.domain.model.chat.MessageRole
 import com.maxvibes.domain.model.code.CodeViewRequest
 import com.maxvibes.domain.model.code.RequestedViewInfo
 
-/**
- * Executes the ordered side-effect intents produced by ClaudeCodeResponseProcessor.
- *
- * Transport concerns stay outside this class. The handler only interprets a normalized
- * ReceivedClaudeTurn, mutates dialog state, persists protocol metadata, and drives the
- * clipboard state machine.
- */
-internal class ClaudeCodeResponseHandler(
+internal class CodingAgentResponseHandler(
     private val chatSessionRepository: ChatSessionRepository,
     private val sessionManager: ClipboardSessionManager,
     private val pendingStore: PendingModificationsStore,
     private val sessionLog: ClaudeCodeSessionLogPort? = null,
     private val logger: LoggerPort? = null
 ) {
-
     fun handle(
         sessionId: String,
-        turn: ReceivedClaudeTurn,
+        turn: ReceivedCodingAgentTurn,
         state: ClipboardSessionState
     ): ClaudeCodeStepResult {
         val response = turn.response
@@ -47,9 +39,9 @@ internal class ClaudeCodeResponseHandler(
             )
         )
 
-        val outcome = ClaudeCodeResponseProcessor.process(
+        val outcome = CodingAgentResponseProcessor.process(
             response,
-            ClaudeCodeResponseProcessor.Context(
+            CodingAgentResponseProcessor.Context(
                 planOnly = state.planOnly,
                 inputTokens = turn.inputTokens,
                 outputTokens = turn.outputTokens,
@@ -62,7 +54,7 @@ internal class ClaudeCodeResponseHandler(
 
         outcome.intents.forEach { intent ->
             when (intent) {
-                is ClaudeCodeResponseProcessor.Intent.SavePlan ->
+                is CodingAgentResponseProcessor.Intent.SavePlan ->
                     chatSessionRepository.getSessionById(sessionId)?.let { current ->
                         chatSessionRepository.saveSession(current.withPlan(intent.plan))
                         log(
@@ -78,7 +70,7 @@ internal class ClaudeCodeResponseHandler(
                         )
                     }
 
-                is ClaudeCodeResponseProcessor.Intent.AppendAssistantHistory ->
+                is CodingAgentResponseProcessor.Intent.AppendAssistantHistory ->
                     state.dialogHistory.add(
                         ChatMessageDTO(
                             role = ChatRole.ASSISTANT,
@@ -86,10 +78,10 @@ internal class ClaudeCodeResponseHandler(
                         )
                     )
 
-                is ClaudeCodeResponseProcessor.Intent.PersistRequestedViews ->
+                is CodingAgentResponseProcessor.Intent.PersistRequestedViews ->
                     persistRequestedViews(sessionId, intent.views)
 
-                is ClaudeCodeResponseProcessor.Intent.Transition ->
+                is CodingAgentResponseProcessor.Intent.Transition ->
                     sessionManager.transition(
                         sessionId,
                         ClipboardEvent.ResponseReceived(
@@ -97,7 +89,7 @@ internal class ClaudeCodeResponseHandler(
                         )
                     )
 
-                is ClaudeCodeResponseProcessor.Intent.HoldPending -> {
+                is CodingAgentResponseProcessor.Intent.HoldPending -> {
                     pendingStore.hold(
                         sessionId = sessionId,
                         modifications = intent.modifications,

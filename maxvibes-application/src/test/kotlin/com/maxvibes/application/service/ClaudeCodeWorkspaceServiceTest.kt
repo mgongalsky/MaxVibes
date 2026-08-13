@@ -52,7 +52,7 @@ class ClaudeCodeWorkspaceServiceTest {
             )
         )
 
-        val failure = assertIs<ClaudeCodeWorkspaceResult.Failure>(result)
+        val failure = assertIs<CodingAgentWorkspaceResult.Failure>(result)
         assertTrue(failure.message.contains("Project not found"))
         assertNull(service.state)
         assertNull(service.owner)
@@ -80,7 +80,7 @@ class ClaudeCodeWorkspaceServiceTest {
             )
         )
 
-        val ready = assertIs<ClaudeCodeWorkspaceResult.Ready>(result)
+        val ready = assertIs<CodingAgentWorkspaceResult.Ready>(result)
         assertSame(ready.state, service.state)
         assertEquals(sessionId, service.owner)
         assertTrue(service.isOwnedBy(sessionId))
@@ -119,7 +119,7 @@ class ClaudeCodeWorkspaceServiceTest {
             )
         )
 
-        val state = assertIs<ClaudeCodeWorkspaceResult.Ready>(result).state
+        val state = assertIs<CodingAgentWorkspaceResult.Ready>(result).state
         assertEquals("Follow-up", state.currentMessage)
         assertFalse(state.planOnly)
         assertEquals("class Foo", state.allGatheredFiles["src/Foo.kt"])
@@ -166,7 +166,7 @@ class ClaudeCodeWorkspaceServiceTest {
             )
         )
 
-        val state = assertIs<ClaudeCodeWorkspaceResult.Ready>(result).state
+        val state = assertIs<CodingAgentWorkspaceResult.Ready>(result).state
         assertEquals(sessionId, service.owner)
         assertEquals("Continue now", state.currentMessage)
         assertTrue(state.planOnly)
@@ -197,7 +197,7 @@ class ClaudeCodeWorkspaceServiceTest {
             )
         )
 
-        val failure = assertIs<ClaudeCodeWorkspaceResult.Failure>(result)
+        val failure = assertIs<CodingAgentWorkspaceResult.Failure>(result)
         assertTrue(failure.message.contains("Cannot restore session state"))
         assertEquals("session-owner", service.owner)
         assertEquals("Owner task", service.state?.currentMessage)

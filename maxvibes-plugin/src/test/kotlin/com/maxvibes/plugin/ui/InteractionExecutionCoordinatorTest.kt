@@ -2,7 +2,6 @@ package com.maxvibes.plugin.ui
 
 import com.maxvibes.application.port.input.ContextAwareRequest
 import com.maxvibes.application.port.input.ContextAwareResult
-import com.maxvibes.application.service.ClaudeCodeStepResult
 import com.maxvibes.application.service.ClipboardStepResult
 import com.maxvibes.domain.model.chat.ChatSession
 import com.maxvibes.domain.model.command.CommandExecution
@@ -15,6 +14,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import com.intellij.openapi.progress.ProcessCanceledException
 import org.junit.jupiter.api.assertThrows
+import com.maxvibes.application.service.ClaudeCodeStepResult
 
 class InteractionExecutionCoordinatorTest {
     @Test

@@ -2,7 +2,7 @@ package com.maxvibes.plugin.ui
 
 import com.maxvibes.adapter.llm.dto.toChatMessageDTO
 import com.maxvibes.application.service.ChatTreeService
-import com.maxvibes.application.service.ClaudeCodeInteractionService
+import com.maxvibes.application.service.CodingAgentInteractionService
 import com.maxvibes.application.service.ClaudeCodeStepResult
 import com.maxvibes.domain.model.chat.ChatSession
 import com.maxvibes.domain.model.chat.MessageRole
@@ -30,7 +30,7 @@ import com.maxvibes.plugin.service.MaxVibesLogger
  * without running them never need the real service.
  */
 class ClaudeCodeDispatcher(
-    private val claudeCodeService: () -> ClaudeCodeInteractionService,
+    private val claudeCodeService: () -> CodingAgentInteractionService,
     private val resolveSpecificPrompt: (name: String?) -> String?,
     private val chatTreeService: ChatTreeService,
     private val callbacks: MessageFlowView,
@@ -57,10 +57,10 @@ class ClaudeCodeDispatcher(
 
         val fullMsg = buildString {
             append(userInput)
-            if (!trace.isNullOrBlank()) append("\n[trace: ${trace.lines().size} lines]")
-            if (!errs.isNullOrBlank()) append("\n[attached ide errors]")
-            if (isPlanOnly) append("\n[plan-only]")
-            if (images.isNotEmpty()) append("\n[🖼 ${images.size} image(s)]")
+            if (!trace.isNullOrBlank()) append(10.toChar()).append("[trace: ${trace.lines().size} lines]")
+            if (!errs.isNullOrBlank()) append(10.toChar()).append("[attached ide errors]")
+            if (isPlanOnly) append(10.toChar()).append("[plan-only]")
+            if (images.isNotEmpty()) append(10.toChar()).append("[🖼 ${images.size} image(s)]")
         }
         session = chatTreeService.addMessage(session.id, MessageRole.USER, fullMsg)
         callbacks.addUserMessageBubble(userInput, images)
@@ -144,9 +144,7 @@ class ClaudeCodeDispatcher(
                 )
                 result.diagram?.let { callbacks.showDiagramButton(it) }
                 if (result.skippedCommands > 0) {
-                    callbacks.appendToChat(
-                        "⚠️ ${result.skippedCommands} command(s) skipped — response mixed them with requestedViews"
-                    )
+                    callbacks.appendToChat("⚠️ ${result.skippedCommands} command(s) skipped — response mixed them with requestedViews")
                 }
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
@@ -187,27 +185,19 @@ class ClaudeCodeDispatcher(
                     appliedModifications = emptyList()
                 )
                 result.diagram?.let { callbacks.showDiagramButton(it) }
-                val proposal = result.proposedModifications.joinToString("\n") {
+                val proposal = result.proposedModifications.joinToString(10.toChar().toString()) {
                     "  • ${it.type}  ${it.path}"
                 }
-                callbacks.appendToChat(
-                    "📝 Proposed ${result.proposedModifications.size} modification(s):\n$proposal"
-                )
+                callbacks.appendToChat("📝 Proposed ${result.proposedModifications.size} modification(s):${10.toChar()}$proposal")
                 if (result.heldCommands > 0) {
-                    callbacks.appendToChat(
-                        "⚡ ${result.heldCommands} command(s) held — they run after the modifications are applied"
-                    )
+                    callbacks.appendToChat("⚡ ${result.heldCommands} command(s) held — they run after the modifications are applied")
                 }
                 if (result.skippedViews > 0) {
-                    callbacks.appendToChat(
-                        "⚠️ ${result.skippedViews} file request(s) skipped — response mixed them with modifications"
-                    )
+                    callbacks.appendToChat("⚠️ ${result.skippedViews} file request(s) skipped — response mixed them with modifications")
                 }
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
-                callbacks.setStatus(
-                    "🤖 ${result.proposedModifications.size} modification(s) awaiting approval — Approve to apply, or type to reject"
-                )
+                callbacks.setStatus("🤖 ${result.proposedModifications.size} modification(s) awaiting approval — Approve to apply, or type to reject")
             }
 
             is ClaudeCodeStepResult.AwaitingQuestions -> {
@@ -228,11 +218,12 @@ class ClaudeCodeDispatcher(
                     result.numTurns
                 )
 
-                val questionsBlock = result.questions.joinToString("\n\n") { question ->
+                val separator = 10.toChar().toString().repeat(2)
+                val questionsBlock = result.questions.joinToString(separator) { question ->
                     buildString {
-                        append("\u2753 ").append(question.question)
+                        append("❓ ").append(question.question)
                         question.options.forEachIndexed { index, option ->
-                            append("\n")
+                            append(10.toChar())
                                 .append(index + 1)
                                 .append(". ")
                                 .append(option)
@@ -243,7 +234,7 @@ class ClaudeCodeDispatcher(
                     val message = result.assistantMessage.trim()
                     if (message.isNotBlank()) {
                         append(message)
-                        append("\n\n")
+                        append(separator)
                     }
                     append(questionsBlock)
                 }
@@ -271,9 +262,7 @@ class ClaudeCodeDispatcher(
 
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
-                callbacks.setStatus(
-                    "\u2753 ${result.questions.size} question(s) — pick an option or type your answer"
-                )
+                callbacks.setStatus("❓ ${result.questions.size} question(s) — pick an option or type your answer")
             }
 
             is ClaudeCodeStepResult.Completed -> {
@@ -340,9 +329,7 @@ class ClaudeCodeDispatcher(
                         callbacks.updateBreadcrumb()
                         return
                     }
-                    callbacks.appendToChat(
-                        "⚠️ ${result.commands.size} command(s) skipped — fix failed modifications first"
-                    )
+                    callbacks.appendToChat("⚠️ ${result.commands.size} command(s) skipped — fix failed modifications first")
                 }
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
@@ -393,7 +380,7 @@ class ClaudeCodeDispatcher(
 
     /**
      * Formats the bubble-footer info line for Claude Code turns.
-     * Layout: `\u21911234 \u00B7 \u2193567 \u00B7 42s` — components are omitted when their value is zero.
+     * Layout: `↑1234 · ↓567 · 42s` — components are omitted when their value is zero.
      * Returns null when nothing meaningful is available so the bubble suppresses the footer.
      */
     private fun buildTokenInfoForClaudeCode(
@@ -404,12 +391,12 @@ class ClaudeCodeDispatcher(
         numTurns: Int? = null
     ): String? {
         val parts = mutableListOf<String>()
-        if (inTok > 0) parts += "\u2191${fmt(inTok)}"
-        if (outTok > 0) parts += "\u2193${fmt(outTok)}"
+        if (inTok > 0) parts += "↑${fmt(inTok)}"
+        if (outTok > 0) parts += "↓${fmt(outTok)}"
         if (durationMs >= 1000) parts += "${durationMs / 1000}s"
         numTurns?.takeIf { it > 1 }?.let { parts += "$it turns" }
-        costUsd?.takeIf { it > 0.0 }?.let { parts += "\$${String.format("%.4f", it)}" }
-        return if (parts.isEmpty()) null else parts.joinToString("  \u00B7  ")
+        costUsd?.takeIf { it > 0.0 }?.let { parts += "$${String.format("%.4f", it)}" }
+        return if (parts.isEmpty()) null else parts.joinToString("  ·  ")
     }
 
     private fun fmt(n: Int) = if (n >= 1000) "${n / 1000}k" else n.toString()

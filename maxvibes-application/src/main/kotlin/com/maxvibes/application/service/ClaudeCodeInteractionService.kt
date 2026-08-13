@@ -2,7 +2,6 @@ package com.maxvibes.application.service
 
 import com.maxvibes.application.port.output.ChatMessageDTO
 import com.maxvibes.application.port.output.ChatSessionRepository
-import com.maxvibes.application.port.output.ClaudeCodePort
 import com.maxvibes.application.port.output.ClaudeCodeSessionLogPort
 import com.maxvibes.application.port.output.CodeRepository
 import com.maxvibes.application.port.output.LoggerPort
@@ -11,17 +10,11 @@ import com.maxvibes.application.port.output.ProjectContextPort
 import com.maxvibes.application.port.output.PromptPort
 import com.maxvibes.domain.model.interaction.AttachedImage
 import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
+import com.maxvibes.application.port.output.CodingAgentCliPort
 
-/**
- * Thin application facade for Claude Code dialog mode.
- *
- * It routes public operations and coordinates specialized collaborators:
- * workspace lifecycle, requested views, transport turns, response handling,
- * and user approval. The facade is single-threaded by contract.
- */
-class ClaudeCodeInteractionService(
+class CodingAgentInteractionService(
     contextProvider: ProjectContextPort,
-    claudeCodePort: ClaudeCodePort,
+    claudeCodePort: CodingAgentCliPort,
     codeRepository: CodeRepository,
     notificationPort: NotificationPort,
     promptPort: PromptPort,
@@ -34,7 +27,7 @@ class ClaudeCodeInteractionService(
 ) {
     private val pendingStore = PendingModificationsStore()
 
-    private val viewResolver = ClaudeCodeViewResolver(
+    private val viewResolver = CodingAgentViewResolver(
         contextProvider = contextProvider,
         codeRepository = codeRepository,
         specificPromptService = specificPromptService,
@@ -42,7 +35,7 @@ class ClaudeCodeInteractionService(
         logger = logger
     )
 
-    private val responseHandler = ClaudeCodeResponseHandler(
+    private val responseHandler = CodingAgentResponseHandler(
         chatSessionRepository = chatSessionRepository,
         sessionManager = sessionManager,
         pendingStore = pendingStore,
@@ -67,7 +60,7 @@ class ClaudeCodeInteractionService(
         logger = logger
     )
 
-    private val approvalService = ClaudeCodeApprovalService(
+    private val approvalService = CodingAgentApprovalService(
         chatSessionRepository = chatSessionRepository,
         sessionManager = sessionManager,
         pendingStore = pendingStore,
@@ -116,8 +109,8 @@ class ClaudeCodeInteractionService(
             specificPromptContent = specificPromptContent
         )
     ) {
-        is ClaudeCodeApprovalOutcome.Continue -> send(outcome.command)
-        is ClaudeCodeApprovalOutcome.Immediate -> outcome.result
+        is CodingAgentApprovalOutcome.Continue -> send(outcome.command)
+        is CodingAgentApprovalOutcome.Immediate -> outcome.result
     }
 
     suspend fun submitCommandResults(
@@ -140,7 +133,7 @@ class ClaudeCodeInteractionService(
         }
 
         return send(
-            ClaudeCodeTurnCommand(
+            CodingAgentTurnCommand(
                 sessionId = sessionId,
                 commandResults = resultsForLlm
             )
@@ -219,8 +212,8 @@ class ClaudeCodeInteractionService(
             workspaceService.continueSession(command)
         }
         val state = when (workspaceResult) {
-            is ClaudeCodeWorkspaceResult.Ready -> workspaceResult.state
-            is ClaudeCodeWorkspaceResult.Failure ->
+            is CodingAgentWorkspaceResult.Ready -> workspaceResult.state
+            is CodingAgentWorkspaceResult.Failure ->
                 return error(workspaceResult.message)
         }
 
@@ -234,7 +227,7 @@ class ClaudeCodeInteractionService(
         }
 
         return send(
-            ClaudeCodeTurnCommand(
+            CodingAgentTurnCommand(
                 sessionId = command.sessionId,
                 freshFiles = freshFiles,
                 firstMessage = isFirst,
@@ -247,20 +240,20 @@ class ClaudeCodeInteractionService(
     }
 
     private suspend fun send(
-        command: ClaudeCodeTurnCommand
+        command: CodingAgentTurnCommand
     ): ClaudeCodeStepResult {
         val state = workspaceService.state
             ?: return error("No active workspace")
 
         return when (val execution = turnExecutor.execute(command, state)) {
-            is ClaudeCodeTurnExecutionResult.Success ->
+            is CodingAgentTurnExecutionResult.Success ->
                 responseHandler.handle(
                     sessionId = command.sessionId,
                     turn = execution.turn,
                     state = state
                 )
 
-            is ClaudeCodeTurnExecutionResult.Failure ->
+            is CodingAgentTurnExecutionResult.Failure ->
                 execution.result
         }
     }
@@ -276,3 +269,5 @@ class ClaudeCodeInteractionService(
         return ClaudeCodeStepResult.Error(message)
     }
 }
+
+typealias ClaudeCodeInteractionService = CodingAgentInteractionService

@@ -227,7 +227,7 @@ class ClaudeCodeViewResolverTest {
 
     private fun resolver(
         specificPromptService: SpecificPromptService? = null
-    ) = ClaudeCodeViewResolver(
+    ) = CodingAgentViewResolver(
         contextProvider = contextProvider,
         codeRepository = codeRepository,
         specificPromptService = specificPromptService,

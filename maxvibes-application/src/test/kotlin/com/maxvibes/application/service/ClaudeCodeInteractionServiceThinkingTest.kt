@@ -27,6 +27,7 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import com.maxvibes.domain.model.chat.CodingAgentProvider
 
 /**
  * ThinkingBubble: verifies that the full CLI thinking text delivered via
@@ -63,7 +64,7 @@ class ClaudeCodeInteractionServiceThinkingTest {
         chatSessionRepository = mockk()
 
         coEvery { contextProvider.getProjectContext() } returns Result.Success(testProjectContext())
-        every { promptPort.claudeCodeSystem() } returns "CLAUDE CODE SYSTEM PROMPT"
+        every { promptPort.codingAgentSystem(CodingAgentProvider.CLAUDE_CODE) } returns "CLAUDE CODE SYSTEM PROMPT"
         every { sessionManager.statusFor(sessionId) } returns ClipboardSessionStatus.IDLE
         every { sessionManager.transition(sessionId, any()) } returns true
         every { chatSessionRepository.getSessionById(sessionId) } returns ChatSession(id = sessionId)

@@ -2,41 +2,36 @@ package com.maxvibes.application.service
 
 import com.maxvibes.application.port.output.ChatSessionRepository
 import com.maxvibes.application.port.output.ClaudeCodeError
-import com.maxvibes.application.port.output.ClaudeCodePort
-import com.maxvibes.application.port.output.ClaudeCodeSendResult
 import com.maxvibes.application.port.output.ClaudeCodeSessionLogPort
 import com.maxvibes.application.port.output.LoggerPort
 import com.maxvibes.application.port.output.NotificationPort
 import com.maxvibes.shared.result.Result
+import com.maxvibes.application.port.output.CodingAgentCliPort
+import com.maxvibes.application.port.output.CodingAgentCliSendResult
+import com.maxvibes.domain.model.chat.CodingAgentProvider
+import com.maxvibes.domain.model.chat.CodingAgentSessionRef
 
-/**
- * Executes one transport-level Claude Code turn.
- *
- * Owns request assembly, process startup/resume fallback, token accounting,
- * transport execution and persisted Claude session metadata. Response semantics
- * are intentionally delegated to ClaudeCodeResponseHandler.
- */
 internal class ClaudeCodeTurnExecutor(
-    private val claudeCodePort: ClaudeCodePort,
+    private val claudeCodePort: CodingAgentCliPort,
     private val chatSessionRepository: ChatSessionRepository,
     private val notificationPort: NotificationPort,
     private val sessionLog: ClaudeCodeSessionLogPort? = null,
     private val streamHub: AgentStreamHub? = null,
     private val logger: LoggerPort? = null
 ) {
-
     suspend fun execute(
-        command: ClaudeCodeTurnCommand,
+        command: CodingAgentTurnCommand,
         state: ClipboardSessionState
-    ): ClaudeCodeTurnExecutionResult {
+    ): CodingAgentTurnExecutionResult {
         val sessionId = command.sessionId
         streamHub?.begin(sessionId)
         var session = chatSessionRepository.getSessionById(sessionId)
-            ?: return ClaudeCodeTurnExecutionResult.Failure(
+            ?: return CodingAgentTurnExecutionResult.Failure(
                 ClaudeCodeStepResult.Error("Session not found: $sessionId")
             )
 
-        val needsFull = command.firstMessage || session.claudeCodeNeedsFullContext
+        var sessionRef = session.resolvedCodingAgentSession(CodingAgentProvider.CLAUDE_CODE)
+        val needsFull = command.firstMessage || sessionRef?.needsFullContext != false
         var request = ClaudeCodeRequestFactory.create(
             state = state,
             freshFiles = command.freshFiles,
@@ -50,7 +45,7 @@ internal class ClaudeCodeTurnExecutor(
         )
 
         var ensureResult = claudeCodePort.ensureStarted(
-            resumeSessionId = session.claudeCodeSessionId,
+            resumeSessionId = sessionRef?.remoteSessionId,
             systemPrompt = state.prompts.chatSystem
         )
 
@@ -65,10 +60,12 @@ internal class ClaudeCodeTurnExecutor(
                 mapOf("claudeSessionId" to resumeFailure.sessionId)
             )
 
-            session = session.copy(
-                claudeCodeSessionId = null,
-                claudeCodeNeedsFullContext = true
+            sessionRef = CodingAgentSessionRef(
+                provider = CodingAgentProvider.CLAUDE_CODE,
+                remoteSessionId = null,
+                needsFullContext = true
             )
+            session = session.withCodingAgentSession(sessionRef)
             chatSessionRepository.saveSession(session)
 
             request = ClaudeCodeRequestFactory.create(
@@ -89,7 +86,7 @@ internal class ClaudeCodeTurnExecutor(
         }
 
         if (ensureResult is Result.Failure) {
-            return ClaudeCodeTurnExecutionResult.Failure(
+            return CodingAgentTurnExecutionResult.Failure(
                 ClaudeCodeStepResult.TransportError(
                     transportErrorMessage(ensureResult.error)
                 )
@@ -120,12 +117,12 @@ internal class ClaudeCodeTurnExecutor(
 
         return when (sendResult) {
             is Result.Success -> {
-                val payload: ClaudeCodeSendResult = sendResult.value
+                val payload: CodingAgentCliSendResult = sendResult.value
                 persistObservedSession(payload, session)
                 val stats = payload.stats
 
-                ClaudeCodeTurnExecutionResult.Success(
-                    ReceivedClaudeTurn(
+                CodingAgentTurnExecutionResult.Success(
+                    ReceivedCodingAgentTurn(
                         response = payload.response,
                         inputTokens = stats?.inputTokens?.takeIf { it > 0 }
                             ?: estimatedInputTokens,
@@ -149,7 +146,7 @@ internal class ClaudeCodeTurnExecutor(
                         "elapsedMs" to measuredDurationMs
                     )
                 )
-                ClaudeCodeTurnExecutionResult.Failure(
+                CodingAgentTurnExecutionResult.Failure(
                     ClaudeCodeStepResult.TransportError(
                         transportErrorMessage(sendResult.error)
                     )
@@ -169,15 +166,19 @@ internal class ClaudeCodeTurnExecutor(
     }
 
     private fun persistObservedSession(
-        payload: ClaudeCodeSendResult,
+        payload: CodingAgentCliSendResult,
         session: com.maxvibes.domain.model.chat.ChatSession
     ) {
+        val current = session.resolvedCodingAgentSession(CodingAgentProvider.CLAUDE_CODE)
         val observedId = payload.observedSessionId
-        if (observedId != null || session.claudeCodeNeedsFullContext) {
+        if (observedId != null || current == null || current.needsFullContext) {
             chatSessionRepository.saveSession(
-                session.copy(
-                    claudeCodeSessionId = observedId ?: session.claudeCodeSessionId,
-                    claudeCodeNeedsFullContext = false
+                session.withCodingAgentSession(
+                    CodingAgentSessionRef(
+                        provider = CodingAgentProvider.CLAUDE_CODE,
+                        remoteSessionId = observedId ?: current?.remoteSessionId,
+                        needsFullContext = false
+                    )
                 )
             )
         }
@@ -215,12 +216,12 @@ internal class ClaudeCodeTurnExecutor(
     }
 }
 
-internal sealed interface ClaudeCodeTurnExecutionResult {
+internal sealed interface CodingAgentTurnExecutionResult {
     data class Success(
-        val turn: ReceivedClaudeTurn
-    ) : ClaudeCodeTurnExecutionResult
+        val turn: ReceivedCodingAgentTurn
+    ) : CodingAgentTurnExecutionResult
 
     data class Failure(
         val result: ClaudeCodeStepResult
-    ) : ClaudeCodeTurnExecutionResult
+    ) : CodingAgentTurnExecutionResult
 }

@@ -17,7 +17,6 @@ import com.maxvibes.application.port.input.ModifyCodeUseCase
 import com.maxvibes.application.port.output.*
 import com.maxvibes.application.service.AnalyzeCodeService
 import com.maxvibes.application.service.ChatTreeService
-import com.maxvibes.application.service.ClaudeCodeInteractionService
 import com.maxvibes.application.service.ClipboardInteractionService
 import com.maxvibes.application.service.ClipboardSessionManager
 import com.maxvibes.application.service.ContextAwareModifyService
@@ -50,6 +49,7 @@ import com.maxvibes.application.port.input.ExecuteCommandUseCase
 import com.maxvibes.application.port.output.CommandRunnerPort
 import com.maxvibes.application.service.CommandExecutionService
 import com.maxvibes.plugin.command.ProcessCommandRunner
+import com.maxvibes.application.service.CodingAgentInteractionService
 
 /**
  * Main service for MaxVibes plugin.
@@ -260,14 +260,14 @@ class MaxVibesService(private val project: Project) : Disposable {
     private val claudeCodeAdapter: ClaudeCodeProcessAdapter by claudeCodeAdapterLazy
 
     /**
-     * Application service that orchestrates the Claude Code dialog flow.
+     * Application service that orchestrates the coding-agent dialog flow.
      *
-     * Uses the same [ClipboardSessionManager] as [clipboardService] — the
-     * manager is protocol-agnostic and handles both AWAITING_PASTE (clipboard)
-     * and AWAITING_APPROVE (Claude Code) transitions after Step 6.
+     * Claude Code is currently the configured provider. Provider selection is
+     * introduced separately; the application flow itself is provider-independent.
+     * Uses the same [ClipboardSessionManager] as [clipboardService].
      */
-    val claudeCodeService: ClaudeCodeInteractionService by lazy {
-        ClaudeCodeInteractionService(
+    val claudeCodeService: CodingAgentInteractionService by lazy {
+        CodingAgentInteractionService(
             contextProvider = projectContextProvider,
             claudeCodePort = claudeCodeAdapter,
             codeRepository = codeRepository,
