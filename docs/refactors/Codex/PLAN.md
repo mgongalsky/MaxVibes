@@ -8,12 +8,12 @@ The final architecture has one provider-independent coding-agent application flo
 
 ## Terminology
 
-- Coding agent — generic product category. Claude Code and Codex are coding agents.
-- Coding-agent provider — selected implementation, for example Claude Code or Codex.
-- Coding-agent CLI — local transport boundary used by MaxVibes to communicate with a coding-agent runtime.
-- Provider adapter — provider-specific implementation of the common transport contract.
+- **Coding agent** — generic product category. Claude Code and Codex are coding agents.
+- **Coding-agent provider** — selected implementation, for example Claude Code or Codex.
+- **Coding-agent CLI** — local transport boundary used by MaxVibes to communicate with a coding-agent runtime.
+- **Provider adapter** — provider-specific implementation of the common transport contract.
 
-Canonical generic layer:
+### Canonical generic layer
 
 - `CodingAgentCliPort`
 - `CodingAgentCliError`
@@ -24,7 +24,7 @@ Canonical generic layer:
 - `AgentStreamHub`
 - `CodingAgentSessionRef`
 
-Provider-specific layer:
+### Provider-specific layer
 
 - `ClaudeCodeProcessAdapter`
 - `StreamJsonEventParser`
@@ -35,7 +35,7 @@ Do not use `LLM` for this abstraction. Claude Code and Codex expose session life
 
 ## Architectural rule
 
-Generic above the transport seam, provider-specific below it.
+**Generic above the transport seam, provider-specific below it.**
 
 `UI -> CodingAgentInteractionService -> CodingAgentCliPort -> provider adapter`
 
@@ -51,7 +51,7 @@ Claude Code and Codex now share the same application orchestration. Provider-spe
 
 The existing `InteractionMode.CLAUDE_CODE` value remains as a backward-compatible persisted id, while the UI exposes the mode as **Coding Agent** and stores the concrete provider separately.
 
-Codex uses persistent App Server transport and was smoke-tested on Windows against Codex 0.147.0.
+Codex uses persistent App Server transport and was smoke-tested on Windows against **Codex 0.147.0**.
 
 Verified real lifecycle:
 
@@ -68,15 +68,15 @@ Real smoke testing also identified and fixed nested token-usage parsing and resu
 
 ## Refactor sequence
 
-1. Current architecture — map the existing Claude Code vertical slice. DONE.
-2. Seams — identify generic vs provider-specific responsibilities. DONE.
-3. CodingAgent CLI contract — introduce provider-independent transport types with compatibility aliases. DONE.
-4. CodingAgent interaction — migrate application orchestration from Claude-specific names to a shared coding-agent flow. DONE.
-5. Session and prompts — replace Claude-only persisted session metadata and prompt lookup with provider-aware structures while preserving XML backward compatibility. DONE.
-6. Codex adapter — implement Codex App Server transport and map JSON-RPC notifications to normalized coding-agent events. DONE.
-7. Wiring and UI — add provider selection without duplicating dispatcher, background execution or approval flows. DONE.
-8. Tests — preserve characterization coverage, add provider contract tests and run Codex smoke tests. DONE.
-9. Extension guide — document what a future coding-agent adapter must implement. DONE.
+1. Current architecture — map the existing Claude Code vertical slice. **DONE**
+2. Seams — identify generic vs provider-specific responsibilities. **DONE**
+3. CodingAgent CLI contract — introduce provider-independent transport types with compatibility aliases. **DONE**
+4. CodingAgent interaction — migrate application orchestration from Claude-specific names to a shared coding-agent flow. **DONE**
+5. Session and prompts — replace Claude-only persisted session metadata and prompt lookup with provider-aware structures while preserving XML backward compatibility. **DONE**
+6. Codex adapter — implement Codex App Server transport and map JSON-RPC notifications to normalized coding-agent events. **DONE**
+7. Wiring and UI — add provider selection without duplicating dispatcher, background execution or approval flows. **DONE**
+8. Tests — preserve characterization coverage, add provider contract tests and run Codex smoke tests. **DONE**
+9. Extension guide — document what a future coding-agent adapter must implement. **DONE**
 
 ## Constraints preserved
 
