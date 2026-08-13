@@ -75,4 +75,56 @@ class CodexAppServerLineParserTest {
         assertFalse(tool.ok)
         assertTrue(tool.summary.orEmpty().contains("gradle test"))
     }
+
+    @Test
+    fun `parses thread started notification`() {
+        val line = parser.parse(
+            "{\"method\":\"thread/started\",\"params\":{\"thread\":{\"id\":\"thr-42\",\"model\":\"gpt-test\"}}}"
+        )
+
+        val started = assertIs<CodexAppServerLineParser.Line.ThreadStarted>(line)
+        assertEquals("thr-42", started.threadId)
+        assertEquals("gpt-test", started.model)
+    }
+
+    @Test
+    fun `parses reasoning delta separately from narration`() {
+        val line = parser.parse(
+            "{\"method\":\"item/reasoning/summaryTextDelta\",\"params\":{\"itemId\":\"reason-1\",\"delta\":\"thinking\"}}"
+        )
+
+        val delta = assertIs<CodexAppServerLineParser.Line.ReasoningDelta>(line)
+        assertEquals("reason-1", delta.itemId)
+        assertEquals("thinking", delta.text)
+    }
+
+    @Test
+    fun `parses rpc error response without throwing`() {
+        val line = parser.parse(
+            "{\"id\":9,\"error\":{\"code\":-32602,\"message\":\"bad params\"}}"
+        )
+
+        val response = assertIs<CodexAppServerLineParser.Line.Response>(line)
+        assertEquals(9L, response.id)
+        assertEquals(-32602, response.error?.code)
+        assertEquals("bad params", response.error?.message)
+    }
+
+    @Test
+    fun `malformed json becomes unknown instead of failing parser`() {
+        val line = parser.parse("not-json")
+
+        val unknown = assertIs<CodexAppServerLineParser.Line.Unknown>(line)
+        assertEquals(null, unknown.method)
+    }
+
+    @Test
+    fun `unknown notification is preserved as unknown method`() {
+        val line = parser.parse(
+            "{\"method\":\"future/newNotification\",\"params\":{}}"
+        )
+
+        val unknown = assertIs<CodexAppServerLineParser.Line.Unknown>(line)
+        assertEquals("future/newNotification", unknown.method)
+    }
 }
