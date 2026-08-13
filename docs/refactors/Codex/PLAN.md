@@ -4,7 +4,7 @@
 
 Add OpenAI Codex alongside Claude Code without creating a second copy of the existing interaction stack.
 
-The target architecture has one provider-independent coding-agent application flow and separate provider adapters.
+The final architecture has one provider-independent coding-agent application flow and separate provider adapters.
 
 ## Terminology
 
@@ -13,23 +13,23 @@ The target architecture has one provider-independent coding-agent application fl
 - Coding-agent CLI — local transport boundary used by MaxVibes to communicate with a coding-agent runtime.
 - Provider adapter — provider-specific implementation of the common transport contract.
 
-Preferred generic names:
+Canonical generic layer:
 
 - `CodingAgentCliPort`
 - `CodingAgentCliError`
 - `CodingAgentCliSendResult`
 - `CodingAgentProvider`
 - `CodingAgentInteractionService`
-- `CodingAgentStreamEvent`
-- `CodingAgentStreamHub`
-- `CodingAgentSessionRef` or equivalent provider-aware session metadata
+- `AgentStreamEvent`
+- `AgentStreamHub`
+- `CodingAgentSessionRef`
 
-Provider-specific names stay explicit:
+Provider-specific layer:
 
 - `ClaudeCodeProcessAdapter`
 - `StreamJsonEventParser`
 - `CodexAppServerAdapter`
-- `CodexAppServerEventParser`
+- `CodexAppServerLineParser`
 
 Do not use `LLM` for this abstraction. Claude Code and Codex expose session lifecycle, streaming, interruption and coding-agent runtime behavior beyond a plain model call.
 
@@ -37,26 +37,34 @@ Do not use `LLM` for this abstraction. Claude Code and Codex expose session life
 
 Generic above the transport seam, provider-specific below it.
 
-`text
-UI
--> CodingAgentInteractionService
--> CodingAgentCliPort
--> ClaudeCodeProcessAdapter
--> CodexAppServerAdapter
+`UI -> CodingAgentInteractionService -> CodingAgentCliPort -> provider adapter`
 
-Both adapters emit normalized coding-agent stream events.
-Both adapters exchange the common MaxVibes request/response protocol.
-`
+Both adapters emit normalized stream events and exchange the common MaxVibes request/response protocol.
 
-The raw Claude stream-JSON parser and Codex JSON-RPC parser remain separate. Their common output is a normalized coding-agent event model, not a shared wire parser.
+Raw Claude stream-JSON and Codex JSON-RPC parsing remain separate.
 
-## Current state
+## Final state
 
-Steps 1–4 are complete.
+The integration is complete.
 
-The application flow now exposes the canonical `CodingAgentInteractionService` and provider-independent response, approval and requested-view components. Claude-specific workspace, turn execution, session metadata, prompts, logging and transport remain explicit where they still encode provider behavior.
+Claude Code and Codex now share the same application orchestration. Provider-specific behavior is isolated in transport, parser, prompt-delivery policy and CLI settings.
 
-Step 5 is now active: migrate persisted session metadata and prompt selection to provider-aware structures while preserving existing Claude sessions.
+The existing `InteractionMode.CLAUDE_CODE` value remains as a backward-compatible persisted id, while the UI exposes the mode as **Coding Agent** and stores the concrete provider separately.
+
+Codex uses persistent App Server transport and was smoke-tested on Windows against Codex 0.147.0.
+
+Verified real lifecycle:
+
+`initialize -> thread/start|thread/resume -> turn/start -> streamed events -> authoritative response -> turn/completed`
+
+Cold resume restores conversation history.
+
+Codex start and resume explicitly enforce:
+
+- `approvalPolicy = never`
+- `sandbox = read-only`
+
+Real smoke testing also identified and fixed nested token-usage parsing and resume safety-policy loss.
 
 ## Refactor sequence
 
@@ -64,25 +72,29 @@ Step 5 is now active: migrate persisted session metadata and prompt selection to
 2. Seams — identify generic vs provider-specific responsibilities. DONE.
 3. CodingAgent CLI contract — introduce provider-independent transport types with compatibility aliases. DONE.
 4. CodingAgent interaction — migrate application orchestration from Claude-specific names to a shared coding-agent flow. DONE.
-5. Session and prompts — replace Claude-only persisted session metadata and prompt lookup with provider-aware structures while preserving XML backward compatibility. IN PROGRESS.
-6. Codex adapter — implement Codex App Server transport and map JSON-RPC notifications to normalized coding-agent events.
-7. Wiring and UI — add provider selection without duplicating dispatcher, background execution or approval flows.
-8. Tests — preserve characterization coverage, add provider contract tests and run Codex smoke tests.
-9. Extension guide — document what a future coding-agent adapter must implement.
+5. Session and prompts — replace Claude-only persisted session metadata and prompt lookup with provider-aware structures while preserving XML backward compatibility. DONE.
+6. Codex adapter — implement Codex App Server transport and map JSON-RPC notifications to normalized coding-agent events. DONE.
+7. Wiring and UI — add provider selection without duplicating dispatcher, background execution or approval flows. DONE.
+8. Tests — preserve characterization coverage, add provider contract tests and run Codex smoke tests. DONE.
+9. Extension guide — document what a future coding-agent adapter must implement. DONE.
 
-## Constraints
+## Constraints preserved
 
-- Keep Claude Code green after every step.
-- No second full `CodexInteractionService` or `CodexDispatcher` stack.
-- No provider-specific fields such as `codexThreadId` added independently to `ChatSession`.
-- Preserve old XML sessions during persistence migration.
-- Do not generalize raw provider protocols prematurely.
-- Prefer small compatibility seams over one large rename.
+- Claude Code stayed green during migration.
+- No second `CodexInteractionService` / `CodexDispatcher` stack was introduced.
+- No provider-specific Codex session field was added independently to `ChatSession`.
+- Existing Claude persistence remains supported through compatibility fields/aliases.
+- Raw provider protocols were not prematurely generalized.
+- Coding-agent runtimes remain behind the MaxVibes project-edit boundary.
 
-## Commit checkpoints
+## Documentation
 
-The generic transport seam and generic application flow are now established independently.
+- `STEP_7_Wiring.md` — provider selection, service/UI wiring and lifecycle.
+- `STEP_8_Tests.md` — automated coverage and real Codex smoke findings.
+- `STEP_9_ExtensionGuide.md` — recipe for adding another coding-agent provider.
 
-Next checkpoint:
+## Final checkpoint
 
-`refactor: add provider-aware coding agent sessions`
+Suggested commit:
+
+`docs: complete Codex integration guide`
