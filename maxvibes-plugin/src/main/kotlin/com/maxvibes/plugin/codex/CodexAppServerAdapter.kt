@@ -295,13 +295,13 @@ class CodexAppServerAdapter(
     }
 
     private suspend fun resumeThread(threadId: String): Result<Unit, ClaudeCodeError> {
+        val params = buildJsonObject {
+            buildThreadParams().forEach { (key, value) -> put(key, value) }
+            put("threadId", threadId)
+        }
         val response = rpcRequest(
             method = "thread/resume",
-            params = buildJsonObject {
-                put("threadId", threadId)
-                put("approvalPolicy", "never")
-                put("sandbox", "read-only")
-            },
+            params = params,
             timeoutMs = settings.codexStartTimeoutSec.toLong() * 1000
         ) ?: return Result.Failure(ClaudeCodeError.Timeout)
         response.error?.let {
