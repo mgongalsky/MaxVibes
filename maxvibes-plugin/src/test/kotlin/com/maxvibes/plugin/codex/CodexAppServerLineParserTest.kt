@@ -45,12 +45,12 @@ class CodexAppServerLineParserTest {
     @Test
     fun `parses token usage`() {
         val line = parser.parse(
-            "{\"method\":\"thread/tokenUsage/updated\",\"params\":{\"tokenUsage\":{\"inputTokens\":12,\"outputTokens\":5}}}"
+            "{\"method\":\"thread/tokenUsage/updated\",\"params\":{\"tokenUsage\":{\"total\":{\"totalTokens\":13731,\"inputTokens\":13718,\"cachedInputTokens\":11008,\"outputTokens\":13,\"reasoningOutputTokens\":0},\"last\":{\"inputTokens\":13718,\"outputTokens\":13}}}}"
         )
 
         val usage = assertIs<CodexAppServerLineParser.Line.TokenUsage>(line)
-        assertEquals(12, usage.inputTokens)
-        assertEquals(5, usage.outputTokens)
+        assertEquals(13718, usage.inputTokens)
+        assertEquals(13, usage.outputTokens)
     }
 
     @Test

@@ -199,10 +199,10 @@ internal class CodexAppServerLineParser {
     }
 
     private fun parseTokenUsage(params: JsonObject): Line {
-        val usage = params.obj("tokenUsage")
+        val usageRoot = params.obj("tokenUsage")
             ?: params.obj("usage")
-            ?: params.obj("total")
             ?: params
+        val usage = usageRoot.obj("total") ?: usageRoot
         val input = usage.intAny("inputTokens", "input_tokens")
         val output = usage.intAny("outputTokens", "output_tokens")
         return Line.TokenUsage(input, output)
