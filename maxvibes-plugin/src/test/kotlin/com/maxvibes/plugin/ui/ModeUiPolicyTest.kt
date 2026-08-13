@@ -94,21 +94,21 @@ class ModeUiPolicyTest {
     }
 
     @Test
-    fun `claude code labels the indicator by status`() {
+    fun `coding agent labels the indicator by status`() {
         assertEquals(
-            "\uD83E\uDD16 Awaiting Approve",
+            "🤖 Awaiting Approve",
             decide(InteractionMode.CLAUDE_CODE, ClipboardSessionStatus.AWAITING_APPROVE).indicatorText
         )
         assertEquals(
-            "\uD83E\uDD16 Active",
+            "🤖 Active",
             decide(InteractionMode.CLAUDE_CODE, ClipboardSessionStatus.SESSION_ACTIVE).indicatorText
         )
         assertEquals(
-            "\uD83E\uDD16 Claude Code",
+            "🤖 Coding Agent",
             decide(InteractionMode.CLAUDE_CODE, ClipboardSessionStatus.IDLE).indicatorText
         )
         assertEquals(
-            "\uD83E\uDD16 Claude Code",
+            "🤖 Coding Agent",
             decide(InteractionMode.CLAUDE_CODE, ClipboardSessionStatus.AWAITING_PASTE).indicatorText
         )
     }

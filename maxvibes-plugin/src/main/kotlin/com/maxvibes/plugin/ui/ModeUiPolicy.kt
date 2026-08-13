@@ -115,10 +115,10 @@ object ModeUiPolicy {
         sendButtonText = "Send",
         indicatorVisible = true,
         indicatorText = when (status) {
-            ClipboardSessionStatus.AWAITING_APPROVE -> "\uD83E\uDD16 Awaiting Approve"
-            ClipboardSessionStatus.SESSION_ACTIVE -> "\uD83E\uDD16 Active"
+            ClipboardSessionStatus.AWAITING_APPROVE -> "🤖 Awaiting Approve"
+            ClipboardSessionStatus.SESSION_ACTIVE -> "🤖 Active"
             ClipboardSessionStatus.IDLE,
-            ClipboardSessionStatus.AWAITING_PASTE -> "\uD83E\uDD16 Claude Code"
+            ClipboardSessionStatus.AWAITING_PASTE -> "🤖 Coding Agent"
         },
         ccLogLinkVisible = ccLogLinkVisible,
         dryRunVisible = false,

@@ -33,6 +33,7 @@ class MaxVibesSettings : PersistentStateComponent<MaxVibesSettings.State> {
 
         // ===== Interaction Mode =====
         var interactionMode: String = "API",
+        var codingAgentProvider: String = "CLAUDE_CODE",
 
         // ===== Cheap LLM (for CHEAP_API mode) =====
         var cheapProvider: String = "ANTHROPIC",
@@ -112,6 +113,11 @@ class MaxVibesSettings : PersistentStateComponent<MaxVibesSettings.State> {
         get() = myState.interactionMode
         set(value) {
             myState.interactionMode = value
+        }
+    var codingAgentProvider: String
+        get() = myState.codingAgentProvider
+        set(value) {
+            myState.codingAgentProvider = value
         }
 
     // ===== Cheap LLM =====
@@ -366,12 +372,15 @@ class MaxVibesSettings : PersistentStateComponent<MaxVibesSettings.State> {
             "OLLAMA" to "Ollama (Free, Local)"
         )
 
-        /** Interaction mode display names */
         val INTERACTION_MODES = listOf(
-            "API" to "\uD83D\uDD0C API (Direct, pay-per-token)",
-            "CLIPBOARD" to "\uD83D\uDCCB Clipboard (Copy-paste, subscription)",
-            "CHEAP_API" to "\uD83D\uDCB0 Cheap API (Budget model)",
-            "CLAUDE_CODE" to "\uD83E\uDD16 Claude Code (Local CLI)"
+            "API" to "🔌 API (Direct, pay-per-token)",
+            "CLIPBOARD" to "📋 Clipboard (Copy-paste, subscription)",
+            "CHEAP_API" to "💰 Cheap API (Budget model)",
+            "CLAUDE_CODE" to "🤖 Coding Agent (Local CLI)"
+        )
+        val CODING_AGENT_PROVIDERS = listOf(
+            "CLAUDE_CODE" to "Claude Code",
+            "CODEX" to "Codex"
         )
     }
 }

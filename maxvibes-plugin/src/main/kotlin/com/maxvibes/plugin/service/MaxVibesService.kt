@@ -50,6 +50,8 @@ import com.maxvibes.application.port.output.CommandRunnerPort
 import com.maxvibes.application.service.CommandExecutionService
 import com.maxvibes.plugin.command.ProcessCommandRunner
 import com.maxvibes.application.service.CodingAgentInteractionService
+import com.maxvibes.plugin.codex.CodexAppServerAdapter
+import com.maxvibes.domain.model.chat.CodingAgentProvider
 
 /**
  * Main service for MaxVibes plugin.
@@ -251,6 +253,15 @@ class MaxVibesService(private val project: Project) : Disposable {
             streamSink = agentStreamHub
         )
     }
+    private val codexAdapterLazy: Lazy<CodexAppServerAdapter> = lazy {
+        CodexAppServerAdapter(
+            settings = MaxVibesSettings.getInstance(),
+            scope = serviceScope,
+            workingDirectory = project.basePath,
+            sessionLog = claudeCodeSessionLog,
+            streamSink = agentStreamHub
+        )
+    }
 
     /**
      * Single per-project [ClaudeCodePort] adapter.
@@ -258,15 +269,12 @@ class MaxVibesService(private val project: Project) : Disposable {
      * [ClaudeCodeProcessAdapter.ensureStarted] — not on construction.
      */
     private val claudeCodeAdapter: ClaudeCodeProcessAdapter by claudeCodeAdapterLazy
+    private val codexAdapter: CodexAppServerAdapter by codexAdapterLazy
+    private fun selectedCodingAgentProvider(): CodingAgentProvider = runCatching {
+        CodingAgentProvider.valueOf(MaxVibesSettings.getInstance().codingAgentProvider)
+    }.getOrDefault(CodingAgentProvider.CLAUDE_CODE)
 
-    /**
-     * Application service that orchestrates the coding-agent dialog flow.
-     *
-     * Claude Code is currently the configured provider. Provider selection is
-     * introduced separately; the application flow itself is provider-independent.
-     * Uses the same [ClipboardSessionManager] as [clipboardService].
-     */
-    val claudeCodeService: CodingAgentInteractionService by lazy {
+    private val claudeCodeInteractionServiceLazy: Lazy<CodingAgentInteractionService> = lazy {
         CodingAgentInteractionService(
             contextProvider = projectContextProvider,
             claudeCodePort = claudeCodeAdapter,
@@ -278,9 +286,32 @@ class MaxVibesService(private val project: Project) : Disposable {
             chatSessionRepository = chatSessionRepository,
             sessionLog = claudeCodeSessionLog,
             specificPromptService = specificPromptService,
-            streamHub = agentStreamHub
+            streamHub = agentStreamHub,
+            provider = CodingAgentProvider.CLAUDE_CODE
         )
     }
+    private val codexInteractionServiceLazy: Lazy<CodingAgentInteractionService> = lazy {
+        CodingAgentInteractionService(
+            contextProvider = projectContextProvider,
+            claudeCodePort = codexAdapter,
+            codeRepository = codeRepository,
+            notificationPort = notificationPort,
+            promptPort = promptPort,
+            logger = MaxVibesLogger,
+            sessionManager = clipboardSessionManager,
+            chatSessionRepository = chatSessionRepository,
+            sessionLog = claudeCodeSessionLog,
+            specificPromptService = specificPromptService,
+            streamHub = agentStreamHub,
+            provider = CodingAgentProvider.CODEX
+        )
+    }
+
+    val claudeCodeService: CodingAgentInteractionService
+        get() = when (selectedCodingAgentProvider()) {
+            CodingAgentProvider.CLAUDE_CODE -> claudeCodeInteractionServiceLazy.value
+            CodingAgentProvider.CODEX -> codexInteractionServiceLazy.value
+        }
 
     /**
      * Live-stream hub for the Claude Code mode: the adapter emits AgentStreamEvents
@@ -292,15 +323,14 @@ class MaxVibesService(private val project: Project) : Disposable {
         AgentStreamHub()
     }
 
-    /**
-     * Kills the Claude Code process tree mid-turn (Stop button). The in-flight send
-     * completes with ClaudeCodeError.Aborted. No-op when the adapter was never created -
-     * guarded via the lazy delegate so Stop cannot accidentally spawn it.
-     */
     fun abortClaudeCode() {
         if (claudeCodeAdapterLazy.isInitialized()) {
             runCatching { claudeCodeAdapter.abort() }
                 .onFailure { LOG.warn("Claude Code abort failed: ${it.message}", it) }
+        }
+        if (codexAdapterLazy.isInitialized()) {
+            runCatching { codexAdapter.abort() }
+                .onFailure { LOG.warn("Codex abort failed: ${it.message}", it) }
         }
     }
 
@@ -495,33 +525,19 @@ class MaxVibesService(private val project: Project) : Disposable {
 
     // ========== Lifecycle ==========
 
-    /**
-     * Called by IntelliJ when the project closes.
-     *
-     * Order of teardown matters:
-     *  1. Shut down the Claude Code process (only if it was actually started)
-     *     so the OS reclaims its PID before we drop our references.
-     *  2. Close the per-dialog transcript writer AFTER the adapter shutdown so
-     *     the final "shutdown" event still lands in the file.
-     *  3. Cancel the project-scoped coroutine scope so any in-flight background
-     *     tasks (stderr collectors, etc.) terminate cleanly.
-     *
-     * Each step is wrapped in [runCatching] so a failure in one step does not
-     * prevent the others from completing.
-     */
     override fun dispose() {
-        // Step 1: shutdown the adapter only if it was actually constructed.
-        // Touching the lazy property would force construction — guard via the delegate.
         if (claudeCodeAdapterLazy.isInitialized()) {
             runCatching { claudeCodeAdapter.shutdown() }
                 .onFailure { LOG.warn("ClaudeCodeProcessAdapter.shutdown failed: ${it.message}", it) }
         }
-        // Step 2: close the transcript writer only if it was ever created (same guard idea).
+        if (codexAdapterLazy.isInitialized()) {
+            runCatching { codexAdapter.shutdown() }
+                .onFailure { LOG.warn("CodexAppServerAdapter.shutdown failed: ${it.message}", it) }
+        }
         if (claudeCodeSessionLogLazy.isInitialized()) {
             runCatching { claudeCodeSessionLogLazy.value.close() }
                 .onFailure { LOG.warn("ClaudeCodeSessionLogWriter.close failed: ${it.message}", it) }
         }
-        // Step 3: cancel the coroutine scope.
         runCatching { serviceScope.cancel() }
             .onFailure { LOG.warn("serviceScope.cancel failed: ${it.message}", it) }
         MaxVibesLogger.info("MaxVibesService", "disposed", mapOf("project" to project.name))

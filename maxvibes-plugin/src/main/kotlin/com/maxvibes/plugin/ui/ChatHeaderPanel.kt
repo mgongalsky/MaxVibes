@@ -66,15 +66,11 @@ class ChatHeaderPanel(
         isVisible = false
     }
 
-    /**
-     * Clickable link to the per-dialog Claude Code transcript. Visible only in
-     * [InteractionMode.CLAUDE_CODE]; re-clicking refreshes the already-open editor.
-     */
-    private val ccLogLink = JBLabel("\uD83D\uDCC4 CC log").apply {
+    private val ccLogLink = JBLabel("📄 Agent log").apply {
         foreground = JBColor(Color(0x2196F3), Color(0x64B5F6))
         font = font.deriveFont(11f)
         cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-        toolTipText = "Open Claude Code dialog transcript (re-click to refresh)"
+        toolTipText = "Open coding-agent dialog transcript (re-click to refresh)"
         isVisible = false
     }
 

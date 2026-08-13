@@ -232,7 +232,9 @@ class MaxVibesSettingsPanel {
             .addLabeledComponent(JBLabel("Model:"), modelPanel)
             .addLabeledComponent(JBLabel("Temperature:"), temperaturePanel)
             .addSeparator()
-            .addComponent(JBLabel("Claude Code (CLI mode):"))
+            .addComponent(JBLabel("Coding Agent (CLI mode):"))
+            .addLabeledComponent(JBLabel("Provider:"), codingAgentProviderCombo)
+            .addComponent(JBLabel("Claude Code:"))
             .addLabeledComponent(JBLabel("Binary path:"), claudeCodePathField)
             .addLabeledComponent(JBLabel("Extra CLI args:"), claudeCodeExtraArgsField)
             .addLabeledComponent(JBLabel("Model:"), claudeCodeModelField)
@@ -241,6 +243,13 @@ class MaxVibesSettingsPanel {
             .addLabeledComponent(JBLabel("Effort:"), claudeCodeEffortCombo)
             .addLabeledComponent(JBLabel("Read timeout (sec):"), claudeCodeReadTimeoutField)
             .addLabeledComponent(JBLabel("Start timeout (sec):"), claudeCodeStartTimeoutField)
+            .addComponent(JBLabel("Codex:"))
+            .addLabeledComponent(JBLabel("Binary path:"), codexPathField)
+            .addLabeledComponent(JBLabel("Extra app-server args:"), codexExtraArgsField)
+            .addLabeledComponent(JBLabel("Model:"), codexModelField)
+            .addLabeledComponent(JBLabel("Reasoning effort:"), codexReasoningEffortField)
+            .addLabeledComponent(JBLabel("Read timeout (sec):"), codexReadTimeoutField)
+            .addLabeledComponent(JBLabel("Start timeout (sec):"), codexStartTimeoutField)
             .addSeparator()
             .addComponent(mockFallbackCheckBox)
             .addComponent(testPanel)
@@ -418,6 +427,10 @@ class MaxVibesSettingsPanel {
         temperatureLabel.text = String.format("%.2f", settings.temperature)
         mockFallbackCheckBox.isSelected = settings.enableMockFallback
 
+        val codingAgentProviderIndex = MaxVibesSettings.CODING_AGENT_PROVIDERS
+            .indexOfFirst { it.first == settings.codingAgentProvider }
+        codingAgentProviderCombo.selectedIndex = codingAgentProviderIndex.coerceAtLeast(0)
+
         claudeCodePathField.text = settings.claudeCodePath
         claudeCodeExtraArgsField.text = settings.claudeCodeExtraArgs
         claudeCodeModelField.text = settings.claudeCodeModel
@@ -426,6 +439,13 @@ class MaxVibesSettingsPanel {
         claudeCodeEffortCombo.selectedItem = settings.claudeCodeEffortLevel.ifBlank { "Auto" }
         claudeCodeReadTimeoutField.text = settings.claudeCodeReadTimeoutSec.toString()
         claudeCodeStartTimeoutField.text = settings.claudeCodeStartTimeoutSec.toString()
+
+        codexPathField.text = settings.codexPath
+        codexExtraArgsField.text = settings.codexExtraArgs
+        codexModelField.text = settings.codexModel
+        codexReasoningEffortField.text = settings.codexReasoningEffort
+        codexReadTimeoutField.text = settings.codexReadTimeoutSec.toString()
+        codexStartTimeoutField.text = settings.codexStartTimeoutSec.toString()
 
         statusLabel.text = " "
     }
@@ -439,6 +459,11 @@ class MaxVibesSettingsPanel {
 
         settings.openAIApiKey = String(openAIKeyField.password)
         settings.anthropicApiKey = String(anthropicKeyField.password)
+
+        settings.codingAgentProvider = MaxVibesSettings.CODING_AGENT_PROVIDERS
+            .getOrNull(codingAgentProviderCombo.selectedIndex)
+            ?.first
+            ?: "CLAUDE_CODE"
 
         settings.claudeCodePath = claudeCodePathField.text.trim().ifBlank { "claude" }
         settings.claudeCodeExtraArgs = claudeCodeExtraArgsField.text
@@ -457,9 +482,24 @@ class MaxVibesSettingsPanel {
         settings.claudeCodeStartTimeoutSec =
             claudeCodeStartTimeoutField.text.trim().toIntOrNull()?.coerceAtLeast(1)
                 ?: settings.claudeCodeStartTimeoutSec
+
+        settings.codexPath = codexPathField.text.trim().ifBlank { "codex" }
+        settings.codexExtraArgs = codexExtraArgsField.text
+        settings.codexModel = codexModelField.text.trim()
+        settings.codexReasoningEffort = codexReasoningEffortField.text.trim()
+        settings.codexReadTimeoutSec =
+            codexReadTimeoutField.text.trim().toIntOrNull()?.coerceAtLeast(1)
+                ?: settings.codexReadTimeoutSec
+        settings.codexStartTimeoutSec =
+            codexStartTimeoutField.text.trim().toIntOrNull()?.coerceAtLeast(1)
+                ?: settings.codexStartTimeoutSec
     }
 
     fun isModified(settings: MaxVibesSettings): Boolean {
+        val selectedCodingAgentProvider = MaxVibesSettings.CODING_AGENT_PROVIDERS
+            .getOrNull(codingAgentProviderCombo.selectedIndex)
+            ?.first
+            ?: "CLAUDE_CODE"
         val pathChanged = settings.claudeCodePath != claudeCodePathField.text.trim().ifBlank { "claude" }
         val argsChanged = settings.claudeCodeExtraArgs != claudeCodeExtraArgsField.text
         val claudeModelChanged = settings.claudeCodeModel != claudeCodeModelField.text.trim()
@@ -474,6 +514,14 @@ class MaxVibesSettingsPanel {
             settings.claudeCodeReadTimeoutSec.toString() != claudeCodeReadTimeoutField.text.trim()
         val startTimeoutChanged =
             settings.claudeCodeStartTimeoutSec.toString() != claudeCodeStartTimeoutField.text.trim()
+        val codexPathChanged = settings.codexPath != codexPathField.text.trim().ifBlank { "codex" }
+        val codexArgsChanged = settings.codexExtraArgs != codexExtraArgsField.text
+        val codexModelChanged = settings.codexModel != codexModelField.text.trim()
+        val codexEffortChanged = settings.codexReasoningEffort != codexReasoningEffortField.text.trim()
+        val codexReadTimeoutChanged =
+            settings.codexReadTimeoutSec.toString() != codexReadTimeoutField.text.trim()
+        val codexStartTimeoutChanged =
+            settings.codexStartTimeoutSec.toString() != codexStartTimeoutField.text.trim()
 
         return settings.provider != getSelectedProviderKey() ||
                 settings.modelId != getSelectedModelId() ||
@@ -482,6 +530,7 @@ class MaxVibesSettingsPanel {
                 settings.enableMockFallback != mockFallbackCheckBox.isSelected ||
                 settings.openAIApiKey != String(openAIKeyField.password) ||
                 settings.anthropicApiKey != String(anthropicKeyField.password) ||
+                settings.codingAgentProvider != selectedCodingAgentProvider ||
                 pathChanged ||
                 argsChanged ||
                 claudeModelChanged ||
@@ -489,6 +538,42 @@ class MaxVibesSettingsPanel {
                 thinkingBudgetChanged ||
                 effortChanged ||
                 readTimeoutChanged ||
-                startTimeoutChanged
+                startTimeoutChanged ||
+                codexPathChanged ||
+                codexArgsChanged ||
+                codexModelChanged ||
+                codexEffortChanged ||
+                codexReadTimeoutChanged ||
+                codexStartTimeoutChanged
     }
+    private val codingAgentProviderCombo: ComboBox<String> =
+        ComboBox(MaxVibesSettings.CODING_AGENT_PROVIDERS.map { it.second }.toTypedArray()).apply {
+            toolTipText = "CLI provider used by Coding Agent mode."
+        }
+    private val codexPathField: TextFieldWithBrowseButton = TextFieldWithBrowseButton().apply {
+        textField.columns = 30
+        (textField as? JBTextField)?.emptyText?.text = "codex (in PATH) or absolute path"
+        @Suppress("DEPRECATION")
+        addBrowseFolderListener(
+            "Codex Binary",
+            "Path to the Codex CLI binary",
+            null,
+            FileChooserDescriptorFactory.createSingleFileDescriptor()
+        )
+    }
+    private val codexExtraArgsField: JBTextField = JBTextField().apply {
+        columns = 30
+        emptyText.text = "Additional app-server arguments"
+    }
+    private val codexModelField: JBTextField = JBTextField().apply {
+        columns = 30
+        emptyText.text = "Blank = Codex default model"
+    }
+    private val codexReasoningEffortField: JBTextField = JBTextField().apply {
+        columns = 12
+        emptyText.text = "Auto"
+        toolTipText = "Blank uses the Codex default reasoning effort."
+    }
+    private val codexReadTimeoutField: JBTextField = JBTextField().apply { columns = 6 }
+    private val codexStartTimeoutField: JBTextField = JBTextField().apply { columns = 6 }
 }
