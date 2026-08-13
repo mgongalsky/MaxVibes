@@ -11,6 +11,7 @@ import com.maxvibes.application.port.output.PromptPort
 import com.maxvibes.domain.model.interaction.AttachedImage
 import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 import com.maxvibes.application.port.output.CodingAgentCliPort
+import com.maxvibes.domain.model.chat.CodingAgentProvider
 
 class CodingAgentInteractionService(
     contextProvider: ProjectContextPort,
@@ -23,8 +24,10 @@ class CodingAgentInteractionService(
     chatSessionRepository: ChatSessionRepository,
     private val sessionLog: ClaudeCodeSessionLogPort? = null,
     specificPromptService: SpecificPromptService? = null,
-    streamHub: AgentStreamHub? = null
+    streamHub: AgentStreamHub? = null,
+    private val provider: CodingAgentProvider = CodingAgentProvider.CLAUDE_CODE
 ) {
+    private val policy = CodingAgentProviderPolicy.forProvider(provider)
     private val pendingStore = PendingModificationsStore()
 
     private val viewResolver = CodingAgentViewResolver(
@@ -49,7 +52,8 @@ class CodingAgentInteractionService(
         notificationPort = notificationPort,
         sessionLog = sessionLog,
         streamHub = streamHub,
-        logger = logger
+        logger = logger,
+        provider = provider
     )
 
     private val workspaceService = ClaudeCodeWorkspaceService(
@@ -57,7 +61,8 @@ class CodingAgentInteractionService(
         promptPort = promptPort,
         chatSessionRepository = chatSessionRepository,
         notificationPort = notificationPort,
-        logger = logger
+        logger = logger,
+        provider = provider
     )
 
     private val approvalService = CodingAgentApprovalService(
@@ -195,7 +200,7 @@ class CodingAgentInteractionService(
 
         if (isFirst) {
             log(
-                "Starting new Claude Code session " +
+                "Starting new ${policy.displayName} session " +
                         "(sessionId=${command.sessionId}, planOnly=${command.planOnly})"
             )
             sessionManager.transition(
@@ -203,7 +208,7 @@ class CodingAgentInteractionService(
                 ClipboardEvent.StartSession
             )
         } else {
-            log("Continuing Claude Code session (sessionId=${command.sessionId})")
+            log("Continuing ${policy.displayName} session (sessionId=${command.sessionId})")
         }
 
         val workspaceResult = if (isFirst) {
@@ -259,13 +264,13 @@ class CodingAgentInteractionService(
     }
 
     private fun log(message: String) {
-        println("[MaxVibes ClaudeCode] $message")
-        logger?.info("ClaudeCode", message)
+        println("[MaxVibes ${policy.logTag}] $message")
+        logger?.info(policy.logTag, message)
     }
 
     private fun error(message: String): ClaudeCodeStepResult.Error {
-        println("[MaxVibes ClaudeCode] ERROR: $message")
-        logger?.error("ClaudeCode", message)
+        println("[MaxVibes ${policy.logTag}] ERROR: $message")
+        logger?.error(policy.logTag, message)
         return ClaudeCodeStepResult.Error(message)
     }
 }

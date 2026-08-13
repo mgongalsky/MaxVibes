@@ -18,8 +18,11 @@ internal class ClaudeCodeTurnExecutor(
     private val notificationPort: NotificationPort,
     private val sessionLog: ClaudeCodeSessionLogPort? = null,
     private val streamHub: AgentStreamHub? = null,
-    private val logger: LoggerPort? = null
+    private val logger: LoggerPort? = null,
+    private val provider: CodingAgentProvider = CodingAgentProvider.CLAUDE_CODE
 ) {
+    private val policy = CodingAgentProviderPolicy.forProvider(provider)
+
     suspend fun execute(
         command: CodingAgentTurnCommand,
         state: ClipboardSessionState
@@ -34,6 +37,7 @@ internal class ClaudeCodeTurnExecutor(
         var agentSession = currentAgentSession(session)
         val needsFull = command.firstMessage || agentSession.needsFullContext
         var request = ClaudeCodeRequestFactory.create(
+            provider = provider,
             state = state,
             freshFiles = command.freshFiles,
             fullContext = needsFull,
@@ -58,11 +62,11 @@ internal class ClaudeCodeTurnExecutor(
             log("Resume failed for sessionId=${resumeFailure.sessionId}; falling back to fresh start.")
             sessionLog?.event(
                 "resume failed — falling back to fresh start",
-                mapOf("claudeSessionId" to resumeFailure.sessionId)
+                mapOf("remoteSessionId" to resumeFailure.sessionId)
             )
 
             agentSession = CodingAgentSessionRef(
-                provider = CodingAgentProvider.CLAUDE_CODE,
+                provider = provider,
                 remoteSessionId = null,
                 needsFullContext = true
             )
@@ -70,6 +74,7 @@ internal class ClaudeCodeTurnExecutor(
             chatSessionRepository.saveSession(session)
 
             request = ClaudeCodeRequestFactory.create(
+                provider = provider,
                 state = state,
                 freshFiles = command.freshFiles,
                 fullContext = true,
@@ -110,7 +115,7 @@ internal class ClaudeCodeTurnExecutor(
                 "fullContext" to needsFull
             )
         )
-        notificationPort.showProgress("Sending to Claude Code...", 0.5)
+        notificationPort.showProgress("Sending to ${policy.displayName}...", 0.5)
 
         val sendStartedAt = System.currentTimeMillis()
         val sendResult = claudeCodePort.send(request)
@@ -181,53 +186,65 @@ internal class ClaudeCodeTurnExecutor(
         }
     }
 
-    private fun currentAgentSession(session: ChatSession): CodingAgentSessionRef =
-        session.agentCliSession
-            ?.takeIf { it.provider == CodingAgentProvider.CLAUDE_CODE }
-            ?: CodingAgentSessionRef(
-                provider = CodingAgentProvider.CLAUDE_CODE,
+    private fun currentAgentSession(session: ChatSession): CodingAgentSessionRef {
+        val persisted = session.agentCliSession
+        if (persisted?.provider == provider) {
+            return persisted
+        }
+
+        return if (provider == CodingAgentProvider.CLAUDE_CODE) {
+            CodingAgentSessionRef(
+                provider = provider,
                 remoteSessionId = session.claudeCodeSessionId,
                 needsFullContext = session.claudeCodeNeedsFullContext
             )
+        } else {
+            CodingAgentSessionRef(provider = provider)
+        }
+    }
 
     private fun withAgentSession(
         session: ChatSession,
         state: CodingAgentSessionRef
-    ): ChatSession = session.copy(
-        agentCliSession = state,
-        claudeCodeSessionId = state.remoteSessionId,
-        claudeCodeNeedsFullContext = state.needsFullContext
-    )
+    ): ChatSession = if (state.provider == CodingAgentProvider.CLAUDE_CODE) {
+        session.copy(
+            agentCliSession = state,
+            claudeCodeSessionId = state.remoteSessionId,
+            claudeCodeNeedsFullContext = state.needsFullContext
+        )
+    } else {
+        session.copy(agentCliSession = state)
+    }
 
     private fun transportErrorMessage(error: ClaudeCodeError): String = when (error) {
         is ClaudeCodeError.BinaryNotFound ->
-            "Claude Code binary not found. Check the path in MaxVibes settings."
+            "${policy.displayName} binary not found. Check the path in MaxVibes settings."
 
         is ClaudeCodeError.Timeout ->
-            "Claude Code did not respond in time."
+            "${policy.displayName} did not respond in time."
 
         is ClaudeCodeError.Crashed ->
-            "Claude Code process crashed: ${error.message}"
+            "${policy.displayName} process crashed: ${error.message}"
 
         is ClaudeCodeError.ProcessFailed ->
-            "Claude Code exited with code ${error.exitCode}: ${error.stderr.take(200)}"
+            "${policy.displayName} exited with code ${error.exitCode}: ${error.stderr.take(200)}"
 
         is ClaudeCodeError.ResumeFailed ->
-            "Failed to resume claude session ${error.sessionId}: ${error.stderr.take(200)}"
+            "Failed to resume ${policy.displayName} session ${error.sessionId}: ${error.stderr.take(200)}"
 
         is ClaudeCodeError.ParseFailed ->
-            "Failed to parse Claude Code response: ${error.message}"
+            "Failed to parse ${policy.displayName} response: ${error.message}"
 
         is ClaudeCodeError.Aborted ->
-            "Claude Code turn was aborted." +
+            "${policy.displayName} turn was aborted." +
                     (error.partialText?.let {
                         " Partial output preserved (${it.length} chars)."
                     } ?: "")
     }
 
     private fun log(message: String) {
-        println("[MaxVibes ClaudeCode] $message")
-        logger?.info("ClaudeCode", message)
+        println("[MaxVibes ${policy.logTag}] $message")
+        logger?.info(policy.logTag, message)
     }
 }
 

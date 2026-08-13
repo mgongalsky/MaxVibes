@@ -3,6 +3,7 @@ package com.maxvibes.application.service
 import com.maxvibes.domain.model.interaction.AttachedImage
 import com.maxvibes.domain.model.interaction.ClipboardRequest
 import com.maxvibes.domain.model.planning.TaskPlan
+import com.maxvibes.domain.model.chat.CodingAgentProvider
 
 /**
  * Builds transport requests for the Claude Code backend.
@@ -28,6 +29,7 @@ internal object ClaudeCodeRequestFactory {
             "Always output the JSON with empty modifications and put your discussion in message."
 
     fun create(
+        provider: CodingAgentProvider,
         state: ClipboardSessionState,
         freshFiles: Map<String, String>,
         fullContext: Boolean,
@@ -37,21 +39,21 @@ internal object ClaudeCodeRequestFactory {
         commandResults: String? = null,
         attachedImages: List<AttachedImage> = emptyList(),
         currentPlan: TaskPlan? = null
-    ): ClipboardRequest = InteractionRequestBuilder.build(
-        state = state,
-        freshFiles = freshFiles,
-        isFirstMessage = fullContext,
-        addHistory = fullContext,
-        planOnlySuffix = PLAN_ONLY_SUFFIX,
-        ideErrors = ideErrors,
-        attachedContext = attachedContext,
-        specificPromptContent = specificPromptContent,
-        // Claude Code transport delivers the system instruction via the CLI's
-        // --append-system-prompt flag at process spawn — embedding it in the
-        // JSON payload would trip Claude Code's prompt-injection classifier.
-        omitSystemInstruction = true,
-        commandResults = commandResults,
-        attachedImages = attachedImages,
-        currentPlan = currentPlan
-    )
+    ): ClipboardRequest {
+        val policy = CodingAgentProviderPolicy.forProvider(provider)
+        return InteractionRequestBuilder.build(
+            state = state,
+            freshFiles = freshFiles,
+            isFirstMessage = fullContext,
+            addHistory = fullContext,
+            planOnlySuffix = PLAN_ONLY_SUFFIX,
+            ideErrors = ideErrors,
+            attachedContext = attachedContext,
+            specificPromptContent = specificPromptContent,
+            omitSystemInstruction = policy.omitSystemInstructionFromRequest,
+            commandResults = commandResults,
+            attachedImages = attachedImages,
+            currentPlan = currentPlan
+        )
+    }
 }

@@ -12,20 +12,16 @@ import com.maxvibes.domain.model.chat.MessageRole
 import com.maxvibes.shared.result.Result
 import com.maxvibes.domain.model.chat.CodingAgentProvider
 
-/**
- * Owns the in-memory Claude Code workspace and its reconstruction from persisted chat data.
- *
- * Session-state transitions and transport execution remain outside this class. This service
- * is responsible only for creating, updating, restoring and clearing ClipboardSessionState.
- */
 internal class ClaudeCodeWorkspaceService(
     private val contextProvider: ProjectContextPort,
     private val promptPort: PromptPort,
     private val chatSessionRepository: ChatSessionRepository,
     private val notificationPort: NotificationPort,
-    private val logger: LoggerPort? = null
+    private val logger: LoggerPort? = null,
+    private val provider: CodingAgentProvider = CodingAgentProvider.CLAUDE_CODE
 ) {
     private val workspace = ClaudeCodeWorkspaceHolder()
+    private val policy = CodingAgentProviderPolicy.forProvider(provider)
 
     val state: ClipboardSessionState?
         get() = workspace.state
@@ -48,7 +44,7 @@ internal class ClaudeCodeWorkspaceService(
         }
 
         val projectContext = (projectContextResult as Result.Success).value
-        val codingAgentSystem = promptPort.codingAgentSystem(CodingAgentProvider.CLAUDE_CODE)
+        val codingAgentSystem = promptPort.codingAgentSystem(provider)
         val prompts = PromptTemplates(
             chatSystem = codingAgentSystem,
             planningSystem = codingAgentSystem
@@ -117,7 +113,7 @@ internal class ClaudeCodeWorkspaceService(
         }
 
         val projectContext = (projectContextResult as Result.Success).value
-        val codingAgentSystem = promptPort.codingAgentSystem(CodingAgentProvider.CLAUDE_CODE)
+        val codingAgentSystem = promptPort.codingAgentSystem(provider)
         val prompts = PromptTemplates(
             chatSystem = codingAgentSystem,
             planningSystem = codingAgentSystem
@@ -161,8 +157,8 @@ internal class ClaudeCodeWorkspaceService(
     }
 
     private fun log(message: String) {
-        println("[MaxVibes ClaudeCode] $message")
-        logger?.info("ClaudeCode", message)
+        println("[MaxVibes ${policy.logTag}] $message")
+        logger?.info(policy.logTag, message)
     }
 }
 
