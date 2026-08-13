@@ -3,18 +3,20 @@ package com.maxvibes.application.service
 import com.maxvibes.application.port.output.ChatMessageDTO
 import com.maxvibes.application.port.output.ChatRole
 import com.maxvibes.application.port.output.ChatSessionRepository
-import com.maxvibes.application.port.output.ClaudeCodeSessionLogPort
 import com.maxvibes.application.port.output.LoggerPort
 import com.maxvibes.domain.model.chat.MessageRole
 import com.maxvibes.domain.model.code.CodeViewRequest
 import com.maxvibes.domain.model.code.RequestedViewInfo
+import com.maxvibes.application.port.output.CodingAgentSessionLogPort
+import com.maxvibes.domain.model.chat.CodingAgentProvider
 
 internal class CodingAgentResponseHandler(
     private val chatSessionRepository: ChatSessionRepository,
     private val sessionManager: ClipboardSessionManager,
     private val pendingStore: PendingModificationsStore,
-    private val sessionLog: ClaudeCodeSessionLogPort? = null,
-    private val logger: LoggerPort? = null
+    private val sessionLog: CodingAgentSessionLogPort? = null,
+    private val logger: LoggerPort? = null,
+    private val provider: CodingAgentProvider = CodingAgentProvider.CLAUDE_CODE
 ) {
     fun handle(
         sessionId: String,
@@ -181,7 +183,8 @@ internal class CodingAgentResponseHandler(
     }
 
     private fun log(message: String) {
-        println("[MaxVibes ClaudeCode] $message")
-        logger?.info("ClaudeCode", message)
+        val policy = CodingAgentProviderPolicy.forProvider(provider)
+        println("[MaxVibes ${policy.logTag}] $message")
+        logger?.info(policy.logTag, message)
     }
 }

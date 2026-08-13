@@ -1,32 +1,29 @@
 package com.maxvibes.application.service
 
+import com.maxvibes.domain.model.chat.CodingAgentProvider
 import com.maxvibes.domain.model.interaction.AttachedImage
 import com.maxvibes.domain.model.interaction.ClipboardRequest
 import com.maxvibes.domain.model.planning.TaskPlan
-import com.maxvibes.domain.model.chat.CodingAgentProvider
 
-/**
- * Builds transport requests for the Claude Code backend.
- *
- * Encodes the context policy: [create]'s `fullContext` drives both `isFirstMessage`
- * and `addHistory` of [InteractionRequestBuilder] — a request can never be built with
- * these flags out of sync.
- */
-internal object ClaudeCodeRequestFactory {
-
-    // Duplicated from ClipboardInteractionService by design (see Step 5 "Что НЕ делать").
-    // Will be unified in a future refactor once both services stabilise.
-    private val PLAN_ONLY_SUFFIX = "\n\n" +
-            "## PLAN-ONLY MODE — DISCUSSION REQUIRED\n\n" +
-            "DO NOT generate any code changes in the modifications array.\n" +
-            "Keep modifications and commands empty.\n" +
-            "Your goal is to DISCUSS the plan with the user before any code is written.\n\n" +
-            "Instead of code, you must:\n" +
-            "1. Briefly explain what you understand from the task\n" +
-            "2. List which files you plan to touch and what changes you'll make in each\n" +
-            "3. Mention any architectural decisions or trade-offs\n" +
-            "4. Ask the user to confirm or suggest corrections\n\n" +
-            "Always output the JSON with empty modifications and put your discussion in message."
+/** Builds provider-neutral MaxVibes protocol requests for coding-agent transports. */
+internal object CodingAgentRequestFactory {
+    private val PLAN_ONLY_SUFFIX = buildString {
+        appendLine()
+        appendLine()
+        appendLine("## PLAN-ONLY MODE — DISCUSSION REQUIRED")
+        appendLine()
+        appendLine("DO NOT generate any code changes in the modifications array.")
+        appendLine("Keep modifications and commands empty.")
+        appendLine("Your goal is to DISCUSS the plan with the user before any code is written.")
+        appendLine()
+        appendLine("Instead of code, you must:")
+        appendLine("1. Briefly explain what you understand from the task")
+        appendLine("2. List which files you plan to touch and what changes you'll make in each")
+        appendLine("3. Mention any architectural decisions or trade-offs")
+        appendLine("4. Ask the user to confirm or suggest corrections")
+        appendLine()
+        append("Always output the JSON with empty modifications and put your discussion in message.")
+    }
 
     fun create(
         provider: CodingAgentProvider,
@@ -56,4 +53,31 @@ internal object ClaudeCodeRequestFactory {
             currentPlan = currentPlan
         )
     }
+}
+
+/** Compatibility wrapper for the pre-generalization application name. */
+internal object ClaudeCodeRequestFactory {
+    fun create(
+        provider: CodingAgentProvider,
+        state: ClipboardSessionState,
+        freshFiles: Map<String, String>,
+        fullContext: Boolean,
+        attachedContext: String?,
+        ideErrors: String?,
+        specificPromptContent: String?,
+        commandResults: String? = null,
+        attachedImages: List<AttachedImage> = emptyList(),
+        currentPlan: TaskPlan? = null
+    ): ClipboardRequest = CodingAgentRequestFactory.create(
+        provider = provider,
+        state = state,
+        freshFiles = freshFiles,
+        fullContext = fullContext,
+        attachedContext = attachedContext,
+        ideErrors = ideErrors,
+        specificPromptContent = specificPromptContent,
+        commandResults = commandResults,
+        attachedImages = attachedImages,
+        currentPlan = currentPlan
+    )
 }

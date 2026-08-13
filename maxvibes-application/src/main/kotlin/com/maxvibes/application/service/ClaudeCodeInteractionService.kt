@@ -35,7 +35,8 @@ class CodingAgentInteractionService(
         codeRepository = codeRepository,
         specificPromptService = specificPromptService,
         notificationPort = notificationPort,
-        logger = logger
+        logger = logger,
+        provider = provider
     )
 
     private val responseHandler = CodingAgentResponseHandler(
@@ -43,10 +44,11 @@ class CodingAgentInteractionService(
         sessionManager = sessionManager,
         pendingStore = pendingStore,
         sessionLog = sessionLog,
-        logger = logger
+        logger = logger,
+        provider = provider
     )
 
-    private val turnExecutor = ClaudeCodeTurnExecutor(
+    private val turnExecutor = CodingAgentTurnExecutor(
         claudeCodePort = claudeCodePort,
         chatSessionRepository = chatSessionRepository,
         notificationPort = notificationPort,
@@ -56,7 +58,7 @@ class CodingAgentInteractionService(
         provider = provider
     )
 
-    private val workspaceService = ClaudeCodeWorkspaceService(
+    private val workspaceService = CodingAgentWorkspaceService(
         contextProvider = contextProvider,
         promptPort = promptPort,
         chatSessionRepository = chatSessionRepository,
@@ -74,7 +76,8 @@ class CodingAgentInteractionService(
         codeRepository = codeRepository,
         notificationPort = notificationPort,
         sessionLog = sessionLog,
-        logger = logger
+        logger = logger,
+        provider = provider
     )
 
     suspend fun handleUserInput(

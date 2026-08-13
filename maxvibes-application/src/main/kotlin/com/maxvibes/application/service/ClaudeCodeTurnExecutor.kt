@@ -2,21 +2,21 @@ package com.maxvibes.application.service
 
 import com.maxvibes.application.port.output.ChatSessionRepository
 import com.maxvibes.application.port.output.ClaudeCodeError
-import com.maxvibes.application.port.output.ClaudeCodeSessionLogPort
-import com.maxvibes.application.port.output.LoggerPort
-import com.maxvibes.application.port.output.NotificationPort
-import com.maxvibes.shared.result.Result
 import com.maxvibes.application.port.output.CodingAgentCliPort
 import com.maxvibes.application.port.output.CodingAgentCliSendResult
+import com.maxvibes.application.port.output.CodingAgentSessionLogPort
+import com.maxvibes.application.port.output.LoggerPort
+import com.maxvibes.application.port.output.NotificationPort
+import com.maxvibes.domain.model.chat.ChatSession
 import com.maxvibes.domain.model.chat.CodingAgentProvider
 import com.maxvibes.domain.model.chat.CodingAgentSessionRef
-import com.maxvibes.domain.model.chat.ChatSession
+import com.maxvibes.shared.result.Result
 
-internal class ClaudeCodeTurnExecutor(
+internal class CodingAgentTurnExecutor(
     private val claudeCodePort: CodingAgentCliPort,
     private val chatSessionRepository: ChatSessionRepository,
     private val notificationPort: NotificationPort,
-    private val sessionLog: ClaudeCodeSessionLogPort? = null,
+    private val sessionLog: CodingAgentSessionLogPort? = null,
     private val streamHub: AgentStreamHub? = null,
     private val logger: LoggerPort? = null,
     private val provider: CodingAgentProvider = CodingAgentProvider.CLAUDE_CODE
@@ -36,7 +36,7 @@ internal class ClaudeCodeTurnExecutor(
 
         var agentSession = currentAgentSession(session)
         val needsFull = command.firstMessage || agentSession.needsFullContext
-        var request = ClaudeCodeRequestFactory.create(
+        var request = CodingAgentRequestFactory.create(
             provider = provider,
             state = state,
             freshFiles = command.freshFiles,
@@ -54,10 +54,7 @@ internal class ClaudeCodeTurnExecutor(
             systemPrompt = state.prompts.chatSystem
         )
 
-        if (
-            ensureResult is Result.Failure &&
-            ensureResult.error is ClaudeCodeError.ResumeFailed
-        ) {
+        if (ensureResult is Result.Failure && ensureResult.error is ClaudeCodeError.ResumeFailed) {
             val resumeFailure = ensureResult.error as ClaudeCodeError.ResumeFailed
             log("Resume failed for sessionId=${resumeFailure.sessionId}; falling back to fresh start.")
             sessionLog?.event(
@@ -73,7 +70,7 @@ internal class ClaudeCodeTurnExecutor(
             session = withAgentSession(session, agentSession)
             chatSessionRepository.saveSession(session)
 
-            request = ClaudeCodeRequestFactory.create(
+            request = CodingAgentRequestFactory.create(
                 provider = provider,
                 state = state,
                 freshFiles = command.freshFiles,
@@ -93,15 +90,12 @@ internal class ClaudeCodeTurnExecutor(
 
         if (ensureResult is Result.Failure) {
             return CodingAgentTurnExecutionResult.Failure(
-                ClaudeCodeStepResult.TransportError(
-                    transportErrorMessage(ensureResult.error)
-                )
+                ClaudeCodeStepResult.TransportError(transportErrorMessage(ensureResult.error))
             )
         }
 
         val estimatedInputTokens = TokenEstimator.estimateTokens(request)
         state.lastInputTokens = estimatedInputTokens
-
         log(
             "Sending: tokens≈$estimatedInputTokens, freshFiles=${command.freshFiles.size}, " +
                     "history=${request.chatHistory.size}, fullCtx=$needsFull"
@@ -126,17 +120,14 @@ internal class ClaudeCodeTurnExecutor(
                 val payload: CodingAgentCliSendResult = sendResult.value
                 persistObservedSession(payload, session)
                 val stats = payload.stats
-
                 CodingAgentTurnExecutionResult.Success(
                     ReceivedCodingAgentTurn(
                         response = payload.response,
-                        inputTokens = stats?.inputTokens?.takeIf { it > 0 }
-                            ?: estimatedInputTokens,
+                        inputTokens = stats?.inputTokens?.takeIf { it > 0 } ?: estimatedInputTokens,
                         outputTokens = stats?.outputTokens?.takeIf { it > 0 }
                             ?: TokenEstimator.estimateOutputTokens(payload.response),
                         thinkingText = payload.thinkingText,
-                        durationMs = stats?.durationMs?.takeIf { it > 0 }
-                            ?: measuredDurationMs,
+                        durationMs = stats?.durationMs?.takeIf { it > 0 } ?: measuredDurationMs,
                         costUsd = stats?.costUsd?.takeIf { it > 0.0 },
                         numTurns = stats?.numTurns?.takeIf { it > 0 }
                     )
@@ -147,15 +138,10 @@ internal class ClaudeCodeTurnExecutor(
                 log("Send failed: ${sendResult.error} (after ${measuredDurationMs}ms)")
                 sessionLog?.event(
                     "send failed",
-                    mapOf(
-                        "error" to sendResult.error.toString(),
-                        "elapsedMs" to measuredDurationMs
-                    )
+                    mapOf("error" to sendResult.error.toString(), "elapsedMs" to measuredDurationMs)
                 )
                 CodingAgentTurnExecutionResult.Failure(
-                    ClaudeCodeStepResult.TransportError(
-                        transportErrorMessage(sendResult.error)
-                    )
+                    ClaudeCodeStepResult.TransportError(transportErrorMessage(sendResult.error))
                 )
             }
         }
@@ -165,16 +151,11 @@ internal class ClaudeCodeTurnExecutor(
         try {
             claudeCodePort.shutdown()
         } catch (exception: Exception) {
-            log(
-                "Warning: shutdown raised ${exception.javaClass.simpleName}: ${exception.message}"
-            )
+            log("Warning: shutdown raised ${exception.javaClass.simpleName}: ${exception.message}")
         }
     }
 
-    private fun persistObservedSession(
-        payload: CodingAgentCliSendResult,
-        session: ChatSession
-    ) {
+    private fun persistObservedSession(payload: CodingAgentCliSendResult, session: ChatSession) {
         val current = currentAgentSession(session)
         val observedId = payload.observedSessionId
         if (observedId != null || current.needsFullContext) {
@@ -188,9 +169,7 @@ internal class ClaudeCodeTurnExecutor(
 
     private fun currentAgentSession(session: ChatSession): CodingAgentSessionRef {
         val persisted = session.agentCliSession
-        if (persisted?.provider == provider) {
-            return persisted
-        }
+        if (persisted?.provider == provider) return persisted
 
         return if (provider == CodingAgentProvider.CLAUDE_CODE) {
             CodingAgentSessionRef(
@@ -203,18 +182,16 @@ internal class ClaudeCodeTurnExecutor(
         }
     }
 
-    private fun withAgentSession(
-        session: ChatSession,
-        state: CodingAgentSessionRef
-    ): ChatSession = if (state.provider == CodingAgentProvider.CLAUDE_CODE) {
-        session.copy(
-            agentCliSession = state,
-            claudeCodeSessionId = state.remoteSessionId,
-            claudeCodeNeedsFullContext = state.needsFullContext
-        )
-    } else {
-        session.copy(agentCliSession = state)
-    }
+    private fun withAgentSession(session: ChatSession, state: CodingAgentSessionRef): ChatSession =
+        if (state.provider == CodingAgentProvider.CLAUDE_CODE) {
+            session.copy(
+                agentCliSession = state,
+                claudeCodeSessionId = state.remoteSessionId,
+                claudeCodeNeedsFullContext = state.needsFullContext
+            )
+        } else {
+            session.copy(agentCliSession = state)
+        }
 
     private fun transportErrorMessage(error: ClaudeCodeError): String = when (error) {
         is ClaudeCodeError.BinaryNotFound ->
@@ -237,9 +214,7 @@ internal class ClaudeCodeTurnExecutor(
 
         is ClaudeCodeError.Aborted ->
             "${policy.displayName} turn was aborted." +
-                    (error.partialText?.let {
-                        " Partial output preserved (${it.length} chars)."
-                    } ?: "")
+                    (error.partialText?.let { " Partial output preserved (${it.length} chars)." } ?: "")
     }
 
     private fun log(message: String) {
@@ -248,12 +223,9 @@ internal class ClaudeCodeTurnExecutor(
     }
 }
 
-internal sealed interface CodingAgentTurnExecutionResult {
-    data class Success(
-        val turn: ReceivedCodingAgentTurn
-    ) : CodingAgentTurnExecutionResult
+internal typealias ClaudeCodeTurnExecutor = CodingAgentTurnExecutor
 
-    data class Failure(
-        val result: ClaudeCodeStepResult
-    ) : CodingAgentTurnExecutionResult
+internal sealed interface CodingAgentTurnExecutionResult {
+    data class Success(val turn: ReceivedCodingAgentTurn) : CodingAgentTurnExecutionResult
+    data class Failure(val result: CodingAgentStepResult) : CodingAgentTurnExecutionResult
 }

@@ -7,22 +7,16 @@ import com.maxvibes.application.port.output.ProjectContextPort
 import com.maxvibes.domain.model.code.CodeGranularity
 import com.maxvibes.domain.model.code.CodeViewRequest
 import com.maxvibes.shared.result.Result
+import com.maxvibes.domain.model.chat.CodingAgentProvider
 
-/**
- * Resolves coding-agent requested views from their three backing sources.
- *
- * FULL views are read from the live project through ProjectContextPort,
- * partial PSI views through CodeRepository, and SKILL views through
- * SpecificPromptService. Full-file reads also update workspace bookkeeping.
- */
 internal class CodingAgentViewResolver(
     private val contextProvider: ProjectContextPort,
     private val codeRepository: CodeRepository,
     private val specificPromptService: SpecificPromptService?,
     private val notificationPort: NotificationPort,
-    private val logger: LoggerPort? = null
+    private val logger: LoggerPort? = null,
+    private val provider: CodingAgentProvider = CodingAgentProvider.CLAUDE_CODE
 ) {
-
     suspend fun resolve(
         requests: List<CodeViewRequest>,
         state: ClipboardSessionState
@@ -98,8 +92,9 @@ internal class CodingAgentViewResolver(
     }
 
     private fun log(message: String) {
-        println("[MaxVibes ClaudeCode] $message")
-        logger?.info("ClaudeCode", message)
+        val policy = CodingAgentProviderPolicy.forProvider(provider)
+        println("[MaxVibes ${policy.logTag}] $message")
+        logger?.info(policy.logTag, message)
     }
 }
 

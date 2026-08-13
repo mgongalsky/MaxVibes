@@ -1,7 +1,6 @@
 package com.maxvibes.application.service
 
 import com.maxvibes.application.port.output.ChatSessionRepository
-import com.maxvibes.application.port.output.ClaudeCodeSessionLogPort
 import com.maxvibes.application.port.output.CodeRepository
 import com.maxvibes.application.port.output.LoggerPort
 import com.maxvibes.application.port.output.NotificationPort
@@ -10,17 +9,20 @@ import com.maxvibes.domain.model.code.CodeViewRequest
 import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 import com.maxvibes.domain.model.interaction.InteractionModification
 import com.maxvibes.domain.model.modification.ModificationResult
+import com.maxvibes.application.port.output.CodingAgentSessionLogPort
+import com.maxvibes.domain.model.chat.CodingAgentProvider
 
 internal class CodingAgentApprovalService(
     private val chatSessionRepository: ChatSessionRepository,
     private val sessionManager: ClipboardSessionManager,
     private val pendingStore: PendingModificationsStore,
-    private val workspaceService: ClaudeCodeWorkspaceService,
+    private val workspaceService: CodingAgentWorkspaceService,
     private val viewResolver: CodingAgentViewResolver,
     private val codeRepository: CodeRepository,
     private val notificationPort: NotificationPort,
-    private val sessionLog: ClaudeCodeSessionLogPort? = null,
-    private val logger: LoggerPort? = null
+    private val sessionLog: CodingAgentSessionLogPort? = null,
+    private val logger: LoggerPort? = null,
+    private val provider: CodingAgentProvider = CodingAgentProvider.CLAUDE_CODE
 ) {
     fun rejectPending(command: UserInputCommand): UserInputCommand? {
         val pending = pendingStore.take(command.sessionId) ?: return null
@@ -196,14 +198,16 @@ internal class CodingAgentApprovalService(
         CodingAgentApprovalOutcome.Immediate(error(message))
 
     private fun error(message: String): ClaudeCodeStepResult.Error {
-        println("[MaxVibes ClaudeCode] ERROR: $message")
-        logger?.error("ClaudeCode", message)
+        val policy = CodingAgentProviderPolicy.forProvider(provider)
+        println("[MaxVibes ${policy.logTag}] ERROR: $message")
+        logger?.error(policy.logTag, message)
         return ClaudeCodeStepResult.Error(message)
     }
 
     private fun log(message: String) {
-        println("[MaxVibes ClaudeCode] $message")
-        logger?.info("ClaudeCode", message)
+        val policy = CodingAgentProviderPolicy.forProvider(provider)
+        println("[MaxVibes ${policy.logTag}] $message")
+        logger?.info(policy.logTag, message)
     }
 }
 

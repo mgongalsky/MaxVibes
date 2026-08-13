@@ -8,11 +8,12 @@ import com.maxvibes.application.port.output.NotificationPort
 import com.maxvibes.application.port.output.ProjectContextPort
 import com.maxvibes.application.port.output.PromptPort
 import com.maxvibes.application.port.output.PromptTemplates
+import com.maxvibes.domain.model.chat.CodingAgentProvider
 import com.maxvibes.domain.model.chat.MessageRole
 import com.maxvibes.shared.result.Result
-import com.maxvibes.domain.model.chat.CodingAgentProvider
 
-internal class ClaudeCodeWorkspaceService(
+/** Owns provider-neutral in-memory workspace state and reconstruction from persisted chat data. */
+internal class CodingAgentWorkspaceService(
     private val contextProvider: ProjectContextPort,
     private val promptPort: PromptPort,
     private val chatSessionRepository: ChatSessionRepository,
@@ -20,7 +21,7 @@ internal class ClaudeCodeWorkspaceService(
     private val logger: LoggerPort? = null,
     private val provider: CodingAgentProvider = CodingAgentProvider.CLAUDE_CODE
 ) {
-    private val workspace = ClaudeCodeWorkspaceHolder()
+    private val workspace = CodingAgentWorkspaceHolder()
     private val policy = CodingAgentProviderPolicy.forProvider(provider)
 
     val state: ClipboardSessionState?
@@ -29,12 +30,9 @@ internal class ClaudeCodeWorkspaceService(
     val owner: String?
         get() = workspace.owner
 
-    fun isOwnedBy(sessionId: String): Boolean =
-        workspace.isOwnedBy(sessionId)
+    fun isOwnedBy(sessionId: String): Boolean = workspace.isOwnedBy(sessionId)
 
-    suspend fun start(
-        command: UserInputCommand
-    ): CodingAgentWorkspaceResult {
+    suspend fun start(command: UserInputCommand): CodingAgentWorkspaceResult {
         notificationPort.showProgress("Gathering project context...", 0.1)
         val projectContextResult = contextProvider.getProjectContext()
         if (projectContextResult is Result.Failure) {
@@ -63,9 +61,7 @@ internal class ClaudeCodeWorkspaceService(
         return CodingAgentWorkspaceResult.Ready(newState)
     }
 
-    suspend fun continueSession(
-        command: UserInputCommand
-    ): CodingAgentWorkspaceResult {
+    suspend fun continueSession(command: UserInputCommand): CodingAgentWorkspaceResult {
         if (!workspace.isOwnedBy(command.sessionId) && !restore(command.sessionId)) {
             return CodingAgentWorkspaceResult.Failure(
                 "Cannot restore session state for session ${command.sessionId}. Please start a new task."
@@ -85,9 +81,7 @@ internal class ClaudeCodeWorkspaceService(
     }
 
     suspend fun ensure(sessionId: String): Boolean {
-        if (workspace.isOwnedBy(sessionId) && workspace.state != null) {
-            return true
-        }
+        if (workspace.isOwnedBy(sessionId) && workspace.state != null) return true
         return restore(sessionId)
     }
 
@@ -122,17 +116,10 @@ internal class ClaudeCodeWorkspaceService(
             currentMessage = lastUserMessage,
             projectContext = projectContext,
             dialogHistory = session.messages
-                .filter {
-                    it.role == MessageRole.USER ||
-                            it.role == MessageRole.ASSISTANT
-                }
+                .filter { it.role == MessageRole.USER || it.role == MessageRole.ASSISTANT }
                 .map { message ->
                     ChatMessageDTO(
-                        role = if (message.role == MessageRole.USER) {
-                            ChatRole.USER
-                        } else {
-                            ChatRole.ASSISTANT
-                        },
+                        role = if (message.role == MessageRole.USER) ChatRole.USER else ChatRole.ASSISTANT,
                         content = message.content
                     )
                 }
@@ -148,12 +135,7 @@ internal class ClaudeCodeWorkspaceService(
     }
 
     private fun appendHistory(role: ChatRole, content: String) {
-        workspace.state?.dialogHistory?.add(
-            ChatMessageDTO(
-                role = role,
-                content = content
-            )
-        )
+        workspace.state?.dialogHistory?.add(ChatMessageDTO(role = role, content = content))
     }
 
     private fun log(message: String) {
@@ -162,12 +144,9 @@ internal class ClaudeCodeWorkspaceService(
     }
 }
 
-internal sealed interface CodingAgentWorkspaceResult {
-    data class Ready(
-        val state: ClipboardSessionState
-    ) : CodingAgentWorkspaceResult
+internal typealias ClaudeCodeWorkspaceService = CodingAgentWorkspaceService
 
-    data class Failure(
-        val message: String
-    ) : CodingAgentWorkspaceResult
+internal sealed interface CodingAgentWorkspaceResult {
+    data class Ready(val state: ClipboardSessionState) : CodingAgentWorkspaceResult
+    data class Failure(val message: String) : CodingAgentWorkspaceResult
 }

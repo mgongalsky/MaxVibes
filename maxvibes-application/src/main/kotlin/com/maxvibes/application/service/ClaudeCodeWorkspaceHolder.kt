@@ -1,14 +1,7 @@
 package com.maxvibes.application.service
 
-/**
- * Holds the in-memory Claude Code workspace state together with its owning session id.
- *
- * Ownership invariant: [state] belongs to the session recorded in [owner]; the pair is
- * always written atomically via [install] and dropped atomically via [clear], so a
- * positive [isOwnedBy] guarantees a non-null [state] for that session.
- */
-internal class ClaudeCodeWorkspaceHolder {
-
+/** Holds the in-memory coding-agent workspace together with its owning chat session id. */
+internal class CodingAgentWorkspaceHolder {
     var state: ClipboardSessionState? = null
         private set
 
@@ -27,3 +20,5 @@ internal class ClaudeCodeWorkspaceHolder {
         owner = null
     }
 }
+
+internal typealias ClaudeCodeWorkspaceHolder = CodingAgentWorkspaceHolder
