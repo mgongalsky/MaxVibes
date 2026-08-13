@@ -10,6 +10,9 @@ import com.maxvibes.application.port.output.CodingAgentCliPort
 import com.maxvibes.application.port.output.CodingAgentCliSendResult
 import com.maxvibes.domain.model.chat.CodingAgentProvider
 import com.maxvibes.domain.model.chat.CodingAgentSessionRef
+import com.maxvibes.domain.model.chat.ChatSession
+import com.maxvibes.domain.model.interaction.AgentCliProvider
+import com.maxvibes.domain.model.interaction.AgentCliSessionState
 
 internal class ClaudeCodeTurnExecutor(
     private val claudeCodePort: CodingAgentCliPort,
@@ -30,8 +33,8 @@ internal class ClaudeCodeTurnExecutor(
                 ClaudeCodeStepResult.Error("Session not found: $sessionId")
             )
 
-        var sessionRef = session.resolvedCodingAgentSession(CodingAgentProvider.CLAUDE_CODE)
-        val needsFull = command.firstMessage || sessionRef?.needsFullContext != false
+        var agentSession = currentAgentSession(session)
+        val needsFull = command.firstMessage || agentSession.needsFullContext
         var request = ClaudeCodeRequestFactory.create(
             state = state,
             freshFiles = command.freshFiles,
@@ -45,7 +48,7 @@ internal class ClaudeCodeTurnExecutor(
         )
 
         var ensureResult = claudeCodePort.ensureStarted(
-            resumeSessionId = sessionRef?.remoteSessionId,
+            resumeSessionId = agentSession.remoteSessionId,
             systemPrompt = state.prompts.chatSystem
         )
 
@@ -60,12 +63,12 @@ internal class ClaudeCodeTurnExecutor(
                 mapOf("claudeSessionId" to resumeFailure.sessionId)
             )
 
-            sessionRef = CodingAgentSessionRef(
-                provider = CodingAgentProvider.CLAUDE_CODE,
+            agentSession = AgentCliSessionState(
+                provider = AgentCliProvider.CLAUDE_CODE,
                 remoteSessionId = null,
                 needsFullContext = true
             )
-            session = session.withCodingAgentSession(sessionRef)
+            session = withAgentSession(session, agentSession)
             chatSessionRepository.saveSession(session)
 
             request = ClaudeCodeRequestFactory.create(
@@ -167,22 +170,36 @@ internal class ClaudeCodeTurnExecutor(
 
     private fun persistObservedSession(
         payload: CodingAgentCliSendResult,
-        session: com.maxvibes.domain.model.chat.ChatSession
+        session: ChatSession
     ) {
-        val current = session.resolvedCodingAgentSession(CodingAgentProvider.CLAUDE_CODE)
+        val current = currentAgentSession(session)
         val observedId = payload.observedSessionId
-        if (observedId != null || current == null || current.needsFullContext) {
-            chatSessionRepository.saveSession(
-                session.withCodingAgentSession(
-                    CodingAgentSessionRef(
-                        provider = CodingAgentProvider.CLAUDE_CODE,
-                        remoteSessionId = observedId ?: current?.remoteSessionId,
-                        needsFullContext = false
-                    )
-                )
+        if (observedId != null || current.needsFullContext) {
+            val updated = current.copy(
+                remoteSessionId = observedId ?: current.remoteSessionId,
+                needsFullContext = false
             )
+            chatSessionRepository.saveSession(withAgentSession(session, updated))
         }
     }
+
+    private fun currentAgentSession(session: ChatSession): AgentCliSessionState =
+        session.agentCliSession
+            ?.takeIf { it.provider == AgentCliProvider.CLAUDE_CODE }
+            ?: AgentCliSessionState(
+                provider = AgentCliProvider.CLAUDE_CODE,
+                remoteSessionId = session.claudeCodeSessionId,
+                needsFullContext = session.claudeCodeNeedsFullContext
+            )
+
+    private fun withAgentSession(
+        session: ChatSession,
+        state: AgentCliSessionState
+    ): ChatSession = session.copy(
+        agentCliSession = state,
+        claudeCodeSessionId = state.remoteSessionId,
+        claudeCodeNeedsFullContext = state.needsFullContext
+    )
 
     private fun transportErrorMessage(error: ClaudeCodeError): String = when (error) {
         is ClaudeCodeError.BinaryNotFound ->

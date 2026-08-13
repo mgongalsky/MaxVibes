@@ -1,5 +1,4 @@
 package com.maxvibes.application.port.output
 
-/** Compatibility name retained while the Claude Code vertical slice is migrated. */
-@Deprecated("Use AgentCliSendResult")
-typealias ClaudeCodeSendResult = AgentCliSendResult
+/** Compatibility name retained while Claude-specific callers migrate. */
+typealias ClaudeCodeSendResult = CodingAgentCliSendResult

@@ -27,6 +27,8 @@ import com.maxvibes.domain.model.planning.PlanStep
 import com.maxvibes.domain.model.planning.PlanStepStatus
 import com.maxvibes.domain.model.chat.CodingAgentProvider
 import com.maxvibes.domain.model.chat.CodingAgentSessionRef
+import com.maxvibes.domain.model.interaction.AgentCliProvider
+import com.maxvibes.domain.model.interaction.AgentCliSessionState
 
 @Tag("requestedView")
 class XmlRequestedViewInfo {
@@ -271,6 +273,44 @@ class XmlChatMessage {
     }
 }
 
+@Tag("agentCliSession")
+class XmlAgentCliSessionState {
+    @Attribute("provider")
+    var provider: String = "CLAUDE_CODE"
+
+    @Attribute("remoteSessionId")
+    var remoteSessionId: String? = null
+
+    @Attribute("needsFullContext")
+    var needsFullContext: Boolean = true
+
+    constructor()
+
+    constructor(provider: String, remoteSessionId: String?, needsFullContext: Boolean) {
+        this.provider = provider
+        this.remoteSessionId = remoteSessionId
+        this.needsFullContext = needsFullContext
+    }
+
+    fun toDomain(): AgentCliSessionState = AgentCliSessionState(
+        provider = try {
+            AgentCliProvider.valueOf(provider)
+        } catch (_: IllegalArgumentException) {
+            AgentCliProvider.CLAUDE_CODE
+        },
+        remoteSessionId = remoteSessionId,
+        needsFullContext = needsFullContext
+    )
+
+    companion object {
+        fun fromDomain(state: AgentCliSessionState) = XmlAgentCliSessionState(
+            provider = state.provider.name,
+            remoteSessionId = state.remoteSessionId,
+            needsFullContext = state.needsFullContext
+        )
+    }
+}
+
 @Tag("session")
 class XmlChatSession {
     @Attribute("id")
@@ -334,6 +374,9 @@ class XmlChatSession {
     @Attribute("claudeCodeNeedsFullContext")
     var claudeCodeNeedsFullContext: Boolean = true
 
+    /** Provider-aware Agent CLI session state. Null in legacy XML files. */
+    var agentCliSession: XmlAgentCliSessionState? = null
+
     /**
      * Task plan of the planner panel. Null for sessions without a plan and for
      * XML files written before this field existed (backward compatible).
@@ -350,28 +393,16 @@ class XmlChatSession {
     )
 
     fun toDomain(): ChatSession {
-        val genericProvider = codingAgentProvider?.let { name ->
-            runCatching { CodingAgentProvider.valueOf(name) }.getOrNull()
-        }
-        val genericSession = genericProvider?.let { provider ->
-            CodingAgentSessionRef(
-                provider = provider,
-                remoteSessionId = codingAgentRemoteSessionId,
-                needsFullContext = codingAgentNeedsFullContext
-            )
-        }
-        val legacySession = if (claudeCodeSessionId != null || !claudeCodeNeedsFullContext) {
-            CodingAgentSessionRef(
-                provider = CodingAgentProvider.CLAUDE_CODE,
-                remoteSessionId = claudeCodeSessionId,
-                needsFullContext = claudeCodeNeedsFullContext
-            )
-        } else {
-            null
-        }
-        val resolvedSession = genericSession ?: legacySession
-        val resolvedClaudeSession = resolvedSession
-            ?.takeIf { it.provider == CodingAgentProvider.CLAUDE_CODE }
+        val migratedAgentState = agentCliSession?.toDomain()
+            ?: if (claudeCodeSessionId != null || !claudeCodeNeedsFullContext) {
+                AgentCliSessionState(
+                    provider = AgentCliProvider.CLAUDE_CODE,
+                    remoteSessionId = claudeCodeSessionId,
+                    needsFullContext = claudeCodeNeedsFullContext
+                )
+            } else {
+                null
+            }
 
         return ChatSession(
             id = id,
@@ -388,10 +419,9 @@ class XmlChatSession {
                 ClipboardSessionStatus.IDLE
             },
             selectedSpecificPromptName = selectedSpecificPromptName.takeIf { it.isNotEmpty() },
-            codingAgentSession = resolvedSession,
-            claudeCodeSessionId = resolvedClaudeSession?.remoteSessionId ?: claudeCodeSessionId,
-            claudeCodeNeedsFullContext = resolvedClaudeSession?.needsFullContext
-                ?: claudeCodeNeedsFullContext,
+            agentCliSession = migratedAgentState,
+            claudeCodeSessionId = claudeCodeSessionId,
+            claudeCodeNeedsFullContext = claudeCodeNeedsFullContext,
             plan = plan?.toDomain()
         )
     }
@@ -412,32 +442,13 @@ class XmlChatSession {
             xml.updatedAt = session.updatedAt
             xml.clipboardStatus = session.clipboardStatus.name
             xml.selectedSpecificPromptName = session.selectedSpecificPromptName ?: ""
+            xml.agentCliSession = session.agentCliSession?.let { XmlAgentCliSessionState.fromDomain(it) }
 
-            val resolvedSession = session.codingAgentSession ?: if (
-                session.claudeCodeSessionId != null || !session.claudeCodeNeedsFullContext
-            ) {
-                CodingAgentSessionRef(
-                    provider = CodingAgentProvider.CLAUDE_CODE,
-                    remoteSessionId = session.claudeCodeSessionId,
-                    needsFullContext = session.claudeCodeNeedsFullContext
-                )
-            } else {
-                null
-            }
-
-            xml.codingAgentProvider = resolvedSession?.provider?.name
-            xml.codingAgentRemoteSessionId = resolvedSession?.remoteSessionId
-            xml.codingAgentNeedsFullContext = resolvedSession?.needsFullContext ?: true
-
-            val claudeSession = resolvedSession
-                ?.takeIf { it.provider == CodingAgentProvider.CLAUDE_CODE }
-            if (claudeSession != null) {
-                xml.claudeCodeSessionId = claudeSession.remoteSessionId
-                xml.claudeCodeNeedsFullContext = claudeSession.needsFullContext
-            } else {
-                xml.claudeCodeSessionId = session.claudeCodeSessionId
-                xml.claudeCodeNeedsFullContext = session.claudeCodeNeedsFullContext
-            }
+            val claudeState = session.agentCliSession
+                ?.takeIf { it.provider == AgentCliProvider.CLAUDE_CODE }
+            xml.claudeCodeSessionId = claudeState?.remoteSessionId ?: session.claudeCodeSessionId
+            xml.claudeCodeNeedsFullContext = claudeState?.needsFullContext
+                ?: session.claudeCodeNeedsFullContext
 
             xml.plan = session.plan?.let { XmlTaskPlan.fromDomain(it) }
             return xml

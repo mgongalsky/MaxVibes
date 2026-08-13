@@ -4,6 +4,7 @@ import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 import com.maxvibes.domain.model.planning.TaskPlan
 import java.time.Instant
 import java.util.UUID
+import com.maxvibes.domain.model.interaction.AgentCliSessionState
 
 data class ChatSession(
     val id: String = UUID.randomUUID().toString(),
@@ -17,23 +18,18 @@ data class ChatSession(
     val clipboardStatus: ClipboardSessionStatus = ClipboardSessionStatus.IDLE,
     val selectedSpecificPromptName: String? = null,
     /**
-     * Provider-aware remote coding-agent session metadata.
-     *
-     * Null for sessions that have not started a coding-agent exchange yet.
-     * During migration, legacy Claude-specific fields below remain available
-     * so existing XML sessions and runtime code continue to work unchanged.
+     * Provider-aware resumable Agent CLI conversation state.
+     * Null until an Agent CLI backend has established or persisted its state.
      */
-    val codingAgentSession: CodingAgentSessionRef? = null,
+    val agentCliSession: AgentCliSessionState? = null,
     /**
-     * Legacy Claude Code session id returned by the CLI's first system event.
-     * Kept temporarily for backward compatibility while persistence/runtime
-     * migrate to [codingAgentSession].
+     * Legacy Claude Code session id retained during migration and for old XML compatibility.
+     * New Agent CLI code should use [agentCliSession].
      */
     val claudeCodeSessionId: String? = null,
     /**
-     * Legacy Claude Code full-context flag.
-     * Kept temporarily for backward compatibility while persistence/runtime
-     * migrate to [codingAgentSession].
+     * Legacy Claude full-context flag retained during migration and for old XML compatibility.
+     * New Agent CLI code should use [agentCliSession].
      */
     val claudeCodeNeedsFullContext: Boolean = true,
     /**
@@ -62,19 +58,14 @@ data class ChatSession(
         )
     }
 
-    /**
-     * Returns a new session with the title set to [newTitle] (trimmed; "Untitled" if blank).
-     */
+    /** Returns a new session with the title set to [newTitle] (trimmed; "Untitled" if blank). */
     fun withTitle(newTitle: String): ChatSession =
         copy(title = newTitle.trim().ifBlank { "Untitled" }, updatedAt = Instant.now().toEpochMilli())
 
     /** Returns a new session with [depth] updated (no timestamp change — tree restructure only). */
     fun withDepth(newDepth: Int): ChatSession = copy(depth = newDepth)
 
-    /**
-     * Returns a new session re-attached to a different parent node.
-     * Updates [updatedAt] to reflect the structural change.
-     */
+    /** Returns a new session re-attached to a different parent node. */
     fun withParent(newParentId: String?, newDepth: Int): ChatSession =
         copy(parentId = newParentId, depth = newDepth, updatedAt = Instant.now().toEpochMilli())
 
@@ -92,45 +83,12 @@ data class ChatSession(
     /** Returns a new session with all messages removed and [updatedAt] refreshed. */
     fun cleared(): ChatSession = copy(messages = emptyList(), updatedAt = Instant.now().toEpochMilli())
 
-    /**
-     * Returns a new session with [clipboardStatus] set to [status] and [updatedAt] refreshed.
-     */
     fun withClipboardStatus(status: ClipboardSessionStatus): ChatSession =
         copy(clipboardStatus = status, updatedAt = Instant.now().toEpochMilli())
 
-    /**
-     * Returns a new session with [selectedSpecificPromptName] updated and [updatedAt] refreshed.
-     */
     fun withSelectedPrompt(name: String?): ChatSession =
         copy(selectedSpecificPromptName = name, updatedAt = Instant.now().toEpochMilli())
 
-    /**
-     * Returns a new session with [plan] replaced (null clears the plan) and [updatedAt] refreshed.
-     */
     fun withPlan(plan: TaskPlan?): ChatSession =
         copy(plan = plan, updatedAt = Instant.now().toEpochMilli())
-    fun resolvedCodingAgentSession(provider: CodingAgentProvider): CodingAgentSessionRef? {
-        codingAgentSession?.let { current ->
-            return current.takeIf { it.provider == provider }
-        }
-
-        if (provider != CodingAgentProvider.CLAUDE_CODE) return null
-        if (claudeCodeSessionId == null && claudeCodeNeedsFullContext) return null
-
-        return CodingAgentSessionRef(
-            provider = CodingAgentProvider.CLAUDE_CODE,
-            remoteSessionId = claudeCodeSessionId,
-            needsFullContext = claudeCodeNeedsFullContext
-        )
-    }
-    fun withCodingAgentSession(sessionRef: CodingAgentSessionRef): ChatSession =
-        if (sessionRef.provider == CodingAgentProvider.CLAUDE_CODE) {
-            copy(
-                codingAgentSession = sessionRef,
-                claudeCodeSessionId = sessionRef.remoteSessionId,
-                claudeCodeNeedsFullContext = sessionRef.needsFullContext
-            )
-        } else {
-            copy(codingAgentSession = sessionRef)
-        }
 }
