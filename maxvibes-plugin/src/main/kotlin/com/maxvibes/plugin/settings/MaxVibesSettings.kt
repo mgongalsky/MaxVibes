@@ -49,7 +49,15 @@ class MaxVibesSettings : PersistentStateComponent<MaxVibesSettings.State> {
         var claudeCodeMaxOutputTokens: Int = 64000,
         var claudeCodeThinkingBudget: Int = 0,
         var claudeCodeReadTimeoutSec: Int = 120,
-        var claudeCodeStartTimeoutSec: Int = 30
+        var claudeCodeStartTimeoutSec: Int = 30,
+
+        // ===== Codex (CLI mode) =====
+        var codexPath: String = "codex",
+        var codexExtraArgs: String = "",
+        var codexModel: String = "",
+        var codexReasoningEffort: String = "",
+        var codexReadTimeoutSec: Int = 120,
+        var codexStartTimeoutSec: Int = 30
     )
 
     private var myState = State()
@@ -189,6 +197,36 @@ class MaxVibesSettings : PersistentStateComponent<MaxVibesSettings.State> {
         get() = myState.claudeCodeStartTimeoutSec
         set(value) {
             myState.claudeCodeStartTimeoutSec = value
+        }
+    var codexPath: String
+        get() = myState.codexPath
+        set(value) {
+            myState.codexPath = value
+        }
+    var codexExtraArgs: String
+        get() = myState.codexExtraArgs
+        set(value) {
+            myState.codexExtraArgs = value
+        }
+    var codexModel: String
+        get() = myState.codexModel
+        set(value) {
+            myState.codexModel = value
+        }
+    var codexReasoningEffort: String
+        get() = myState.codexReasoningEffort
+        set(value) {
+            myState.codexReasoningEffort = value
+        }
+    var codexReadTimeoutSec: Int
+        get() = myState.codexReadTimeoutSec
+        set(value) {
+            myState.codexReadTimeoutSec = value
+        }
+    var codexStartTimeoutSec: Int
+        get() = myState.codexStartTimeoutSec
+        set(value) {
+            myState.codexStartTimeoutSec = value
         }
 
     // ========== Secure API Key Storage ==========

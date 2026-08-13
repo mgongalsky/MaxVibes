@@ -22,6 +22,8 @@ class PromptService(private val project: Project) : PromptPort {
         private const val PLANNING_SYSTEM_FILE = "planning-system.md"
         private const val CLAUDE_CODE_SYSTEM_FILE = "claude-code-system.md"
         private const val CLAUDE_CODE_SYSTEM_RESOURCE = "/prompts/claude-code-system.md"
+        private const val CODEX_SYSTEM_FILE = "codex-system.md"
+        private const val CODEX_SYSTEM_RESOURCE = "/prompts/codex-system.md"
 
         fun getInstance(project: Project): PromptService {
             return project.getService(PromptService::class.java)
@@ -82,6 +84,28 @@ class PromptService(private val project: Project) : PromptPort {
         }
         val catalog = skillCatalogProvider?.invoke()
         return if (catalog.isNullOrBlank()) base else base + "\n\n" + catalog
+    }
+
+    override fun codexSystem(): String {
+        val customFile = File(promptsDir, CODEX_SYSTEM_FILE)
+        val base = if (customFile.exists() && customFile.canRead()) {
+            try {
+                customFile.readText()
+            } catch (ignored: Exception) {
+                loadResource(CODEX_SYSTEM_RESOURCE)
+                    ?: error("Missing classpath resource: $CODEX_SYSTEM_RESOURCE")
+            }
+        } else {
+            loadResource(CODEX_SYSTEM_RESOURCE)
+                ?: error("Missing classpath resource: $CODEX_SYSTEM_RESOURCE")
+        }
+        val catalog = skillCatalogProvider?.invoke()
+        return if (catalog.isNullOrBlank()) base else buildString {
+            append(base)
+            appendLine()
+            appendLine()
+            append(catalog)
+        }
     }
 
     private fun loadPrompt(fileName: String, default: String): String {

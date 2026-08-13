@@ -50,6 +50,7 @@ interface PromptPort {
     fun claudeCodeSystem(): String
     fun codingAgentSystem(provider: CodingAgentProvider): String = when (provider) {
         CodingAgentProvider.CLAUDE_CODE -> claudeCodeSystem()
-        CodingAgentProvider.CODEX -> error("System prompt is not configured for coding agent provider: ${provider.name}")
+        CodingAgentProvider.CODEX -> codexSystem()
     }
+    fun codexSystem(): String = claudeCodeSystem()
 }
