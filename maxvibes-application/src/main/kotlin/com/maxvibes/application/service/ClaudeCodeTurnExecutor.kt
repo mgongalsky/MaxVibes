@@ -11,8 +11,6 @@ import com.maxvibes.application.port.output.CodingAgentCliSendResult
 import com.maxvibes.domain.model.chat.CodingAgentProvider
 import com.maxvibes.domain.model.chat.CodingAgentSessionRef
 import com.maxvibes.domain.model.chat.ChatSession
-import com.maxvibes.domain.model.interaction.AgentCliProvider
-import com.maxvibes.domain.model.interaction.AgentCliSessionState
 
 internal class ClaudeCodeTurnExecutor(
     private val claudeCodePort: CodingAgentCliPort,
@@ -63,8 +61,8 @@ internal class ClaudeCodeTurnExecutor(
                 mapOf("claudeSessionId" to resumeFailure.sessionId)
             )
 
-            agentSession = AgentCliSessionState(
-                provider = AgentCliProvider.CLAUDE_CODE,
+            agentSession = CodingAgentSessionRef(
+                provider = CodingAgentProvider.CLAUDE_CODE,
                 remoteSessionId = null,
                 needsFullContext = true
             )
@@ -183,18 +181,18 @@ internal class ClaudeCodeTurnExecutor(
         }
     }
 
-    private fun currentAgentSession(session: ChatSession): AgentCliSessionState =
+    private fun currentAgentSession(session: ChatSession): CodingAgentSessionRef =
         session.agentCliSession
-            ?.takeIf { it.provider == AgentCliProvider.CLAUDE_CODE }
-            ?: AgentCliSessionState(
-                provider = AgentCliProvider.CLAUDE_CODE,
+            ?.takeIf { it.provider == CodingAgentProvider.CLAUDE_CODE }
+            ?: CodingAgentSessionRef(
+                provider = CodingAgentProvider.CLAUDE_CODE,
                 remoteSessionId = session.claudeCodeSessionId,
                 needsFullContext = session.claudeCodeNeedsFullContext
             )
 
     private fun withAgentSession(
         session: ChatSession,
-        state: AgentCliSessionState
+        state: CodingAgentSessionRef
     ): ChatSession = session.copy(
         agentCliSession = state,
         claudeCodeSessionId = state.remoteSessionId,

@@ -4,7 +4,6 @@ import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 import com.maxvibes.domain.model.planning.TaskPlan
 import java.time.Instant
 import java.util.UUID
-import com.maxvibes.domain.model.interaction.AgentCliSessionState
 
 data class ChatSession(
     val id: String = UUID.randomUUID().toString(),
@@ -18,19 +17,14 @@ data class ChatSession(
     val clipboardStatus: ClipboardSessionStatus = ClipboardSessionStatus.IDLE,
     val selectedSpecificPromptName: String? = null,
     /**
-     * Provider-aware resumable Agent CLI conversation state.
-     * Null until an Agent CLI backend has established or persisted its state.
+     * Provider-aware resumable coding-agent conversation state.
+     * The property name is retained during migration; the canonical value type is
+     * [CodingAgentSessionRef].
      */
-    val agentCliSession: AgentCliSessionState? = null,
-    /**
-     * Legacy Claude Code session id retained during migration and for old XML compatibility.
-     * New Agent CLI code should use [agentCliSession].
-     */
+    val agentCliSession: CodingAgentSessionRef? = null,
+    /** Legacy Claude Code session id retained for old XML compatibility. */
     val claudeCodeSessionId: String? = null,
-    /**
-     * Legacy Claude full-context flag retained during migration and for old XML compatibility.
-     * New Agent CLI code should use [agentCliSession].
-     */
+    /** Legacy Claude full-context flag retained for old XML compatibility. */
     val claudeCodeNeedsFullContext: Boolean = true,
     /**
      * Task plan maintained by the LLM for this session (planner panel).

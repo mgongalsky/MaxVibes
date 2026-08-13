@@ -1,7 +1,6 @@
 package com.maxvibes.domain.model.interaction
 
-/** Coding-agent CLI backend owning a resumable remote/local conversation. */
-enum class AgentCliProvider {
-    CLAUDE_CODE,
-    CODEX
-}
+import com.maxvibes.domain.model.chat.CodingAgentProvider
+
+/** Compatibility name for the canonical coding-agent provider model. */
+typealias AgentCliProvider = CodingAgentProvider
