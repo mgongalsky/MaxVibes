@@ -276,6 +276,8 @@ class CodingAgentInteractionService(
         logger?.error(policy.logTag, message)
         return ClaudeCodeStepResult.Error(message)
     }
+    fun rejectPendingModifications(sessionId: String): Boolean =
+        approvalService.reject(sessionId)
 }
 
 typealias ClaudeCodeInteractionService = CodingAgentInteractionService

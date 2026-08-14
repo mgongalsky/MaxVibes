@@ -38,6 +38,7 @@ class ClaudeCodeDispatcher(
     private val presentCommands: (commands: List<CommandRequest>, sessionId: String, mode: InteractionMode) -> Unit,
     private val executeAsync: (title: String, session: ChatSession, action: suspend () -> ClaudeCodeStepResult) -> Unit
 ) {
+    private var modificationProposalView: ModificationProposalView? = null
 
     fun dispatchMessage(
         userInput: String,
@@ -109,58 +110,57 @@ class ClaudeCodeDispatcher(
 
     fun handleResult(result: ClaudeCodeStepResult, session: ChatSession) {
         when (result) {
+            is ClaudeCodeStepResult.Error -> chatTreeService.addMessage(
+                session.id,
+                MessageRole.SYSTEM,
+                "Claude Code error: ${result.message}"
+            )
+
+            is ClaudeCodeStepResult.TransportError -> chatTreeService.addMessage(
+                session.id,
+                MessageRole.SYSTEM,
+                "Claude Code transport error: ${result.detail}"
+            )
+
+            else -> Unit
+        }
+
+        when (result) {
             is ClaudeCodeStepResult.WaitingForApprove -> {
-                MaxVibesLogger.info(
-                    "ClaudeCodeDispatcher", "claudeCode awaiting approve", mapOf(
-                        "requestedViews" to result.requestedViews.size,
-                        "in" to result.inputTokens,
-                        "out" to result.outputTokens,
-                        "durationMs" to result.durationMs
-                    )
-                )
                 chatTreeService.addChatTokens(session.id, result.inputTokens, result.outputTokens)
                 val tokenInfo = buildTokenInfoForClaudeCode(
-                    inTok = result.inputTokens,
-                    outTok = result.outputTokens,
-                    durationMs = result.durationMs,
-                    costUsd = result.costUsd,
-                    numTurns = result.numTurns
+                    result.inputTokens,
+                    result.outputTokens,
+                    result.durationMs,
+                    result.costUsd,
+                    result.numTurns
                 )
                 chatTreeService.addMessage(
-                    session.id, MessageRole.ASSISTANT, result.assistantMessage,
+                    session.id,
+                    MessageRole.ASSISTANT,
+                    result.assistantMessage,
                     tokenInfo = tokenInfo,
                     reasoning = result.llmReasoning,
                     requestedViews = result.requestedViews
                 )
                 callbacks.updateTokenDisplay()
                 callbacks.addAssistantMessageBubble(
-                    text = callbacks.formatMarkdown(result.assistantMessage),
-                    tokenInfo = tokenInfo,
-                    modifications = emptyList(),
-                    metaFiles = emptyList(),
-                    reasoning = result.llmReasoning,
-                    requestedViews = result.requestedViews,
-                    appliedModifications = emptyList()
+                    callbacks.formatMarkdown(result.assistantMessage),
+                    tokenInfo,
+                    emptyList(),
+                    emptyList(),
+                    result.llmReasoning,
+                    result.requestedViews,
+                    emptyList()
                 )
                 result.diagram?.let { callbacks.showDiagramButton(it) }
-                if (result.skippedCommands > 0) {
-                    callbacks.appendToChat("⚠️ ${result.skippedCommands} command(s) skipped — response mixed them with requestedViews")
-                }
+                if (result.skippedCommands > 0) callbacks.appendToChat("⚠️ ${result.skippedCommands} command(s) skipped — response mixed them with requestedViews")
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
                 callbacks.setStatus("🤖 Awaiting approval — click Approve to gather files and continue")
             }
 
             is ClaudeCodeStepResult.AwaitingModApprove -> {
-                MaxVibesLogger.info(
-                    "ClaudeCodeDispatcher", "claudeCode awaiting mod approve", mapOf(
-                        "mods" to result.proposedModifications.size,
-                        "heldCommands" to result.heldCommands,
-                        "skippedViews" to result.skippedViews,
-                        "in" to result.inputTokens,
-                        "out" to result.outputTokens
-                    )
-                )
                 chatTreeService.addChatTokens(session.id, result.inputTokens, result.outputTokens)
                 val tokenInfo = buildTokenInfoForClaudeCode(
                     result.inputTokens,
@@ -170,45 +170,39 @@ class ClaudeCodeDispatcher(
                     result.numTurns
                 )
                 chatTreeService.addMessage(
-                    session.id, MessageRole.ASSISTANT, result.assistantMessage,
+                    session.id,
+                    MessageRole.ASSISTANT,
+                    result.assistantMessage,
                     tokenInfo = tokenInfo,
                     reasoning = result.llmReasoning
                 )
                 callbacks.updateTokenDisplay()
                 callbacks.addAssistantMessageBubble(
-                    text = callbacks.formatMarkdown(result.assistantMessage),
-                    tokenInfo = tokenInfo,
-                    modifications = emptyList(),
-                    metaFiles = emptyList(),
-                    reasoning = result.llmReasoning,
-                    requestedViews = emptyList(),
-                    appliedModifications = emptyList()
+                    callbacks.formatMarkdown(result.assistantMessage),
+                    tokenInfo,
+                    emptyList(),
+                    emptyList(),
+                    result.llmReasoning,
+                    emptyList(),
+                    emptyList()
                 )
                 result.diagram?.let { callbacks.showDiagramButton(it) }
-                val proposal = result.proposedModifications.joinToString(10.toChar().toString()) {
-                    "  • ${it.type}  ${it.path}"
-                }
-                callbacks.appendToChat("📝 Proposed ${result.proposedModifications.size} modification(s):${10.toChar()}$proposal")
-                if (result.heldCommands > 0) {
-                    callbacks.appendToChat("⚡ ${result.heldCommands} command(s) held — they run after the modifications are applied")
-                }
-                if (result.skippedViews > 0) {
-                    callbacks.appendToChat("⚠️ ${result.skippedViews} file request(s) skipped — response mixed them with modifications")
-                }
+                modificationProposalView = callbacks.addModificationProposalBubble(
+                    modifications = result.proposedModifications,
+                    heldCommands = result.heldCommands,
+                    onApply = {
+                        modificationProposalView?.setApplying()
+                        approve(null, null)
+                    },
+                    onReject = { rejectPendingModifications(session) }
+                )
+                if (result.skippedViews > 0) callbacks.appendToChat("⚠️ ${result.skippedViews} file request(s) skipped — response mixed them with modifications")
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
-                callbacks.setStatus("🤖 ${result.proposedModifications.size} modification(s) awaiting approval — Approve to apply, or type to reject")
+                callbacks.setStatus("Review proposed changes, then Apply or Reject")
             }
 
             is ClaudeCodeStepResult.AwaitingQuestions -> {
-                MaxVibesLogger.info(
-                    "ClaudeCodeDispatcher", "claudeCode awaiting answers", mapOf(
-                        "questions" to result.questions.size,
-                        "in" to result.inputTokens,
-                        "out" to result.outputTokens,
-                        "durationMs" to result.durationMs
-                    )
-                )
                 chatTreeService.addChatTokens(session.id, result.inputTokens, result.outputTokens)
                 val tokenInfo = buildTokenInfoForClaudeCode(
                     result.inputTokens,
@@ -217,91 +211,60 @@ class ClaudeCodeDispatcher(
                     result.costUsd,
                     result.numTurns
                 )
-
-                val separator = 10.toChar().toString().repeat(2)
-                val questionsBlock = result.questions.joinToString(separator) { question ->
+                val questionsBlock = result.questions.joinToString("\n\n") { question ->
                     buildString {
                         append("❓ ").append(question.question)
                         question.options.forEachIndexed { index, option ->
-                            append(10.toChar())
-                                .append(index + 1)
-                                .append(". ")
-                                .append(option)
+                            append('\n').append(index + 1).append(". ").append(option)
                         }
                     }
                 }
-                val combined = buildString {
-                    val message = result.assistantMessage.trim()
-                    if (message.isNotBlank()) {
-                        append(message)
-                        append(separator)
-                    }
-                    append(questionsBlock)
-                }
-
+                val combined = listOf(result.assistantMessage.trim(), questionsBlock)
+                    .filter { it.isNotBlank() }
+                    .joinToString("\n\n")
                 chatTreeService.addMessage(
-                    session.id, MessageRole.ASSISTANT, combined,
+                    session.id,
+                    MessageRole.ASSISTANT,
+                    combined,
                     tokenInfo = tokenInfo,
                     reasoning = result.llmReasoning
                 )
                 callbacks.updateTokenDisplay()
-
-                if (result.assistantMessage.isNotBlank()) {
-                    callbacks.addAssistantMessageBubble(
-                        text = callbacks.formatMarkdown(result.assistantMessage),
-                        tokenInfo = tokenInfo,
-                        modifications = emptyList(),
-                        metaFiles = emptyList(),
-                        reasoning = result.llmReasoning,
-                        requestedViews = emptyList(),
-                        appliedModifications = emptyList()
-                    )
-                }
+                if (result.assistantMessage.isNotBlank()) callbacks.addAssistantMessageBubble(
+                    callbacks.formatMarkdown(
+                        result.assistantMessage
+                    ), tokenInfo, emptyList(), emptyList(), result.llmReasoning, emptyList(), emptyList()
+                )
                 result.diagram?.let { callbacks.showDiagramButton(it) }
                 presentQuestions(result.questions)
-
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
                 callbacks.setStatus("❓ ${result.questions.size} question(s) — pick an option or type your answer")
             }
 
             is ClaudeCodeStepResult.Completed -> {
+                if (result.modifications.isNotEmpty()) modificationProposalView?.setApplied()
+                modificationProposalView = null
                 val failures = result.modifications.filterIsInstance<ModificationResult.Failure>()
-                MaxVibesLogger.info(
-                    "ClaudeCodeDispatcher", "claudeCode completed", mapOf(
-                        "success" to result.success,
-                        "mods" to result.modifications.size,
-                        "failures" to failures.size,
-                        "in" to result.inputTokens,
-                        "out" to result.outputTokens,
-                        "durationMs" to result.durationMs,
-                        "hasCommitMsg" to (result.commitMessage != null),
-                        "commands" to result.commands.size
-                    )
-                )
                 callbacks.registerElementPaths(result.modifications)
                 chatTreeService.addChatTokens(session.id, result.inputTokens, result.outputTokens)
                 val text = result.message.trim().ifBlank { "Done." }
                 val tokenInfo = buildTokenInfoForClaudeCode(
-                    inTok = result.inputTokens,
-                    outTok = result.outputTokens,
-                    durationMs = result.durationMs,
-                    costUsd = result.costUsd,
-                    numTurns = result.numTurns
+                    result.inputTokens,
+                    result.outputTokens,
+                    result.durationMs,
+                    result.costUsd,
+                    result.numTurns
                 )
-                val appliedPaths = result.modifications
-                    .filterIsInstance<ModificationResult.Success>()
+                val appliedPaths = result.modifications.filterIsInstance<ModificationResult.Success>()
                     .map { it.affectedPath.toString() }
-                val appliedMods = result.modifications
-                    .filterIsInstance<ModificationResult.Success>()
-                    .map {
-                        AppliedModInfo(
-                            path = it.affectedPath.toString(),
-                            category = it.modification.toCategory()
-                        )
-                    }
+                val appliedMods = result.modifications.filterIsInstance<ModificationResult.Success>().map {
+                    AppliedModInfo(it.affectedPath.toString(), it.modification.toCategory())
+                }
                 chatTreeService.addMessage(
-                    session.id, MessageRole.ASSISTANT, text,
+                    session.id,
+                    MessageRole.ASSISTANT,
+                    text,
                     appliedModificationPaths = appliedPaths,
                     tokenInfo = tokenInfo,
                     reasoning = result.llmReasoning,
@@ -309,49 +272,30 @@ class ClaudeCodeDispatcher(
                 )
                 callbacks.updateTokenDisplay()
                 callbacks.addAssistantMessageBubble(
-                    text = callbacks.formatMarkdown(text),
-                    tokenInfo = tokenInfo,
-                    modifications = result.modifications,
-                    metaFiles = emptyList(),
-                    reasoning = result.llmReasoning,
-                    requestedViews = emptyList(),
-                    appliedModifications = appliedMods
+                    callbacks.formatMarkdown(text),
+                    tokenInfo,
+                    result.modifications,
+                    emptyList(),
+                    result.llmReasoning,
+                    emptyList(),
+                    appliedMods
                 )
                 result.diagram?.let { callbacks.showDiagramButton(it) }
-                result.commitMessage?.let { message ->
-                    callbacks.setCommitMessage(message)
-                    callbacks.appendToChat("💬 Commit message set in IDE")
+                result.commitMessage?.let { callbacks.setCommitMessage(it) }
+                if (result.commands.isNotEmpty() && failures.isEmpty()) {
+                    presentCommands(result.commands, session.id, InteractionMode.CLAUDE_CODE)
+                    callbacks.updateModeIndicator()
+                    callbacks.updateBreadcrumb()
+                    return
                 }
-                if (result.commands.isNotEmpty()) {
-                    if (failures.isEmpty()) {
-                        presentCommands(result.commands, session.id, InteractionMode.CLAUDE_CODE)
-                        callbacks.updateModeIndicator()
-                        callbacks.updateBreadcrumb()
-                        return
-                    }
-                    callbacks.appendToChat("⚠️ ${result.commands.size} command(s) skipped — fix failed modifications first")
-                }
+                if (result.commands.isNotEmpty()) callbacks.appendToChat("⚠️ ${result.commands.size} command(s) skipped — fix failed modifications first")
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
-                if (failures.isNotEmpty()) {
-                    callbacks.setStatus("⚠️ ${failures.size} modification(s) failed")
-                } else {
-                    callbacks.setStatus(if (result.success) "Ready" else "Errors")
-                }
+                callbacks.setStatus(if (failures.isNotEmpty()) "⚠️ ${failures.size} modification(s) failed" else if (result.success) "Ready" else "Errors")
                 callbacks.updateBreadcrumb()
             }
 
             is ClaudeCodeStepResult.Error -> {
-                MaxVibesLogger.warn(
-                    "ClaudeCodeDispatcher",
-                    "claudeCode error",
-                    data = mapOf("msg" to result.message)
-                )
-                chatTreeService.addMessage(
-                    session.id,
-                    MessageRole.SYSTEM,
-                    "Claude Code error: ${result.message}"
-                )
                 callbacks.appendToChat("❌ ${result.message}")
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
@@ -359,16 +303,6 @@ class ClaudeCodeDispatcher(
             }
 
             is ClaudeCodeStepResult.TransportError -> {
-                MaxVibesLogger.warn(
-                    "ClaudeCodeDispatcher",
-                    "claudeCode transport error",
-                    data = mapOf("detail" to result.detail)
-                )
-                chatTreeService.addMessage(
-                    session.id,
-                    MessageRole.SYSTEM,
-                    "Claude Code transport error: ${result.detail}"
-                )
                 callbacks.appendToChat("❌ Transport: ${result.detail}")
                 callbacks.appendToChat("Check Claude Code settings (binary path, args) and retry.")
                 callbacks.setInputEnabled(true)
@@ -400,4 +334,16 @@ class ClaudeCodeDispatcher(
     }
 
     private fun fmt(n: Int) = if (n >= 1000) "${n / 1000}k" else n.toString()
+    private fun rejectPendingModifications(session: ChatSession) {
+        val rejected = claudeCodeService().rejectPendingModifications(session.id)
+        if (rejected) {
+            modificationProposalView?.setRejected()
+            modificationProposalView = null
+            callbacks.setInputEnabled(true)
+            callbacks.updateModeIndicator()
+            callbacks.setStatus("Changes rejected — nothing was applied")
+        } else {
+            callbacks.setStatus("No pending modifications to reject")
+        }
+    }
 }

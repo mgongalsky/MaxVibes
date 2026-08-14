@@ -5,6 +5,7 @@ import com.maxvibes.domain.model.interaction.AttachedImage
 import com.maxvibes.domain.model.modification.AppliedModInfo
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.domain.model.planning.PlanDiagram
+import com.maxvibes.domain.model.interaction.InteractionModification
 
 /** Chat transcript rendering: bubbles, markdown, token info, commit message, plan diagram. */
 interface ConversationView {
@@ -42,6 +43,12 @@ interface ConversationView {
 
     /** Adds a "Схема" button under the last assistant bubble; opens the plan diagram viewer. */
     fun showDiagramButton(diagram: PlanDiagram)
+    fun addModificationProposalBubble(
+        modifications: List<InteractionModification>,
+        heldCommands: Int,
+        onApply: () -> Unit,
+        onReject: () -> Unit
+    ): ModificationProposalView
 }
 
 /** Input field, status line and mode indicators. */

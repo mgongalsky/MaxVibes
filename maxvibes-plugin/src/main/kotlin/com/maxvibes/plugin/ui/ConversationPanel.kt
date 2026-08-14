@@ -23,6 +23,13 @@ import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.*
 import com.maxvibes.domain.model.interaction.AttachedImage
+import com.maxvibes.domain.model.interaction.InteractionModification
+
+interface ModificationProposalView {
+    fun setApplying()
+    fun setApplied()
+    fun setRejected()
+}
 
 sealed class MessageSegment {
     data class Text(val content: String) : MessageSegment()
@@ -1042,5 +1049,105 @@ class ConversationPanel(
             addActionListener { onOpen() }
         })
         addComp(panel)
+    }
+
+    fun addModificationProposalBubble(
+        modifications: List<InteractionModification>,
+        heldCommands: Int,
+        onApply: () -> Unit,
+        onReject: () -> Unit
+    ): ModificationProposalView {
+        val bg = JBColor(Color(0xF4ECF7), Color(0x251B2B))
+        val accent = JBColor(Color(0x7D3C98), Color(0xBB8FCE))
+        val body = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            background = bg
+            alignmentX = Component.LEFT_ALIGNMENT
+        }
+
+        modifications.forEachIndexed { index, modification ->
+            val path = runCatching {
+                ChatNavigationHelper.formatElementPath(modification.path)
+            }.getOrDefault(modification.path)
+            val preview = JButton("Preview").apply {
+                toolTipText = "Open in IntelliJ Diff Viewer"
+                addActionListener { ModificationDiffPreview.show(project, modification) }
+            }
+            val row = JPanel(BorderLayout(8, 0)).apply {
+                background = bg
+                alignmentX = Component.LEFT_ALIGNMENT
+                border = JBUI.Borders.empty(2, 0)
+                add(JBLabel("${index + 1}. ${modification.type}  $path").apply {
+                    font = Font(Font.MONOSPACED, Font.PLAIN, 11)
+                    foreground = JBColor(Color(0x512E5F), Color(0xD2B4DE))
+                    toolTipText = modification.path
+                }, BorderLayout.CENTER)
+                add(preview, BorderLayout.EAST)
+            }
+            row.maximumSize = Dimension(Int.MAX_VALUE, row.preferredSize.height)
+            body.add(row)
+            body.add(Box.createVerticalStrut(4))
+        }
+        if (heldCommands > 0) {
+            body.add(JBLabel("⚡ $heldCommands command(s) will be offered after a successful apply").apply {
+                font = font.deriveFont(Font.ITALIC, 10f)
+                foreground = JBColor(Color(0x7D6608), Color(0xF7DC6F))
+                alignmentX = Component.LEFT_ALIGNMENT
+            })
+        }
+
+        val applyButton = JButton("✓ Apply ${modifications.size}")
+        val rejectButton = JButton("✕ Reject")
+        val controls = JPanel(FlowLayout(FlowLayout.LEFT, 6, 0)).apply {
+            background = bg
+            alignmentX = Component.LEFT_ALIGNMENT
+            add(applyButton)
+            add(rejectButton)
+        }
+        val statusRow = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
+            background = bg
+            alignmentX = Component.LEFT_ALIGNMENT
+        }
+        applyButton.addActionListener {
+            applyButton.isEnabled = false
+            rejectButton.isEnabled = false
+            onApply()
+        }
+        rejectButton.addActionListener {
+            applyButton.isEnabled = false
+            rejectButton.isEnabled = false
+            onReject()
+        }
+
+        addComp(bubble(bg, accent).also { panel ->
+            panel.add(roleLabel("📝 Proposed changes", accent), BorderLayout.NORTH)
+            panel.add(body, BorderLayout.CENTER)
+            panel.add(JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                background = bg
+                add(controls)
+                add(statusRow)
+            }, BorderLayout.SOUTH)
+        })
+
+        fun setStatus(text: String, color: Color) = SwingUtilities.invokeLater {
+            controls.isVisible = false
+            statusRow.removeAll()
+            statusRow.add(JBLabel(text).apply {
+                font = font.deriveFont(Font.BOLD, 11f)
+                foreground = color
+            })
+            messagesPanel.revalidate()
+            messagesPanel.repaint()
+        }
+
+        return object : ModificationProposalView {
+            override fun setApplying() = setStatus("⏳ Applying…", JBColor(Color(0x7D6608), Color(0xF7DC6F)))
+            override fun setApplied() =
+                setStatus("✓ Processed — see result below", JBColor(Color(0x1E8449), Color(0x58D68D)))
+
+            override fun setRejected() =
+                setStatus("✕ Rejected — nothing was applied", JBColor(Color(0x922B21), Color(0xD98880)))
+        }
     }
 }

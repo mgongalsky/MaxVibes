@@ -6,6 +6,7 @@ import com.maxvibes.domain.model.interaction.AttachedImage
 import com.maxvibes.domain.model.modification.AppliedModInfo
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.domain.model.planning.PlanDiagram
+import com.maxvibes.domain.model.interaction.InteractionModification
 
 internal fun normalizeSystemMessage(text: String): String? {
     val value = text.trim()
@@ -181,5 +182,26 @@ class ChatPanelCallbacksAdapter(
 
     override fun showDiagramButton(diagram: PlanDiagram) {
         conversationPanel.addDiagramButton { onOpenDiagram(diagram) }
+    }
+
+    override fun addModificationProposalBubble(
+        modifications: List<InteractionModification>,
+        heldCommands: Int,
+        onApply: () -> Unit,
+        onReject: () -> Unit
+    ): ModificationProposalView {
+        val view = conversationPanel.addModificationProposalBubble(
+            modifications = modifications,
+            heldCommands = heldCommands,
+            onApply = onApply,
+            onReject = onReject
+        )
+        // AwaitingModApprove shares the session status used by requestedViews, so the
+        // normal render pass briefly enables the legacy global Approve button. Hide it
+        // after that pass: modification decisions belong exclusively to this bubble.
+        javax.swing.SwingUtilities.invokeLater {
+            inputPanel.applyApproveState(false)
+        }
+        return view
     }
 }

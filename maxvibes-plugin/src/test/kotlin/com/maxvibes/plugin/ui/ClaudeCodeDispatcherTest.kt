@@ -103,15 +103,26 @@ class ClaudeCodeDispatcherTest {
     }
 
     @Test
-    fun `AwaitingModApprove reports proposal and keeps session interactive`() {
+    fun `AwaitingModApprove renders interactive proposal and keeps session interactive`() {
         val session = activeSession()
-        val mods = listOf(InteractionModification(type = "REPLACE_ELEMENT", path = "file:src/A.kt/class[A]"))
+        val mods = listOf(
+            InteractionModification(
+                type = "REPLACE_ELEMENT",
+                path = "file:src/A.kt/class[A]"
+            )
+        )
         dispatcher.handleResult(
-            ClaudeCodeStepResult.AwaitingModApprove(assistantMessage = "plan", proposedModifications = mods),
+            ClaudeCodeStepResult.AwaitingModApprove(
+                assistantMessage = "plan",
+                proposedModifications = mods
+            ),
             session
         )
+
         assertEquals(true, callbacks.inputEnabled)
-        assertTrue(callbacks.statusUpdates.last().contains("1 modification(s) awaiting approval"))
+        assertEquals("Review proposed changes, then Apply or Reject", callbacks.statusUpdates.last())
+        assertEquals(1, callbacks.modificationProposals.size)
+        assertEquals(mods, callbacks.modificationProposals.single().modifications)
         assertEquals("plan", lastMessage().content)
     }
 

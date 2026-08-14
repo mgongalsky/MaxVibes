@@ -11,6 +11,8 @@ import com.maxvibes.plugin.ui.CommandBatchBarView
 import com.maxvibes.plugin.ui.CommandBlockView
 import com.maxvibes.plugin.ui.PostApplyErrorsView
 import com.maxvibes.plugin.ui.QuestionBlockView
+import com.maxvibes.domain.model.interaction.InteractionModification
+import com.maxvibes.plugin.ui.ModificationProposalView
 
 /**
  * Recording fake for [ChatPanelCallbacks].
@@ -236,4 +238,41 @@ class FakeChatPanelCallbacks : ChatPanelCallbacks {
     }
 
     override fun showDiagramButton(diagram: PlanDiagram) {}
+    class RecordedModificationProposal(
+        val modifications: List<InteractionModification>,
+        val heldCommands: Int,
+        val onApply: () -> Unit,
+        val onReject: () -> Unit
+    ) : ModificationProposalView {
+        val stateChanges = mutableListOf<String>()
+
+        override fun setApplying() {
+            stateChanges.add("applying")
+        }
+
+        override fun setApplied() {
+            stateChanges.add("applied")
+        }
+
+        override fun setRejected() {
+            stateChanges.add("rejected")
+        }
+    }
+
+    val modificationProposals = mutableListOf<RecordedModificationProposal>()
+    override fun addModificationProposalBubble(
+        modifications: List<InteractionModification>,
+        heldCommands: Int,
+        onApply: () -> Unit,
+        onReject: () -> Unit
+    ): ModificationProposalView {
+        val proposal = RecordedModificationProposal(
+            modifications = modifications,
+            heldCommands = heldCommands,
+            onApply = onApply,
+            onReject = onReject
+        )
+        modificationProposals.add(proposal)
+        return proposal
+    }
 }

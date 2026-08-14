@@ -29,15 +29,7 @@ internal class CodingAgentApprovalService(
         val rejectedCount = pending.modifications.size
         val heldCommandCount = pending.commands.size
 
-        sessionManager.transition(command.sessionId, ClipboardEvent.Approved)
-        log("User rejected $rejectedCount pending modification(s) by typing a new message")
-        sessionLog?.event(
-            "pending modifications rejected",
-            mapOf(
-                "mods" to rejectedCount,
-                "heldCommands" to heldCommandCount
-            )
-        )
+        finishRejection(command.sessionId, rejectedCount, heldCommandCount, "by typing a new message")
 
         val rejectionMessage = buildString {
             append("[USER REJECTED your ")
@@ -162,8 +154,13 @@ internal class CodingAgentApprovalService(
             notificationPort.showSuccess("Applied $successCount changes")
         }
 
+        val message = when {
+            failureCount == 0 -> "Applied approved modifications."
+            successCount == 0 -> "Approved modifications failed to apply."
+            else -> "Applied $successCount modification(s); $failureCount failed."
+        }
         return ClaudeCodeStepResult.Completed(
-            message = "Applied approved modifications.",
+            message = message,
             modifications = modificationResults,
             success = failureCount == 0,
             commitMessage = pending.commitMessage,
@@ -208,6 +205,33 @@ internal class CodingAgentApprovalService(
         val policy = CodingAgentProviderPolicy.forProvider(provider)
         println("[MaxVibes ${policy.logTag}] $message")
         logger?.info(policy.logTag, message)
+    }
+    fun reject(sessionId: String): Boolean {
+        val pending = pendingStore.take(sessionId) ?: return false
+        finishRejection(
+            sessionId = sessionId,
+            rejectedCount = pending.modifications.size,
+            heldCommandCount = pending.commands.size,
+            source = "explicitly"
+        )
+        return true
+    }
+    private fun finishRejection(
+        sessionId: String,
+        rejectedCount: Int,
+        heldCommandCount: Int,
+        source: String
+    ) {
+        sessionManager.transition(sessionId, ClipboardEvent.Approved)
+        log("User rejected $rejectedCount pending modification(s) $source")
+        sessionLog?.event(
+            "pending modifications rejected",
+            mapOf(
+                "mods" to rejectedCount,
+                "heldCommands" to heldCommandCount,
+                "source" to source
+            )
+        )
     }
 }
 
