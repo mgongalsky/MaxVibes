@@ -116,54 +116,104 @@ class ChatPanelEnvironmentActions(
     }
 
     fun setCommitMessage(message: String) {
-        try {
-            VcsConfiguration.getInstance(project).saveCommitMessage(message)
+        val commitMessage = message.trim()
+        if (commitMessage.isBlank()) {
+            onStatus("Generated commit message is empty")
+            return
+        }
 
-            fun tryInject(component: java.awt.Component): Boolean {
+        try {
+            VcsConfiguration.getInstance(project).saveCommitMessage(commitMessage)
+
+            fun inject(component: java.awt.Component?): Boolean {
+                if (component == null) return false
                 val dataContext = DataManager.getInstance().getDataContext(component)
-                val control = dataContext.getData(VcsDataKeys.COMMIT_MESSAGE_CONTROL) ?: return false
-                return try {
-                    control.javaClass
-                        .getMethod("setCommitMessage", String::class.java)
-                        .invoke(control, message)
-                    true
-                } catch (_: Exception) {
-                    false
+                val control = dataContext.getData(VcsDataKeys.COMMIT_MESSAGE_CONTROL)
+                    ?: return false
+                control.setCommitMessage(commitMessage)
+                return true
+            }
+
+            fun tryVisibleContexts(): Boolean {
+                val focusOwner = java.awt.KeyboardFocusManager
+                    .getCurrentKeyboardFocusManager()
+                    .focusOwner
+                if (inject(focusOwner)) return true
+
+                val commitWindow = ToolWindowManager.getInstance(project)
+                    .getToolWindow("Commit")
+                val selectedComponent = commitWindow
+                    ?.contentManager
+                    ?.selectedContent
+                    ?.component
+                if (inject(selectedComponent)) return true
+
+                val frame = com.intellij.openapi.wm.WindowManager
+                    .getInstance()
+                    .getFrame(project)
+                return inject(frame)
+            }
+
+            javax.swing.SwingUtilities.invokeLater {
+                try {
+                    if (tryVisibleContexts()) {
+                        MaxVibesLogger.info(
+                            "ChatPanel",
+                            "setCommitMessage: inserted into active commit UI",
+                            mapOf("len" to commitMessage.length)
+                        )
+                        onStatus("Commit message inserted")
+                        return@invokeLater
+                    }
+
+                    val commitWindow = ToolWindowManager.getInstance(project)
+                        .getToolWindow("Commit")
+                    if (commitWindow == null) {
+                        MaxVibesLogger.info(
+                            "ChatPanel",
+                            "setCommitMessage: Commit tool window unavailable; saved to VCS history",
+                            mapOf("len" to commitMessage.length)
+                        )
+                        onStatus("Commit message saved — open Commit to use it")
+                        return@invokeLater
+                    }
+
+                    commitWindow.activate({
+                        javax.swing.SwingUtilities.invokeLater {
+                            try {
+                                if (tryVisibleContexts()) {
+                                    MaxVibesLogger.info(
+                                        "ChatPanel",
+                                        "setCommitMessage: inserted after activating Commit",
+                                        mapOf("len" to commitMessage.length)
+                                    )
+                                    onStatus("Commit message inserted")
+                                } else {
+                                    MaxVibesLogger.warn(
+                                        "ChatPanel",
+                                        "setCommitMessage: commit control unavailable after activation",
+                                        data = mapOf("len" to commitMessage.length)
+                                    )
+                                    onStatus("Commit message saved, but the commit field was not found")
+                                }
+                            } catch (error: Exception) {
+                                MaxVibesLogger.error(
+                                    "ChatPanel",
+                                    "setCommitMessage retry failed",
+                                    error
+                                )
+                                onStatus("Commit message saved; insertion failed: ${error.message}")
+                            }
+                        }
+                    }, true)
+                } catch (error: Exception) {
+                    MaxVibesLogger.error("ChatPanel", "setCommitMessage failed", error)
+                    onStatus("Commit message saved; insertion failed: ${error.message}")
                 }
             }
-
-            val frame = com.intellij.openapi.wm.WindowManager.getInstance().getFrame(project)
-            if (frame != null && tryInject(frame)) {
-                MaxVibesLogger.info(
-                    "ChatPanel",
-                    "setCommitMessage: injected via frame",
-                    mapOf("len" to message.length)
-                )
-                return
-            }
-
-            val commitWindow = ToolWindowManager.getInstance(project).getToolWindow("Commit")
-            val component = commitWindow
-                ?.takeIf { it.isVisible }
-                ?.contentManager
-                ?.selectedContent
-                ?.component
-            if (component != null && tryInject(component)) {
-                MaxVibesLogger.info(
-                    "ChatPanel",
-                    "setCommitMessage: injected via Commit tool window",
-                    mapOf("len" to message.length)
-                )
-                return
-            }
-
-            MaxVibesLogger.info(
-                "ChatPanel",
-                "setCommitMessage: saved to VCS history (commit UI not open)",
-                mapOf("len" to message.length)
-            )
         } catch (error: Exception) {
             MaxVibesLogger.error("ChatPanel", "setCommitMessage failed", error)
+            onStatus("Failed to save commit message: ${error.message}")
         }
     }
 }
