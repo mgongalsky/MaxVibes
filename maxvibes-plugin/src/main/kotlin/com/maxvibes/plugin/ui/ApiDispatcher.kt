@@ -51,9 +51,7 @@ class ApiDispatcher(
     fun dispatchMessage(msg: String, trace: String?, errs: String?, isPlanOnly: Boolean, isDryRun: Boolean) {
         var session = chatTreeService.getActiveSession()
         val fullTask = buildString {
-            append(msg)
-            if (!trace.isNullOrBlank()) append("\n[trace: ${trace.lines().size} lines]")
-            if (!errs.isNullOrBlank()) append("\n[attached ide errors]")
+            append(TaskContextFormatter.build(msg, trace, errs))
             if (isPlanOnly) append("\n[plan-only]")
         }
         val history = session.messages.map { it.toChatMessageDTO() }
