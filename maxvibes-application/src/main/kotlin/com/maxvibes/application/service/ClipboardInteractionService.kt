@@ -431,8 +431,6 @@ class ClipboardInteractionService(
 
         log("Processing: hasFiles=$hasFiles, hasMods=$hasMods, hasMessage=$hasMessage, commands=${commands.size}")
 
-        // Plan snapshot: full-replacement semantics, orthogonal to the state machine.
-        // Absent field = plan unchanged; present with empty steps = explicit clear.
         response.plan?.let { snapshot ->
             chatSessionRepository.getSessionById(sessionId)?.let { current ->
                 val newPlan = snapshot.takeIf { it.steps.isNotEmpty() }
@@ -445,8 +443,6 @@ class ClipboardInteractionService(
         else emptyList<ModificationResult>()
 
         if (hasFiles) {
-            // Protocol rule: commands must not be mixed with file requests.
-            // Files win — commands are skipped, and the LLM is told so via commandResults.
             if (commands.isNotEmpty()) {
                 log("WARN: response mixed file requests with ${commands.size} command(s) — commands skipped per protocol")
             }
@@ -479,15 +475,23 @@ class ClipboardInteractionService(
                 }
             } else emptyMap()
 
-            val partialFilesMap: Map<String, String> = partialRequests.associate { request ->
-                try {
+            val renderedViews = mutableListOf<Pair<CodeViewRequest, String>>()
+            fullFilesMap.forEach { (path, content) ->
+                renderedViews += CodeViewRequest(
+                    filePath = path,
+                    granularity = com.maxvibes.domain.model.code.CodeGranularity.FULL
+                ) to content
+            }
+            partialRequests.forEach { request ->
+                val content = try {
                     val view = codeRepository.getCodeView(request)
                     log("Rendered ${request.granularity} view for ${request.filePath} (${view.content.length} chars)")
-                    request.filePath to view.content
+                    view.content
                 } catch (e: Exception) {
                     log("ERROR: Failed to render ${request.granularity} view for ${request.filePath}: ${e.message}")
-                    request.filePath to "// ERROR: Could not render ${request.granularity} view: ${e.message}"
+                    "// ERROR: Could not render ${request.granularity} view: ${e.message}"
                 }
+                renderedViews += request to content
             }
 
             val skillFilesMap: Map<String, String> = skillRequests.associate { req ->
@@ -497,7 +501,7 @@ class ClipboardInteractionService(
                     ?: "// ERROR: Unknown skill '${req.filePath}'. Use one of the names from the Skills section.")
             }
 
-            val mergedFiles = fullFilesMap + partialFilesMap + skillFilesMap
+            val mergedFiles = CodeViewPayloadAssembler.merge(renderedViews) + skillFilesMap
 
             val assistantMsg = response.message.trim().takeIf { it.isNotBlank() }
             val reasoningStr = response.reasoning?.takeIf { it.isNotBlank() }

@@ -33,17 +33,21 @@ internal class CodingAgentViewResolver(
         }
 
         val fullFiles = gatherFullFiles(fullPaths, state) ?: return null
+        val renderedViews = mutableListOf<Pair<CodeViewRequest, String>>()
+        fullFiles.forEach { (path, content) ->
+            renderedViews += CodeViewRequest(path, CodeGranularity.FULL) to content
+        }
 
-        val partialFiles = partialRequests.associate { request ->
-            try {
+        partialRequests.forEach { request ->
+            val content = try {
                 val view = codeRepository.getCodeView(request)
                 log("Rendered ${request.granularity} view for ${request.filePath} (${view.content.length} chars)")
-                request.filePath to view.content
+                view.content
             } catch (exception: Exception) {
                 log("ERROR: Failed to render ${request.granularity} view for ${request.filePath}: ${exception.message}")
-                request.filePath to
-                        "// ERROR: Could not render ${request.granularity} view: ${exception.message}"
+                "// ERROR: Could not render ${request.granularity} view: ${exception.message}"
             }
+            renderedViews += request to content
         }
 
         val skillFiles = skillRequests.associate { request ->
@@ -61,7 +65,7 @@ internal class CodingAgentViewResolver(
                     )
         }
 
-        return fullFiles + partialFiles + skillFiles
+        return CodeViewPayloadAssembler.merge(renderedViews) + skillFiles
     }
 
     suspend fun gatherFullFiles(
