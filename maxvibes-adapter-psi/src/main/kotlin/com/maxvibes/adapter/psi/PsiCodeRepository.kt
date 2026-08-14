@@ -329,10 +329,22 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
                 error = ModificationError.FileNotFound(mod.targetPath.filePath)
             )
         return try {
+            var deleted = false
             val app = ApplicationManager.getApplication()
-            val action = { WriteCommandAction.runWriteCommandAction(project) { modifier.deleteElement(psiFile) } }
+            val action = {
+                WriteCommandAction.runWriteCommandAction(project) {
+                    deleted = modifier.deleteElement(psiFile)
+                }
+            }
             if (app.isDispatchThread) action() else app.invokeAndWait(action)
-            ModificationResult.Success(modification = mod, affectedPath = mod.targetPath, resultContent = null)
+            if (deleted) {
+                ModificationResult.Success(modification = mod, affectedPath = mod.targetPath, resultContent = null)
+            } else {
+                ModificationResult.Failure(
+                    modification = mod,
+                    error = ModificationError.IOError("PSI file deletion did not complete: ${mod.targetPath.filePath}")
+                )
+            }
         } catch (e: Exception) {
             ModificationResult.Failure(
                 modification = mod,
@@ -382,6 +394,18 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
     }
 
     private fun replaceElement(mod: Modification.ReplaceElement): ModificationResult {
+        val targetSegment = mod.targetPath.segments.lastOrNull()
+        if (targetSegment?.kind.equals("constructor", ignoreCase = true) &&
+            targetSegment?.name.equals("primary", ignoreCase = true)
+        ) {
+            return ModificationResult.Failure(
+                modification = mod,
+                error = ModificationError.InvalidOperation(
+                    "REPLACE_ELEMENT does not support primary constructors; use REPLACE_FILE for class-header changes"
+                )
+            )
+        }
+
         val elementAndKind = runReadAction {
             val element = navigator.findElement(mod.targetPath) ?: return@runReadAction null
             val kind = mapper.inferKind(element) ?: return@runReadAction null
@@ -410,7 +434,7 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
             } else {
                 ModificationResult.Failure(
                     modification = mod,
-                    error = ModificationError.ParseError("Failed to parse replacement")
+                    error = ModificationError.ParseError("REPLACE_ELEMENT requires exactly one valid declaration")
                 )
             }
         } catch (e: Exception) {
@@ -428,10 +452,24 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
                 error = ModificationError.ElementNotFound(mod.targetPath)
             )
         return try {
+            var deleted = false
             val app = ApplicationManager.getApplication()
-            val action = { WriteCommandAction.runWriteCommandAction(project) { modifier.deleteElement(element) } }
+            val action = {
+                WriteCommandAction.runWriteCommandAction(project) {
+                    deleted = modifier.deleteElement(element)
+                }
+            }
             if (app.isDispatchThread) action() else app.invokeAndWait(action)
-            ModificationResult.Success(modification = mod, affectedPath = mod.targetPath, resultContent = null)
+            if (deleted) {
+                ModificationResult.Success(modification = mod, affectedPath = mod.targetPath, resultContent = null)
+            } else {
+                ModificationResult.Failure(
+                    modification = mod,
+                    error = ModificationError.InvalidOperation(
+                        "PSI element deletion did not complete: ${mod.targetPath.value}"
+                    )
+                )
+            }
         } catch (e: Exception) {
             ModificationResult.Failure(
                 modification = mod,

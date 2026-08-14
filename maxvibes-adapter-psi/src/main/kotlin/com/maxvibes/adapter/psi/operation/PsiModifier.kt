@@ -131,50 +131,30 @@ class PsiModifier(
     fun replaceElement(target: PsiElement, content: String, kind: ElementKind): PsiElement? {
         println("[PsiModifier] Replacing element of kind $kind")
         return try {
-            // Case 1: File-level
             if (target is PsiFile || kind == ElementKind.FILE) {
-                val file = when (target) {
-                    is PsiFile -> target
-                    else -> target.containingFile
-                }
+                val file = if (target is PsiFile) target else target.containingFile
                 if (file != null) {
                     println("[PsiModifier] Target is FILE, using replaceFileContent")
                     return replaceFileContent(file, content)
                 }
             }
 
-            // Try creating single element
-            val newElement = elementFactory.createElementFromText(content, kind)
-            if (newElement != null) {
-                // Case 2: Single declaration — simple replace
-                return doReplace(target, newElement)
-            }
-
-            // Case 3: Multi-declaration fallback
             val declarations = elementFactory.parseDeclarations(content)
-            if (declarations.isEmpty()) {
-                println("[PsiModifier] ERROR: Failed to create element from content (single and multi both failed)")
+            if (declarations.size != 1) {
+                println(
+                    "[PsiModifier] ERROR: REPLACE_ELEMENT requires exactly one declaration, " +
+                            "found ${declarations.size}"
+                )
                 return null
             }
 
-            println("[PsiModifier] Multi-declaration content detected: ${declarations.size} declaration(s)")
-
-            val first = declarations.first()
-            val replaced = doReplace(target, first) ?: return null
-
-            var anchor = replaced
-            for (i in 1 until declarations.size) {
-                val decl = declarations[i]
-                val newLine = elementFactory.createNewLine()
-                val addedNewLine = anchor.parent.addAfter(newLine, anchor)
-                val added = anchor.parent.addAfter(decl.copy(), addedNewLine)
-                CodeStyleManager.getInstance(project).reformat(added)
-                anchor = added
-                println("[PsiModifier] Added extra declaration ${i + 1}/${declarations.size}")
+            val newElement = elementFactory.createElementFromText(content, kind)
+            if (newElement == null) {
+                println("[PsiModifier] ERROR: Failed to create replacement element from content")
+                return null
             }
 
-            println("[PsiModifier] Multi-declaration replace completed")
-            replaced
+            doReplace(target, newElement)
         } catch (e: Exception) {
             println("[PsiModifier] ERROR: Failed to replace element of kind $kind: ${e.javaClass.simpleName}: ${e.message}")
             null
@@ -201,17 +181,24 @@ class PsiModifier(
         return replaced
     }
 
-    fun deleteElement(element: PsiElement) {
+    fun deleteElement(element: PsiElement): Boolean {
         println("[PsiModifier] Deleting element: ${element.javaClass.simpleName}")
-        try {
+        return try {
             val nextSibling = element.nextSibling
             if (nextSibling is PsiWhiteSpace && nextSibling.text.count { it == '\n' } <= 2) {
                 nextSibling.delete()
             }
             element.delete()
-            println("[PsiModifier] Element deleted successfully")
+            val deleted = !element.isValid
+            if (deleted) {
+                println("[PsiModifier] Element deleted successfully")
+            } else {
+                println("[PsiModifier] ERROR: Element remained valid after delete")
+            }
+            deleted
         } catch (e: Exception) {
             println("[PsiModifier] ERROR: Failed to delete element: ${e.javaClass.simpleName}: ${e.message}")
+            false
         }
     }
 
