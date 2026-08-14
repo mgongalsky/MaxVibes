@@ -2,7 +2,6 @@ package com.maxvibes.application.service
 
 import com.maxvibes.domain.model.code.CodeViewRequest
 
-/** Combines rendered code views without losing multiple requests for the same file. */
 internal object CodeViewPayloadAssembler {
 
     fun merge(renderedViews: List<Pair<CodeViewRequest, String>>): Map<String, String> =
@@ -26,4 +25,19 @@ internal object CodeViewPayloadAssembler {
                     }
                 }
             }
+
+    /** Keeps every requested path visible to the agent, including failed reads. */
+    fun withMissingFileErrors(
+        requestedPaths: List<String>,
+        gatheredFiles: Map<String, String>
+    ): Map<String, String> {
+        if (requestedPaths.isEmpty()) return gatheredFiles
+        val result = LinkedHashMap<String, String>()
+        requestedPaths.distinct().forEach { path ->
+            result[path] = gatheredFiles[path]
+                ?: "// ERROR: Requested file was not found or could not be read: $path"
+        }
+        gatheredFiles.forEach { (path, content) -> result.putIfAbsent(path, content) }
+        return result
+    }
 }

@@ -89,8 +89,16 @@ internal class CodingAgentViewResolver(
             is Result.Success -> {
                 val gathered = result.value
                 state.allGatheredFiles.putAll(gathered.files)
+                val filesWithFeedback = CodeViewPayloadAssembler.withMissingFileErrors(
+                    requestedPaths = paths,
+                    gatheredFiles = gathered.files
+                )
+                val missingCount = filesWithFeedback.size - gathered.files.size
+                if (missingCount > 0) {
+                    log("WARN: $missingCount requested file(s) were not found or could not be read")
+                }
                 log("Gathered ${gathered.files.size} files, total tracked: ${state.allGatheredFiles.size}")
-                gathered.files
+                filesWithFeedback
             }
         }
     }

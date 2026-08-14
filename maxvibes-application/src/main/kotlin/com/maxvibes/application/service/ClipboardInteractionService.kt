@@ -698,10 +698,6 @@ class ClipboardInteractionService(
         val state = sessionState ?: return null
         if (requestedPaths.isEmpty()) return emptyMap()
 
-        // Always re-read every requested path from the live project. The former
-        // per-session content cache served stale files after modifications and
-        // silently dropped re-requested paths when mixed with new ones.
-        // allGatheredFiles is kept as bookkeeping for previouslyGatheredPaths only.
         log("Gathering ${requestedPaths.size} files (fresh read)...")
         notificationPort.showProgress("Gathering ${requestedPaths.size} files...", 0.4)
 
@@ -712,8 +708,17 @@ class ClipboardInteractionService(
         }
         val gathered = (gatherResult as Result.Success).value
         state.allGatheredFiles.putAll(gathered.files)
+
+        val filesWithFeedback = CodeViewPayloadAssembler.withMissingFileErrors(
+            requestedPaths = requestedPaths,
+            gatheredFiles = gathered.files
+        )
+        val missingCount = filesWithFeedback.size - gathered.files.size
+        if (missingCount > 0) {
+            log("WARN: $missingCount requested file(s) were not found or could not be read")
+        }
         log("Gathered ${gathered.files.size} files, total tracked: ${state.allGatheredFiles.size}")
-        return gathered.files
+        return filesWithFeedback
     }
 
     // ==================== Modifications ====================
