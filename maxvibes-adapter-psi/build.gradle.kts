@@ -9,6 +9,8 @@ dependencies {
     implementation(project(":maxvibes-shared"))
 
     testImplementation(kotlin("test"))
+    testImplementation("org.junit.jupiter:junit-jupiter:5.10.1")
+    testImplementation("io.mockk:mockk:1.13.8")
 }
 
 intellij {
