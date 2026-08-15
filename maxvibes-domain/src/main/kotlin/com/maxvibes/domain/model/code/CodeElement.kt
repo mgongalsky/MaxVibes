@@ -3,9 +3,15 @@ package com.maxvibes.domain.model.code
 
 enum class ElementKind {
     FILE,
-    CLASS, INTERFACE, OBJECT, ENUM,
-    FUNCTION, PROPERTY,
-    CONSTRUCTOR, INIT
+    CLASS,
+    INTERFACE,
+    OBJECT,
+    ENUM,
+    ENUM_ENTRY,
+    FUNCTION,
+    PROPERTY,
+    CONSTRUCTOR,
+    INIT
 }
 
 sealed interface CodeElement {

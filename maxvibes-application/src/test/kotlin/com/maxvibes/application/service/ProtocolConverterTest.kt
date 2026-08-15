@@ -230,4 +230,21 @@ class ProtocolConverterTest {
             ProtocolConverter.convertCommand(InteractionCommand(command = "x", timeoutSec = 99999))!!.timeoutSec
         )
     }
+
+    @Test
+    fun `create element maps enum entry kind`() {
+        val result = ProtocolConverter.convertModification(
+            InteractionModification(
+                type = "CREATE_ELEMENT",
+                path = "file:Mode.kt/enum[Mode]",
+                content = "/** CLI mode. */\nCLI",
+                elementKind = "ENUM_ENTRY",
+                position = "LAST_CHILD"
+            )
+        )
+
+        result as Modification.CreateElement
+        assertEquals(ElementKind.ENUM_ENTRY, result.elementKind)
+        assertEquals("/** CLI mode. */\nCLI", result.content)
+    }
 }

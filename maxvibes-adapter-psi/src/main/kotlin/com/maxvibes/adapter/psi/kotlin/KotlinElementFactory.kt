@@ -27,10 +27,11 @@ class KotlinElementFactory(private val project: Project) {
                 ElementKind.INTERFACE -> psiFactory.createClass(text)
                 ElementKind.OBJECT -> psiFactory.createObject(text)
                 ElementKind.ENUM -> psiFactory.createClass(text)
+                ElementKind.ENUM_ENTRY -> createEnumEntryWithLeadingTrivia(text)
                 ElementKind.FUNCTION -> psiFactory.createFunction(text)
                 ElementKind.PROPERTY -> psiFactory.createProperty(text)
                 ElementKind.CONSTRUCTOR -> null
-                ElementKind.INIT -> null // init blocks are not directly creatable; handled via file-fragment fallback
+                ElementKind.INIT -> null
             }
         } catch (e: Exception) {
             println("[KotlinElementFactory] Direct creation failed for $kind: ${e.message}")
@@ -109,5 +110,17 @@ class KotlinElementFactory(private val project: Project) {
             is org.jetbrains.kotlin.psi.KtNamedDeclaration -> element.name
             else -> null
         }
+    }
+    private fun createEnumEntryWithLeadingTrivia(text: String): PsiElement? {
+        val wrapper = psiFactory.createFile(
+            "enum class __MaxVibesEnumWrapper {\n$text\n}"
+        )
+        val enumClass = wrapper.declarations
+            .filterIsInstance<org.jetbrains.kotlin.psi.KtClass>()
+            .firstOrNull()
+            ?: return null
+        return enumClass.declarations
+            .filterIsInstance<org.jetbrains.kotlin.psi.KtEnumEntry>()
+            .firstOrNull()
     }
 }

@@ -141,20 +141,27 @@ internal class CodingAgentApprovalService(
         )
 
         val modificationResults = applyModifications(pending.modifications)
-        val successCount = modificationResults.count {
-            it is ModificationResult.Success
-        }
+        val successCount = modificationResults.count { it is ModificationResult.Success }
         val failureCount = modificationResults.size - successCount
+        val rolledBack = modificationResults.any {
+            it is ModificationResult.Failure &&
+                    it.error is com.maxvibes.domain.model.modification.ModificationError.BatchRolledBack
+        }
 
-        if (failureCount > 0) {
-            notificationPort.showWarning(
+        when {
+            rolledBack -> notificationPort.showWarning(
+                "Modification batch failed and was rolled back: 0 of ${modificationResults.size} applied"
+            )
+
+            failureCount > 0 -> notificationPort.showWarning(
                 "Applied $successCount changes, $failureCount failed"
             )
-        } else if (successCount > 0) {
-            notificationPort.showSuccess("Applied $successCount changes")
+
+            successCount > 0 -> notificationPort.showSuccess("Applied $successCount changes")
         }
 
         val message = when {
+            rolledBack -> "Approved modification batch failed. Original project state was restored; 0 of ${modificationResults.size} changes were applied."
             failureCount == 0 -> "Applied approved modifications."
             successCount == 0 -> "Approved modifications failed to apply."
             else -> "Applied $successCount modification(s); $failureCount failed."
@@ -163,8 +170,8 @@ internal class CodingAgentApprovalService(
             message = message,
             modifications = modificationResults,
             success = failureCount == 0,
-            commitMessage = pending.commitMessage,
-            commands = pending.commands
+            commitMessage = pending.commitMessage.takeIf { failureCount == 0 },
+            commands = pending.commands.takeIf { failureCount == 0 }.orEmpty()
         )
     }
 

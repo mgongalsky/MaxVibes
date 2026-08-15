@@ -49,30 +49,22 @@ class PsiNavigator(private val project: Project) {
     }
 
     private fun findChildByKindAndName(parent: PsiElement, kind: String, name: String): PsiElement? {
-        // Special cases that don't require scanning declarations
         when (kind.lowercase()) {
-            "companion_object", "companion" -> {
-                return findCompanionObject(parent)
-            }
-            "init" -> {
-                return findInitBlock(parent, name)
-            }
-            "constructor" -> {
-                return findConstructor(parent, name)
-            }
+            "companion_object", "companion" -> return findCompanionObject(parent)
+            "init" -> return findInitBlock(parent, name)
+            "constructor" -> return findConstructor(parent, name)
         }
 
         val declarations = getDeclarations(parent)
-
         return declarations.firstOrNull { child ->
             when (kind.lowercase()) {
-                "class" -> child is KtClass && !child.isInterface() && !child.isEnum() && child.name == name
-                "interface" -> child is KtClass && child.isInterface() && child.name == name
-                "enum" -> child is KtClass && child.isEnum() && child.name == name
-                "object" -> child is KtObjectDeclaration && !child.isCompanion() && child.name == name
-                "function", "fun" -> child is KtNamedFunction && child.name == name
-                "property", "val", "var" -> child is KtProperty && child.name == name
-                "enum_entry" -> child is KtEnumEntry && child.name == name
+                "class" -> child is KtClass && !child.isInterface() && !child.isEnum() && namesMatch(child.name, name)
+                "interface" -> child is KtClass && child.isInterface() && namesMatch(child.name, name)
+                "enum" -> child is KtClass && child.isEnum() && namesMatch(child.name, name)
+                "object" -> child is KtObjectDeclaration && !child.isCompanion() && namesMatch(child.name, name)
+                "function", "fun" -> child is KtNamedFunction && namesMatch(child.name, name)
+                "property", "val", "var" -> child is KtProperty && namesMatch(child.name, name)
+                "enum_entry" -> child is KtEnumEntry && namesMatch(child.name, name)
                 else -> false
             }
         }
@@ -152,5 +144,9 @@ class PsiNavigator(private val project: Project) {
             is KtClassOrObject -> element.declarations
             else -> emptyList()
         }
+    }
+    private fun namesMatch(actual: String?, requested: String): Boolean {
+        if (actual == null) return false
+        return actual.removeSurrounding("`") == requested.removeSurrounding("`")
     }
 }

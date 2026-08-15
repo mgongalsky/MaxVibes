@@ -752,6 +752,10 @@ class ClipboardInteractionService(
     ): ClipboardStepResult {
         val successCount = modResults.count { it is ModificationResult.Success }
         val failCount = modResults.size - successCount
+        val rolledBack = modResults.any {
+            it is ModificationResult.Failure &&
+                    it.error is com.maxvibes.domain.model.modification.ModificationError.BatchRolledBack
+        }
 
         val messageText = buildString {
             if (response.message.isNotBlank()) append(response.message)
@@ -759,10 +763,26 @@ class ClipboardInteractionService(
                 if (isNotEmpty()) append("\n\n")
                 append(extraMessage)
             }
+            if (rolledBack) {
+                if (isNotEmpty()) append("\n\n")
+                append("Modification batch failed. Original project state was restored; 0 of ${modResults.size} changes were applied.")
+            }
             if (isEmpty()) append("Done.")
         }
 
-        if (modResults.isNotEmpty()) notificationPort.showSuccess("Done. Session active — you can continue the dialog.")
+        when {
+            rolledBack -> notificationPort.showWarning(
+                "Modification batch rolled back: 0 of ${modResults.size} applied"
+            )
+
+            failCount > 0 -> notificationPort.showWarning(
+                "Applied $successCount changes, $failCount failed"
+            )
+
+            modResults.isNotEmpty() -> notificationPort.showSuccess(
+                "Done. Session active — you can continue the dialog."
+            )
+        }
         log("Completed: mods=$successCount ok/$failCount fail, commands=${commands.size}.")
 
         return ClipboardStepResult.Completed(
@@ -772,8 +792,8 @@ class ClipboardInteractionService(
             inputTokens = inputTokens,
             outputTokens = outputTokens,
             llmReasoning = response.reasoning?.takeIf { it.isNotBlank() },
-            commitMessage = response.commitMessage?.takeIf { it.isNotBlank() },
-            commands = commands
+            commitMessage = response.commitMessage?.takeIf { it.isNotBlank() && failCount == 0 },
+            commands = commands.takeIf { failCount == 0 }.orEmpty()
         )
     }
 

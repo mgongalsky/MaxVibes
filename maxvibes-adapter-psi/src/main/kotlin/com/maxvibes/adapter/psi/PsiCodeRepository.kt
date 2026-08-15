@@ -119,14 +119,90 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
     }
 
     override suspend fun applyModifications(modifications: List<Modification>): List<ModificationResult> {
-        val results = modifications.map { applyModification(it) }
-        // Flush PSI/Document changes to disk right away so that shell commands,
-        // greps and external tools attached to this turn see the applied state
-        // instead of the stale pre-edit files.
-        if (results.any { it is ModificationResult.Success }) {
-            flushDocumentsToDisk()
+        if (modifications.isEmpty()) return emptyList()
+
+        val refactorings = modifications.filter {
+            it is Modification.RenameElement ||
+                    it is Modification.SafeDelete ||
+                    it is Modification.MoveElement
         }
-        return results
+        if (refactorings.isNotEmpty()) {
+            if (modifications.size != 1) {
+                val reason = "IDE refactorings cannot be mixed with other modifications in one atomic batch"
+                return modifications.map { modification ->
+                    ModificationResult.Failure(
+                        modification = modification,
+                        error = ModificationError.InvalidOperation(reason)
+                    )
+                }
+            }
+            val result = applyModification(modifications.single())
+            if (result is ModificationResult.Success) {
+                synchronizeDocumentsAndPsi()
+                flushDocumentsToDisk()
+            }
+            return listOf(result)
+        }
+
+        val snapshots = captureSnapshots(modifications)
+        var failedIndex = -1
+        var failureReason = "Unknown batch failure"
+
+        try {
+            for (index in modifications.indices) {
+                val modification = modifications[index]
+                val result = applyModification(modification)
+                synchronizeDocumentsAndPsi()
+
+                if (result is ModificationResult.Failure) {
+                    failedIndex = index
+                    failureReason = result.error.message
+                    break
+                }
+
+                val postconditionError = verifyPostcondition(modification)
+                if (postconditionError != null) {
+                    failedIndex = index
+                    failureReason = postconditionError
+                    break
+                }
+            }
+        } catch (e: Exception) {
+            failedIndex = failedIndex.takeIf { it >= 0 } ?: 0
+            failureReason = "${e.javaClass.simpleName}: ${e.message ?: "batch execution failed"}"
+        }
+
+        if (failedIndex >= 0) {
+            val rollbackError = restoreSnapshots(snapshots)
+            flushDocumentsToDisk()
+            val reason = if (rollbackError == null) {
+                failureReason
+            } else {
+                "$failureReason; rollback error: $rollbackError"
+            }
+            return modifications.map { modification ->
+                ModificationResult.Failure(
+                    modification = modification,
+                    error = ModificationError.BatchRolledBack(failedIndex, reason)
+                )
+            }
+        }
+
+        flushDocumentsToDisk()
+        return modifications.map { modification ->
+            ModificationResult.Success(
+                modification = modification,
+                affectedPath = modification.targetPath,
+                resultContent = when (modification) {
+                    is Modification.CreateFile -> modification.content
+                    is Modification.ReplaceFile -> modification.newContent
+                    is Modification.CreateElement -> modification.content
+                    is Modification.ReplaceElement -> modification.newContent
+                    is Modification.AddImport -> "import ${modification.importPath}"
+                    else -> null
+                }
+            )
+        }
     }
 
     override suspend fun exists(path: ElementPath): Boolean {
@@ -358,6 +434,15 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
     // ═══════════════════════════════════════════════════════════════
 
     private fun createElement(mod: Modification.CreateElement): ModificationResult {
+        if (mod.elementKind == ElementKind.CONSTRUCTOR || mod.elementKind == ElementKind.INIT) {
+            return ModificationResult.Failure(
+                modification = mod,
+                error = ModificationError.InvalidOperation(
+                    "CREATE_ELEMENT does not support constructors or init blocks; use REPLACE_FILE for class-structure changes"
+                )
+            )
+        }
+
         val parent = runReadAction { navigator.findElement(mod.targetPath) }
             ?: return ModificationResult.Failure(
                 modification = mod,
@@ -394,14 +479,12 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
     }
 
     private fun replaceElement(mod: Modification.ReplaceElement): ModificationResult {
-        val targetSegment = mod.targetPath.segments.lastOrNull()
-        if (targetSegment?.kind.equals("constructor", ignoreCase = true) &&
-            targetSegment?.name.equals("primary", ignoreCase = true)
-        ) {
+        val targetKind = mod.targetPath.segments.lastOrNull()?.kind?.lowercase()
+        if (targetKind == "constructor" || targetKind == "init") {
             return ModificationResult.Failure(
                 modification = mod,
                 error = ModificationError.InvalidOperation(
-                    "REPLACE_ELEMENT does not support primary constructors; use REPLACE_FILE for class-header changes"
+                    "REPLACE_ELEMENT does not support constructors or init blocks; use REPLACE_FILE for class-structure changes"
                 )
             )
         }
@@ -671,6 +754,151 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
     private fun flushDocumentsToDisk() {
         ApplicationManager.getApplication().invokeAndWait {
             FileDocumentManager.getInstance().saveAllDocuments()
+        }
+    }
+    private data class FileSnapshot(
+        val path: ElementPath,
+        val existed: Boolean,
+        val content: String?,
+        val fileType: com.intellij.openapi.fileTypes.FileType?
+    )
+
+    private fun captureSnapshots(modifications: List<Modification>): List<FileSnapshot> = runReadAction {
+        modifications
+            .map { it.targetPath.filePath }
+            .distinct()
+            .map { filePath ->
+                val path = ElementPath.file(filePath)
+                val file = navigator.findFile(path)
+                FileSnapshot(
+                    path = path,
+                    existed = file != null,
+                    content = file?.text,
+                    fileType = file?.fileType
+                )
+            }
+    }
+    private fun restoreSnapshots(snapshots: List<FileSnapshot>): String? {
+        var rollbackError: String? = null
+        val app = ApplicationManager.getApplication()
+        val action = {
+            WriteCommandAction.runWriteCommandAction(project, "Rollback MaxVibes modifications", null, Runnable {
+                try {
+                    snapshots.forEach { snapshot ->
+                        val current = navigator.findFile(snapshot.path)
+                        if (!snapshot.existed) {
+                            current?.delete()
+                        } else {
+                            val originalContent = requireNotNull(snapshot.content)
+                            if (current != null) {
+                                modifier.replaceFileContent(current, originalContent)
+                            } else {
+                                val directory = findOrCreateDirectory(snapshot.path.filePath)
+                                    ?: error("Cannot recreate directory for ${snapshot.path.filePath}")
+                                val fileName = File(snapshot.path.filePath).name
+                                val fileType = requireNotNull(snapshot.fileType)
+                                val restored = com.intellij.psi.PsiFileFactory.getInstance(project)
+                                    .createFileFromText(fileName, fileType, originalContent)
+                                directory.add(restored)
+                            }
+                        }
+                    }
+                    com.intellij.psi.PsiDocumentManager.getInstance(project).commitAllDocuments()
+                } catch (e: Exception) {
+                    rollbackError = "${e.javaClass.simpleName}: ${e.message ?: "rollback failed"}"
+                }
+            })
+        }
+        if (app.isDispatchThread) action() else app.invokeAndWait(action)
+        return rollbackError
+    }
+    private fun synchronizeDocumentsAndPsi() {
+        val app = ApplicationManager.getApplication()
+        val action = {
+            WriteCommandAction.runWriteCommandAction(project) {
+                com.intellij.psi.PsiDocumentManager.getInstance(project).commitAllDocuments()
+            }
+        }
+        if (app.isDispatchThread) action() else app.invokeAndWait(action)
+    }
+    private fun verifyPostcondition(modification: Modification): String? = runReadAction {
+        fun normalized(text: String): String = text.filterNot { it.isWhitespace() }
+
+        when (modification) {
+            is Modification.CreateFile -> {
+                val file = navigator.findFile(modification.targetPath)
+                    ?: return@runReadAction "Created file does not exist: ${modification.targetPath.filePath}"
+                if (normalized(file.text) != normalized(modification.content)) {
+                    "Created file content does not match the requested content: ${modification.targetPath.filePath}"
+                } else null
+            }
+
+            is Modification.ReplaceFile -> {
+                val file = navigator.findFile(modification.targetPath)
+                    ?: return@runReadAction "Replaced file does not exist: ${modification.targetPath.filePath}"
+                if (normalized(file.text) != normalized(modification.newContent)) {
+                    "File content does not match REPLACE_FILE postcondition: ${modification.targetPath.filePath}"
+                } else null
+            }
+
+            is Modification.DeleteFile -> {
+                if (navigator.findFile(modification.targetPath) != null) {
+                    "Deleted file still exists: ${modification.targetPath.filePath}"
+                } else null
+            }
+
+            is Modification.ReplaceElement -> {
+                val element = navigator.findElement(modification.targetPath)
+                    ?: return@runReadAction "Replaced element cannot be resolved: ${modification.targetPath.value}"
+                if (normalized(element.text) != normalized(modification.newContent)) {
+                    "Element content does not match REPLACE_ELEMENT postcondition: ${modification.targetPath.value}"
+                } else null
+            }
+
+            is Modification.DeleteElement -> {
+                if (navigator.findElement(modification.targetPath) != null) {
+                    "Deleted element can still be resolved: ${modification.targetPath.value}"
+                } else null
+            }
+
+            is Modification.CreateElement -> {
+                val expected = elementFactory.createElementFromText(modification.content, modification.elementKind)
+                    ?: return@runReadAction "Cannot parse CREATE_ELEMENT content for verification"
+                val expectedName = elementFactory.getElementName(expected)
+                    ?: return@runReadAction "Created element has no resolvable name"
+                val file = navigator.findFile(ElementPath.file(modification.targetPath.filePath))
+                    ?: return@runReadAction "Target file disappeared after CREATE_ELEMENT"
+                val candidates = com.intellij.psi.util.PsiTreeUtil.collectElementsOfType(
+                    file,
+                    KtNamedDeclaration::class.java
+                )
+                if (candidates.none {
+                        it.name == expectedName && normalized(it.text) == normalized(expected.text)
+                    }
+                ) {
+                    "Created element '$expectedName' cannot be found with the requested content"
+                } else null
+            }
+
+            is Modification.AddImport -> {
+                val file = navigator.findFile(modification.targetPath) as? KtFile
+                    ?: return@runReadAction "Import target is not a Kotlin file: ${modification.targetPath.filePath}"
+                if (file.importDirectives.none { it.importPath?.pathStr == modification.importPath }) {
+                    "Import was not added: ${modification.importPath}"
+                } else null
+            }
+
+            is Modification.RemoveImport -> {
+                val file = navigator.findFile(modification.targetPath) as? KtFile
+                    ?: return@runReadAction "Import target is not a Kotlin file: ${modification.targetPath.filePath}"
+                if (file.importDirectives.any { it.importPath?.pathStr == modification.importPath }) {
+                    "Import was not removed: ${modification.importPath}"
+                } else null
+            }
+
+            is Modification.RenameElement,
+            is Modification.SafeDelete,
+            is Modification.MoveElement -> null
         }
     }
 }

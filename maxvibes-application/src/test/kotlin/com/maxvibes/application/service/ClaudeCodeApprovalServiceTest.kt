@@ -562,4 +562,45 @@ class ClaudeCodeApprovalServiceTest {
         allGatheredFiles = mutableMapOf(),
         planOnly = false
     )
+
+    @Test
+    fun `rolled back batch suppresses held commands and commit message`() = runBlocking {
+        putSession(status = ClipboardSessionStatus.AWAITING_APPROVE)
+        val domainModification = Modification.CreateFile(
+            targetPath = ElementPath("file:src/New.kt"),
+            content = "class New"
+        )
+        pendingStore.hold(
+            sessionId = sessionId,
+            modifications = listOf(protocolModification()),
+            commands = listOf(commandRequest()),
+            commitMessage = "feat: add New"
+        )
+        coEvery {
+            codeRepository.applyModifications(any())
+        } returns listOf(
+            ModificationResult.Failure(
+                modification = domainModification,
+                error = ModificationError.BatchRolledBack(
+                    failedOperation = 0,
+                    reason = "parse failure"
+                )
+            )
+        )
+
+        val outcome = service.approve(sessionId)
+
+        val completed = assertIs<ClaudeCodeStepResult.Completed>(
+            assertIs<CodingAgentApprovalOutcome.Immediate>(outcome).result
+        )
+        assertFalse(completed.success)
+        assertTrue(completed.commands.isEmpty())
+        assertNull(completed.commitMessage)
+        assertTrue(completed.message.contains("Original project state was restored"))
+        assertEquals(
+            listOf("Modification batch failed and was rolled back: 0 of 1 applied"),
+            notifications.warnings
+        )
+        assertTrue(notifications.successes.isEmpty())
+    }
 }

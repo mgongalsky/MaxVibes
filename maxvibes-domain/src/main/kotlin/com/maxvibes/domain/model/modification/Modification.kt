@@ -140,4 +140,9 @@ sealed class ModificationError(val message: String) {
 
     class IOError(cause: String) :
         ModificationError("IO error: $cause")
+
+    class BatchRolledBack(failedOperation: Int, reason: String) :
+        ModificationError(
+            "Modification batch was rolled back after operation ${failedOperation + 1} failed: $reason"
+        )
 }

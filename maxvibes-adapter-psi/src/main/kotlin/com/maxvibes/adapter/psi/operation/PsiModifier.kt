@@ -60,7 +60,7 @@ class PsiModifier(
         println("[PsiModifier] Replacing content of ${file.name}")
 
         val newFile = PsiFileFactory.getInstance(project)
-            .createFileFromText(file.name, KotlinFileType.INSTANCE, newContent)
+            .createFileFromText(file.name, file.fileType, newContent)
 
         val firstChild = file.firstChild
         val lastChild = file.lastChild

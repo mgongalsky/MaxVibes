@@ -127,7 +127,90 @@ class PyCodeRepository(private val project: Project) : CodeRepository {
     }
 
     override suspend fun applyModifications(modifications: List<Modification>): List<ModificationResult> {
-        return modifications.map { applyModification(it) }
+        if (modifications.isEmpty()) return emptyList()
+
+        val refactorings = modifications.filter {
+            it is Modification.RenameElement ||
+                    it is Modification.SafeDelete ||
+                    it is Modification.MoveElement
+        }
+        if (refactorings.isNotEmpty()) {
+            if (modifications.size != 1) {
+                val reason = "IDE refactorings cannot be mixed with other modifications in one atomic batch"
+                return modifications.map { modification ->
+                    ModificationResult.Failure(
+                        modification = modification,
+                        error = ModificationError.InvalidOperation(reason)
+                    )
+                }
+            }
+            val result = applyModification(modifications.single())
+            if (result is ModificationResult.Success) {
+                synchronizeDocumentsAndPsi()
+                flushDocumentsToDisk()
+            }
+            return listOf(result)
+        }
+
+        val snapshots = captureSnapshots(modifications)
+        var failedIndex = -1
+        var failureReason = "Unknown batch failure"
+
+        try {
+            for (index in modifications.indices) {
+                val modification = modifications[index]
+                val result = applyModification(modification)
+                synchronizeDocumentsAndPsi()
+
+                if (result is ModificationResult.Failure) {
+                    failedIndex = index
+                    failureReason = result.error.message
+                    break
+                }
+
+                val postconditionError = verifyPostcondition(modification)
+                if (postconditionError != null) {
+                    failedIndex = index
+                    failureReason = postconditionError
+                    break
+                }
+            }
+        } catch (e: Exception) {
+            failedIndex = failedIndex.takeIf { it >= 0 } ?: 0
+            failureReason = "${e.javaClass.simpleName}: ${e.message ?: "batch execution failed"}"
+        }
+
+        if (failedIndex >= 0) {
+            val rollbackError = restoreSnapshots(snapshots)
+            flushDocumentsToDisk()
+            val reason = if (rollbackError == null) {
+                failureReason
+            } else {
+                "$failureReason; rollback error: $rollbackError"
+            }
+            return modifications.map { modification ->
+                ModificationResult.Failure(
+                    modification = modification,
+                    error = ModificationError.BatchRolledBack(failedIndex, reason)
+                )
+            }
+        }
+
+        flushDocumentsToDisk()
+        return modifications.map { modification ->
+            ModificationResult.Success(
+                modification = modification,
+                affectedPath = modification.targetPath,
+                resultContent = when (modification) {
+                    is Modification.CreateFile -> modification.content
+                    is Modification.ReplaceFile -> modification.newContent
+                    is Modification.CreateElement -> modification.content
+                    is Modification.ReplaceElement -> modification.newContent
+                    is Modification.AddImport -> modification.importPath
+                    else -> null
+                }
+            )
+        }
     }
 
     override suspend fun exists(path: ElementPath): Boolean {
@@ -420,4 +503,145 @@ class PyCodeRepository(private val project: Project) : CodeRepository {
                 error = ModificationError.IOError(error)
             )
         }
+    private data class FileSnapshot(
+        val path: ElementPath,
+        val existed: Boolean,
+        val content: String?
+    )
+
+    private fun captureSnapshots(modifications: List<Modification>): List<FileSnapshot> = runReadAction {
+        modifications
+            .map { it.targetPath.filePath }
+            .distinct()
+            .map { filePath ->
+                val path = ElementPath.file(filePath)
+                val file = navigator.findFile(path)
+                FileSnapshot(
+                    path = path,
+                    existed = file != null,
+                    content = file?.text
+                )
+            }
+    }
+    private fun synchronizeDocumentsAndPsi() {
+        val app = ApplicationManager.getApplication()
+        val action = {
+            WriteCommandAction.runWriteCommandAction(project) {
+                com.intellij.psi.PsiDocumentManager.getInstance(project).commitAllDocuments()
+            }
+        }
+        if (app.isDispatchThread) action() else app.invokeAndWait(action)
+    }
+    private fun restoreSnapshots(snapshots: List<FileSnapshot>): String? {
+        var rollbackError: String? = null
+        val app = ApplicationManager.getApplication()
+        val action = {
+            WriteCommandAction.runWriteCommandAction(project, "Rollback MaxVibes Python modifications", null, Runnable {
+                try {
+                    val documentManager = com.intellij.psi.PsiDocumentManager.getInstance(project)
+                    snapshots.forEach { snapshot ->
+                        val current = navigator.findFile(snapshot.path)
+                        if (!snapshot.existed) {
+                            current?.delete()
+                        } else {
+                            val originalContent = requireNotNull(snapshot.content)
+                            if (current != null) {
+                                val document = documentManager.getDocument(current)
+                                    ?: error("No document for ${snapshot.path.filePath}")
+                                document.setText(originalContent)
+                                documentManager.commitDocument(document)
+                            } else {
+                                val directory = findOrCreateDirectory(snapshot.path.filePath)
+                                    ?: error("Cannot recreate directory for ${snapshot.path.filePath}")
+                                val fileName = File(snapshot.path.filePath).name
+                                val restored = PsiFileFactory.getInstance(project)
+                                    .createFileFromText(fileName, PythonLanguage.getInstance(), originalContent)
+                                directory.add(restored)
+                            }
+                        }
+                    }
+                    documentManager.commitAllDocuments()
+                } catch (e: Exception) {
+                    rollbackError = "${e.javaClass.simpleName}: ${e.message ?: "rollback failed"}"
+                }
+            })
+        }
+        if (app.isDispatchThread) action() else app.invokeAndWait(action)
+        return rollbackError
+    }
+    private fun verifyPostcondition(modification: Modification): String? = runReadAction {
+        fun normalized(text: String): String = text.filterNot { it.isWhitespace() }
+        fun hasImport(fileText: String, importPath: String): Boolean {
+            val dot = importPath.lastIndexOf('.')
+            val plain = normalized("import $importPath")
+            val fromImport = if (dot > 0) {
+                normalized("from ${importPath.substring(0, dot)} import ${importPath.substring(dot + 1)}")
+            } else null
+            val actual = normalized(fileText)
+            return actual.contains(plain) || (fromImport != null && actual.contains(fromImport))
+        }
+
+        when (modification) {
+            is Modification.CreateFile -> {
+                val file = navigator.findFile(modification.targetPath)
+                    ?: return@runReadAction "Created Python file does not exist: ${modification.targetPath.filePath}"
+                if (normalized(file.text) != normalized(modification.content)) {
+                    "Created Python file content does not match the request"
+                } else null
+            }
+
+            is Modification.ReplaceFile -> {
+                val file = navigator.findFile(modification.targetPath)
+                    ?: return@runReadAction "Replaced Python file does not exist: ${modification.targetPath.filePath}"
+                if (normalized(file.text) != normalized(modification.newContent)) {
+                    "Python file content does not match REPLACE_FILE postcondition"
+                } else null
+            }
+
+            is Modification.DeleteFile -> {
+                if (navigator.findFile(modification.targetPath) != null) "Deleted Python file still exists" else null
+            }
+
+            is Modification.CreateElement -> {
+                val file = navigator.findFile(ElementPath.file(modification.targetPath.filePath))
+                    ?: return@runReadAction "Python target file disappeared after CREATE_ELEMENT"
+                if (!normalized(file.text).contains(normalized(modification.content))) {
+                    "Created Python element cannot be found with the requested content"
+                } else null
+            }
+
+            is Modification.ReplaceElement -> {
+                val element = navigator.findElement(modification.targetPath)
+                    ?: return@runReadAction "Replaced Python element cannot be resolved"
+                if (normalized(element.text) != normalized(modification.newContent)) {
+                    "Python element does not match REPLACE_ELEMENT postcondition"
+                } else null
+            }
+
+            is Modification.DeleteElement -> {
+                if (navigator.findElement(modification.targetPath) != null) "Deleted Python element still resolves" else null
+            }
+
+            is Modification.AddImport -> {
+                val file = navigator.findFile(modification.targetPath)
+                    ?: return@runReadAction "Python import target disappeared"
+                if (!hasImport(file.text, modification.importPath)) "Python import was not added" else null
+            }
+
+            is Modification.RemoveImport -> {
+                val file = navigator.findFile(modification.targetPath)
+                    ?: return@runReadAction "Python import target disappeared"
+                if (hasImport(file.text, modification.importPath)) "Python import was not removed" else null
+            }
+
+            is Modification.RenameElement,
+            is Modification.SafeDelete,
+            is Modification.MoveElement -> null
+        }
+    }
+    private fun flushDocumentsToDisk() {
+        ApplicationManager.getApplication().invokeAndWait {
+            com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().saveAllDocuments()
+        }
+    }
 }
