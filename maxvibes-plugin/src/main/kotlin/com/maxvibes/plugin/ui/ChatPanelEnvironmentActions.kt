@@ -125,13 +125,29 @@ class ChatPanelEnvironmentActions(
         try {
             VcsConfiguration.getInstance(project).saveCommitMessage(commitMessage)
 
+            // COMMIT_MESSAGE_CONTROL is published by a data provider that sits inside the commit
+            // panel, and getDataContext only collects data from the component and its ancestors —
+            // asking the content root or the frame never reaches it, so the subtree is searched.
             fun inject(component: java.awt.Component?): Boolean {
                 if (component == null) return false
-                val dataContext = DataManager.getInstance().getDataContext(component)
-                val control = dataContext.getData(VcsDataKeys.COMMIT_MESSAGE_CONTROL)
-                    ?: return false
-                control.setCommitMessage(commitMessage)
-                return true
+                val control = DataManager.getInstance()
+                    .getDataContext(component)
+                    .getData(VcsDataKeys.COMMIT_MESSAGE_CONTROL)
+                if (control != null) {
+                    control.setCommitMessage(commitMessage)
+                    return true
+                }
+                if (component is java.awt.Container) {
+                    for (child in component.components) {
+                        if (inject(child)) return true
+                    }
+                }
+                return false
+            }
+
+            fun commitToolWindow(): com.intellij.openapi.wm.ToolWindow? {
+                val manager = ToolWindowManager.getInstance(project)
+                return manager.getToolWindow("Commit") ?: manager.getToolWindow("Version Control")
             }
 
             fun tryVisibleContexts(): Boolean {
@@ -140,13 +156,11 @@ class ChatPanelEnvironmentActions(
                     .focusOwner
                 if (inject(focusOwner)) return true
 
-                val commitWindow = ToolWindowManager.getInstance(project)
-                    .getToolWindow("Commit")
-                val selectedComponent = commitWindow
-                    ?.contentManager
-                    ?.selectedContent
-                    ?.component
-                if (inject(selectedComponent)) return true
+                val contentManager = commitToolWindow()?.contentManager
+                if (inject(contentManager?.selectedContent?.component)) return true
+                contentManager?.contents?.forEach { content ->
+                    if (inject(content.component)) return true
+                }
 
                 val frame = com.intellij.openapi.wm.WindowManager
                     .getInstance()
@@ -166,8 +180,7 @@ class ChatPanelEnvironmentActions(
                         return@invokeLater
                     }
 
-                    val commitWindow = ToolWindowManager.getInstance(project)
-                        .getToolWindow("Commit")
+                    val commitWindow = commitToolWindow()
                     if (commitWindow == null) {
                         MaxVibesLogger.info(
                             "ChatPanel",
