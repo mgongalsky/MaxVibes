@@ -3,6 +3,7 @@ package com.maxvibes.domain.model.interaction
 import com.maxvibes.domain.model.code.CodeViewRequest
 import com.maxvibes.domain.model.planning.TaskPlan
 import com.maxvibes.domain.model.planning.PlanDiagram
+import com.maxvibes.domain.model.turn.TurnIntent
 
 /**
  * Фаза clipboard-протокола — используется внутренне для трекинга.
@@ -105,7 +106,14 @@ data class InteractionResponse(
      * Null — поле отсутствовало в ответе: старое поведение, кнопка «Схема» в чате не показывается.
      * Битая диаграмма никогда не роняет парсинг всего ответа — кодек возвращает null.
      */
-    val diagram: PlanDiagram? = null
+    val diagram: PlanDiagram? = null,
+
+    /**
+     * Намерение агента после этого шага: закончил он или собирается продолжать.
+     * Null — поле отсутствовало или содержало незнакомое значение; это НЕ [TurnIntent.DONE],
+     * а «агент не сказал», и решение принимается по более слабому признаку.
+     */
+    val turnIntent: TurnIntent? = null
 )
 
 /**

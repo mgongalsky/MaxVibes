@@ -10,6 +10,7 @@ import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.domain.model.turn.TurnSignal
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
+import com.maxvibes.domain.model.turn.TurnIntent
 
 class TurnSignalMapperTest {
 
@@ -88,5 +89,67 @@ class TurnSignalMapperTest {
         val result = ClaudeCodeStepResult.TransportError("cli exited with 1")
 
         assertEquals(TurnSignal.Failed("cli exited with 1"), TurnSignalMapper.from(result))
+    }
+
+    @Test
+    fun `an agent that said it will continue asks for a continuation step`() {
+        val signal = TurnSignalMapper.from(
+            ClaudeCodeStepResult.Completed(
+                message = "First step is in",
+                modifications = emptyList(),
+                success = true,
+                turnIntent = TurnIntent.CONTINUE
+            )
+        )
+
+        assertEquals(TurnSignal.Pending(AgentActionKind.CONTINUATION), signal)
+    }
+
+    @Test
+    fun `an agent that said it is done finishes the turn`() {
+        val signal = TurnSignalMapper.from(
+            ClaudeCodeStepResult.Completed(
+                message = "All set",
+                modifications = emptyList(),
+                success = true,
+                turnIntent = TurnIntent.DONE
+            )
+        )
+
+        assertEquals(TurnSignal.Completed, signal)
+    }
+
+    @Test
+    fun `a failed modification stops the turn even when the agent wants to continue`() {
+        val path = ElementPath("file:src/main/kotlin/A.kt")
+        val modification = Modification.DeleteElement(path)
+
+        val signal = TurnSignalMapper.from(
+            ClaudeCodeStepResult.Completed(
+                message = "Partially applied",
+                modifications = listOf(
+                    ModificationResult.Failure(modification, ModificationError.ElementNotFound(path))
+                ),
+                success = false,
+                turnIntent = TurnIntent.CONTINUE
+            )
+        )
+
+        assertEquals(TurnSignal.Completed, signal)
+    }
+
+    @Test
+    fun `held commands run before the agent continues on its own`() {
+        val signal = TurnSignalMapper.from(
+            ClaudeCodeStepResult.Completed(
+                message = "Build it",
+                modifications = emptyList(),
+                success = true,
+                commands = listOf(CommandRequest("gradlew test")),
+                turnIntent = TurnIntent.CONTINUE
+            )
+        )
+
+        assertEquals(TurnSignal.Pending(AgentActionKind.COMMAND), signal)
     }
 }

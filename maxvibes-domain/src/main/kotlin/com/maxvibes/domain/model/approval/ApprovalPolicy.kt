@@ -33,12 +33,15 @@ data class ApprovalPolicy(
         /**
          * Reading code is the only action without side effects, so it is the one
          * granted by default; anything that writes to the project or the shell
-         * starts out asking.
+         * starts out asking. Continuing a turn unattended also starts out asking:
+         * upgrading the plugin must not hand out non-stop mode to someone who
+         * never opted in.
          */
         private val DEFAULT_MODES: Map<AgentActionKind, ApprovalMode> = mapOf(
             AgentActionKind.VIEW_REQUEST to ApprovalMode.AUTO_ALLOW,
             AgentActionKind.MODIFICATION to ApprovalMode.ASK,
-            AgentActionKind.COMMAND to ApprovalMode.ASK
+            AgentActionKind.COMMAND to ApprovalMode.ASK,
+            AgentActionKind.CONTINUATION to ApprovalMode.ASK
         )
 
         val DEFAULT: ApprovalPolicy = ApprovalPolicy()

@@ -21,9 +21,15 @@ object InteractionRequestSchema {
     const val PROTOCOL_MARKER =
         "MaxVibes IDE Plugin — respond with JSON only, do NOT use tools/artifacts/computer"
 
-    /** Value for [META_RESPONSE_FORMAT] — describes the expected JSON shape. */
+    /**
+     * Value for [META_RESPONSE_FORMAT] — describes the expected JSON shape.
+     *
+     * Mentions `turnIntent` on purpose: a user-supplied prompt file replaces the
+     * bundled system prompt entirely, and this meta-field is the only description
+     * of the protocol that reaches the agent in every single request.
+     */
     const val RESPONSE_FORMAT_HINT =
-        """Respond with ONLY a raw JSON object: {"message": "...", "requestedViews": [{"path": "...", "granularity": "SIGNATURES"}], "modifications": []}"""
+        """Respond with ONLY a raw JSON object: {"message": "...", "requestedViews": [{"path": "...", "granularity": "SIGNATURES"}], "modifications": [], "turnIntent": "DONE"}. Set "turnIntent" to "CONTINUE" only when this task is genuinely unfinished and you want another turn without the user; use "DONE" when you are finished or need the user to decide."""
 
     // ── Request fields ────────────────────────────────────────────────
 
@@ -90,6 +96,9 @@ object InteractionRequestSchema {
 
     /** Questions the LLM asks the user before proceeding (structured channel). */
     const val RESP_QUESTIONS = "questions"
+
+    /** Response field: whether the agent is done or intends to keep working (CONTINUE | DONE). */
+    const val RESP_TURN_INTENT = "turnIntent"
 
     // ── Command entry fields ───────────────────────────────────────────
 

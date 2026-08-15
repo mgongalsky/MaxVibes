@@ -6,6 +6,7 @@ import com.maxvibes.domain.model.interaction.InteractionModification
 import com.maxvibes.domain.model.interaction.InteractionQuestion
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.domain.model.planning.PlanDiagram
+import com.maxvibes.domain.model.turn.TurnIntent
 
 sealed class ClaudeCodeStepResult {
     data class WaitingForApprove(
@@ -59,7 +60,12 @@ sealed class ClaudeCodeStepResult {
         val commands: List<CommandRequest> = emptyList(),
         val costUsd: Double? = null,
         val numTurns: Int? = null,
-        val diagram: PlanDiagram? = null
+        val diagram: PlanDiagram? = null,
+        /**
+         * Сказал ли агент, что ещё не закончил. Null — не сказал ничего, и это
+         * трактуется как «закончил»: безостановочный ход включается только явно.
+         */
+        val turnIntent: TurnIntent? = null
     ) : ClaudeCodeStepResult()
 
     data class Error(val message: String) : ClaudeCodeStepResult()

@@ -171,7 +171,8 @@ internal class CodingAgentApprovalService(
             modifications = modificationResults,
             success = failureCount == 0,
             commitMessage = pending.commitMessage.takeIf { failureCount == 0 },
-            commands = pending.commands.takeIf { failureCount == 0 }.orEmpty()
+            commands = pending.commands.takeIf { failureCount == 0 }.orEmpty(),
+            turnIntent = pending.turnIntent
         )
     }
 

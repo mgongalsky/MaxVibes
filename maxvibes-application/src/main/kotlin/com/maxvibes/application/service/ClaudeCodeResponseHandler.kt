@@ -37,7 +37,8 @@ internal class CodingAgentResponseHandler(
                 "questions" to response.questions.size,
                 "commands" to response.commands.size,
                 "msgLen" to response.message.length,
-                "thinkingLen" to (turn.thinkingText?.length ?: 0)
+                "thinkingLen" to (turn.thinkingText?.length ?: 0),
+                "turnIntent" to (response.turnIntent?.name ?: "none")
             )
         )
 
@@ -96,7 +97,8 @@ internal class CodingAgentResponseHandler(
                         sessionId = sessionId,
                         modifications = intent.modifications,
                         commands = intent.commands,
-                        commitMessage = intent.commitMessage
+                        commitMessage = intent.commitMessage,
+                        turnIntent = intent.turnIntent
                     )
                     log(
                         "Holding ${intent.modifications.size} modification(s) and " +
@@ -106,7 +108,8 @@ internal class CodingAgentResponseHandler(
                         "modifications held for approval",
                         mapOf(
                             "mods" to intent.modifications.size,
-                            "commands" to intent.commands.size
+                            "commands" to intent.commands.size,
+                            "turnIntent" to (intent.turnIntent?.name ?: "none")
                         )
                     )
                 }

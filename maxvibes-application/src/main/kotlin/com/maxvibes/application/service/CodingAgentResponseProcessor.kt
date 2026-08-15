@@ -6,6 +6,7 @@ import com.maxvibes.domain.model.command.CommandRequest
 import com.maxvibes.domain.model.interaction.InteractionModification
 import com.maxvibes.domain.model.interaction.InteractionResponse
 import com.maxvibes.domain.model.planning.TaskPlan
+import com.maxvibes.domain.model.turn.TurnIntent
 
 // Pure provider-independent interpretation of a coding-agent response.
 // Side effects are emitted as ordered intents and executed by the response handler.
@@ -33,7 +34,8 @@ object CodingAgentResponseProcessor {
         data class HoldPending(
             val modifications: List<InteractionModification>,
             val commands: List<CommandRequest>,
-            val commitMessage: String?
+            val commitMessage: String?,
+            val turnIntent: TurnIntent? = null
         ) : Intent
     }
 
@@ -81,7 +83,8 @@ object CodingAgentResponseProcessor {
             intents += Intent.HoldPending(
                 modifications = response.modifications,
                 commands = commands,
-                commitMessage = response.commitMessage?.takeIf { it.isNotBlank() }
+                commitMessage = response.commitMessage?.takeIf { it.isNotBlank() },
+                turnIntent = response.turnIntent
             )
             return Outcome(
                 ClaudeCodeStepResult.AwaitingModApprove(
@@ -161,7 +164,8 @@ object CodingAgentResponseProcessor {
                 commands = commands,
                 costUsd = ctx.costUsd,
                 numTurns = ctx.numTurns,
-                diagram = response.diagram
+                diagram = response.diagram,
+                turnIntent = response.turnIntent
             ),
             intents
         )

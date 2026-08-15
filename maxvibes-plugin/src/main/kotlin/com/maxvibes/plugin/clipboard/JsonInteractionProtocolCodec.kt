@@ -16,6 +16,7 @@ import com.maxvibes.domain.model.planning.DiagramGroup
 import com.maxvibes.domain.model.planning.DiagramSeam
 import com.maxvibes.domain.model.planning.DiagramNodeKind
 import com.maxvibes.domain.model.planning.DiagramEdgeKind
+import com.maxvibes.domain.model.turn.TurnIntent
 
 /**
  * Pure [InteractionProtocolCodec] implementation backed by kotlinx.serialization.
@@ -236,8 +237,19 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
             questions = obj[InteractionRequestSchema.RESP_QUESTIONS]?.jsonArray
                 ?.mapNotNull { parseQuestion(it.jsonObject) } ?: emptyList(),
             plan = parsePlan(obj),
-            diagram = parseDiagram(obj)
+            diagram = parseDiagram(obj),
+            turnIntent = parseTurnIntent(obj)
         )
+    }
+
+    /**
+     * Parses the optional `turnIntent` field. An unknown value yields null rather
+     * than an exception: one strange word must not discard a response that already
+     * carries valid modifications.
+     */
+    private fun parseTurnIntent(obj: JsonObject): TurnIntent? {
+        val raw = obj[InteractionRequestSchema.RESP_TURN_INTENT]?.jsonPrimitive?.contentOrNull ?: return null
+        return TurnIntent.values().firstOrNull { it.name.equals(raw.trim(), ignoreCase = true) }
     }
 
     /**

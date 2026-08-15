@@ -76,6 +76,7 @@ class AutonomySettingsPanel(private val editor: ApprovalPolicyEditor) {
         AgentActionKind.VIEW_REQUEST -> "Requests for code:"
         AgentActionKind.MODIFICATION -> "Code modifications:"
         AgentActionKind.COMMAND -> "Terminal commands:"
+        AgentActionKind.CONTINUATION -> "Continuing the work:"
     }
 
     private fun modeLabel(value: Any?): String = when (value) {

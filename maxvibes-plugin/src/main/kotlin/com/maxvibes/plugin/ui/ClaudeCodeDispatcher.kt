@@ -147,6 +147,35 @@ class ClaudeCodeDispatcher(
         }
     }
 
+    /**
+     * Sends the agent one more turn because it said it was not finished.
+     *
+     * Deliberately NOT routed through [dispatchMessage]: that one calls
+     * [TurnAutopilot.startTurn], which restores the autonomy budget. A
+     * self-continuing agent would then reset its own limit on every step and
+     * never stop. No user bubble either — the user did not write this text.
+     */
+    fun continueWithoutHuman(sessionId: String) {
+        val session = chatTreeService.getActiveSession()
+        if (session.id != sessionId) return
+
+        MaxVibesLogger.info(
+            "ClaudeCodeDispatcher",
+            "auto-next-turn",
+            mapOf("sessionId" to sessionId)
+        )
+        callbacks.setInputEnabled(false)
+        callbacks.setStatus("🤖 Continuing on its own...")
+        executeAsync("Claude Code: continuing...", session) {
+            claudeCodeService().handleUserInput(
+                sessionId = session.id,
+                userInput = "[AUTO-CONTINUE] No new instruction from the user. " +
+                        "You reported that you were not finished, so take the next step now. " +
+                        "Set turnIntent to DONE as soon as the task is complete."
+            )
+        }
+    }
+
     fun handleResult(result: ClaudeCodeStepResult, session: ChatSession) {
         when (result) {
             is ClaudeCodeStepResult.Error -> chatTreeService.addMessage(

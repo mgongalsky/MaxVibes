@@ -2,11 +2,12 @@ package com.maxvibes.application.service
 
 import com.maxvibes.domain.model.command.CommandRequest
 import com.maxvibes.domain.model.interaction.InteractionModification
+import com.maxvibes.domain.model.turn.TurnIntent
 
 /**
  * Holds the modification set proposed by the LLM between the proposal and the user's
- * approve/reject decision, together with the commands and commit message that arrived
- * in the same response.
+ * approve/reject decision, together with the commands, commit message and turn intent
+ * that arrived in the same response.
  *
  * Ownership contract: the held set belongs to exactly one chat session (the sessionId
  * passed to [hold]). Queries from any other session see no pending state — this guards
@@ -20,7 +21,13 @@ class PendingModificationsStore {
     data class Pending(
         val modifications: List<InteractionModification>,
         val commands: List<CommandRequest>,
-        val commitMessage: String?
+        val commitMessage: String?,
+        /**
+         * Сказал ли агент, что продолжит работу после этих правок. Живёт здесь по той же
+         * причине, что и commit message: сказано это было до паузы на решение человека,
+         * а понадобится только после неё.
+         */
+        val turnIntent: TurnIntent? = null
     )
 
     private var pending: Pending? = null
@@ -31,9 +38,10 @@ class PendingModificationsStore {
         sessionId: String,
         modifications: List<InteractionModification>,
         commands: List<CommandRequest> = emptyList(),
-        commitMessage: String? = null
+        commitMessage: String? = null,
+        turnIntent: TurnIntent? = null
     ) {
-        pending = Pending(modifications, commands, commitMessage)
+        pending = Pending(modifications, commands, commitMessage, turnIntent)
         owner = sessionId
     }
 

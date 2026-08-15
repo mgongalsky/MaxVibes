@@ -101,9 +101,14 @@ internal class ChatMessageControllerComposition(
         TurnAutopilot(
             orchestrator = AgentTurnOrchestrator(decideApproval = approvalService::decide),
             continueTurn = { sessionId, action ->
+                // Исчерпывающий when намеренно: новый вид действия должен ломать сборку
+                // здесь, а не молча получать чужое поведение.
                 when (action) {
                     AgentActionKind.COMMAND -> commandCoordinator.runAllAutomatically(sessionId)
-                    else -> claudeCodeDispatcher.continueTurnAutomatically(sessionId)
+                    AgentActionKind.CONTINUATION -> claudeCodeDispatcher.continueWithoutHuman(sessionId)
+                    AgentActionKind.VIEW_REQUEST,
+                    AgentActionKind.MODIFICATION,
+                    null -> claudeCodeDispatcher.continueTurnAutomatically(sessionId)
                 }
             }
         )
