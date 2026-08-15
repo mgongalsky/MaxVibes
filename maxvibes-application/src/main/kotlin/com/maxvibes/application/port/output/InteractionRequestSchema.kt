@@ -1,258 +1,100 @@
 package com.maxvibes.application.port.output
 
-/**
- * JSON protocol constants for Clipboard mode LLM communication.
- *
- * All field name strings are centralized here. When adding or renaming
- * a protocol field — add/update the constant here, then reference it
- * in [JsonClipboardProtocolCodec]. Never hardcode field names elsewhere.
- */
+/** Centralized JSON field names and protocol hints for MaxVibes interactions. */
 object InteractionRequestSchema {
-
-    // ── Meta fields (LLM behavior markers) ────────────────────────────
-
-    /** JSON key for the protocol marker meta-field. */
     const val META_PROTOCOL = "_protocol"
-
-    /** JSON key for the response format hint meta-field. */
     const val META_RESPONSE_FORMAT = "_responseFormat"
 
-    /** Value for [META_PROTOCOL] — instructs LLM to respond as JSON only. */
     const val PROTOCOL_MARKER =
         "MaxVibes IDE Plugin — respond with JSON only, do NOT use tools/artifacts/computer"
 
-    /**
-     * Value for [META_RESPONSE_FORMAT] — describes the expected JSON shape.
-     *
-     * Mentions `turnIntent` on purpose: a user-supplied prompt file replaces the
-     * bundled system prompt entirely, and this meta-field is the only description
-     * of the protocol that reaches the agent in every single request.
-     */
     const val RESPONSE_FORMAT_HINT =
-        """Respond with ONLY a raw JSON object: {"message": "...", "requestedViews": [{"path": "...", "granularity": "SIGNATURES"}], "modifications": [], "turnIntent": "DONE"}. Set "turnIntent" to "CONTINUE" only when this task is genuinely unfinished and you want another turn without the user; use "DONE" when you are finished or need the user to decide."""
+        """Respond with ONLY a raw JSON object: {"message": "...", "requestedViews": [{"path": "...", "granularity": "SIGNATURES"}], "modifications": [], "checks": [{"kind": "BUILD", "scope": null, "reason": "Verify the project builds", "timeoutSec": 300}], "turnIntent": "DONE"}. For project compilation or test execution, ALWAYS use "checks" with kind "BUILD" or "TESTS" so the IDE runs it natively; NEVER put build, compile, or test invocations in "commands". Set "turnIntent" to "CONTINUE" only when this task is genuinely unfinished and you want another turn without the user; use "DONE" when you are finished or need the user to decide."""
 
-    // ── Request fields ────────────────────────────────────────────────
-
-    /** System prompt / role instructions for the LLM. */
     const val FIELD_SYSTEM_INSTRUCTION = "systemInstruction"
-
-    /** The current user message sent to the LLM in this turn (formerly "task"). */
     const val FIELD_CURRENT_MESSAGE = "current_message"
-
-    /** IntelliJ project name, for context. */
     const val FIELD_PROJECT_NAME = "projectName"
-
-    /** When true, LLM should plan rather than implement immediately. */
     const val FIELD_PLAN_ONLY = "planOnly"
-
-    /** Project file tree snapshot (string). */
     const val FIELD_FILE_TREE = "fileTree"
-
-    /** Map of file path → file contents attached to the request. */
     const val FIELD_FILES = "files"
-
-    /** List of file paths already gathered in a previous round-trip. */
     const val FIELD_PREVIOUSLY_GATHERED = "previouslyGatheredFiles"
-
-    /** Conversation history to include for multi-turn context. */
     const val FIELD_CHAT_HISTORY = "chatHistory"
-
-    /** Exception stack trace when sending an error to the LLM. */
     const val FIELD_ERROR_TRACE = "errorTrace"
-
-    /** IDE-reported errors (compiler, inspections) attached to request. */
     const val FIELD_IDE_ERRORS = "ideErrors"
-
-    /** Optional task-scoped prompt injected alongside the system instruction. Absent when "Just Code" mode is active. */
     const val FIELD_SPECIFIC_PROMPT = "specificPrompt"
 
-    // ── Chat history entry fields ──────────────────────────────────────
-
-    /** Role of the speaker in a history entry ("user" / "assistant"). */
     const val HISTORY_ROLE = "role"
-
-    /** Text content of a history entry. */
     const val HISTORY_CONTENT = "content"
 
-    // ── Response fields ───────────────────────────────────────────────
-
-    /** Human-readable reply or explanation from the LLM. */
     const val RESP_MESSAGE = "message"
-
-    /** Optional chain-of-thought / reasoning from the LLM. */
     const val RESP_REASONING = "reasoning"
-
-    /** Files the LLM requests to see before proceeding. */
     const val RESP_REQUESTED_FILES = "requestedFiles"
-
-    /** List of code modifications to apply in the IDE. */
     const val RESP_MODIFICATIONS = "modifications"
-
-    /** Optional conventional-commit message suggested by the LLM. */
     const val RESP_COMMIT_MESSAGE = "commitMessage"
-
-    /** Shell commands the LLM asks the IDE to run (last resort). */
     const val RESP_COMMANDS = "commands"
-
-    /** Questions the LLM asks the user before proceeding (structured channel). */
     const val RESP_QUESTIONS = "questions"
-
-    /** Response field: whether the agent is done or intends to keep working (CONTINUE | DONE). */
     const val RESP_TURN_INTENT = "turnIntent"
 
-    // ── Command entry fields ───────────────────────────────────────────
-
-    /** Shell command line to execute from the project root. */
     const val CMD_COMMAND = "command"
-
-    /** Human-readable justification shown to the user next to the command. */
     const val CMD_REASON = "reason"
-
-    /** Optional timeout in seconds for a command entry. */
     const val CMD_TIMEOUT_SEC = "timeoutSec"
-
-    /** Field for command results sent back to the LLM in the next request. */
     const val FIELD_COMMAND_RESULTS = "commandResults"
 
-    /** Stable identifier of a question entry (echoed back in the user's answer). */
     const val Q_ID = "id"
-
-    /** Human-readable question text shown to the user. */
     const val Q_QUESTION = "question"
-
-    /** Short answer options rendered as tappable choices (2-4 per protocol). */
     const val Q_OPTIONS = "options"
 
-    // ── Modification entry fields ──────────────────────────────────────
-
-    /** Operation type (CREATE_FILE, REPLACE_ELEMENT, etc.). */
     const val MOD_TYPE = "type"
-
-    /** PSI element path or file path target of the operation. */
     const val MOD_PATH = "path"
-
-    /** Source code content to write / replace. */
     const val MOD_CONTENT = "content"
-
-    /** PSI element kind hint (FUNCTION, PROPERTY, CLASS, …). */
     const val MOD_ELEMENT_KIND = "elementKind"
-
-    /** Insertion position for CREATE_ELEMENT (FIRST_CHILD, LAST_CHILD, AFTER, BEFORE). */
     const val MOD_POSITION = "position"
-
-    /** Fully-qualified import path for ADD_IMPORT / REMOVE_IMPORT. */
     const val MOD_IMPORT_PATH = "importPath"
     const val MOD_NEW_NAME = "newName"
     const val MOD_DESTINATION = "destination"
 
-    // ── Fallback defaults ──────────────────────────────────────────────
-
-    /** Default element kind when the field is absent in a modification entry. */
     const val DEFAULT_ELEMENT_KIND = "FILE"
-
-    /** Default insertion position when the field is absent in a modification entry. */
     const val DEFAULT_POSITION = "LAST_CHILD"
 
-    // ── requestedViews fields ─────────────────────────────────────────
-
-    /**
-     * Response field: structured file-view requests with granularity control.
-     * LLM uses this instead of [RESP_REQUESTED_FILES] when it needs less than the full file.
-     */
     const val REQUESTED_VIEWS = "requestedViews"
-
-    /** Project-relative file path inside a `requestedViews` entry. */
     const val VIEW_PATH = "path"
-
-    /** Optional granularity level inside a `requestedViews` entry (FULL / SIGNATURES / OUTLINE / ELEMENT). */
     const val VIEW_GRANULARITY = "granularity"
-
-    /** Optional PSI element path inside a `requestedViews` entry (required when granularity = ELEMENT). */
     const val VIEW_ELEMENT_PATH = "elementPath"
 
-    /** Response field: task-plan snapshot from the LLM (planner panel). Absent = plan unchanged. */
     const val RESP_PLAN = "plan"
-
-    /** Request field: current plan state of the session, including manual user toggles. */
     const val FIELD_CURRENT_PLAN = "currentPlan"
-
-    /** Title of a plan or of a single plan step. */
     const val PLAN_TITLE = "title"
-
-    /** Project-relative path to the PLAN.md (on the plan) or STEP_N.md (on a step). */
     const val PLAN_DOC_PATH = "docPath"
-
-    /** Ordered list of plan steps inside a plan object. */
     const val PLAN_STEPS = "steps"
-
-    /** Stable identifier of a plan step (used to address status updates). */
     const val PLAN_STEP_ID = "id"
-
-    /** Plan step status: PENDING | IN_PROGRESS | DONE | SKIPPED. */
     const val PLAN_STEP_STATUS = "status"
 
-    // ── Plan diagram fields (response field `diagram`) ─────────────────
-
-    /** Response field: optional structural plan diagram. Absent = no diagram, no button in chat. */
     const val RESP_DIAGRAM = "diagram"
-
-    /** Optional diagram title. */
     const val DIAG_TITLE = "title"
-
-    /** Array of diagram nodes. */
     const val DIAG_NODES = "nodes"
-
-    /** Array of diagram edges. */
     const val DIAG_EDGES = "edges"
-
-    /** Array of semantic node groups (future modules). */
     const val DIAG_GROUPS = "groups"
-
-    /** Array of seams — where the plan cuts between groups. */
     const val DIAG_SEAMS = "seams"
-
-    /** Stable id of a node / edge / group entry. */
     const val DIAG_ID = "id"
-
-    /** Node kind (CLASS | INTERFACE | OBJECT | FUNCTION | PROPERTY | MODULE) or edge kind (CALLS | USES | EXTENDS | IMPLEMENTS | OWNS). */
     const val DIAG_KIND = "kind"
-
-    /** Display name of a node. */
     const val DIAG_NAME = "name"
-
-    /** Optional short signature of a node. */
     const val DIAG_SIGNATURE = "signature"
-
-    /** Optional project-relative file path of a node. */
     const val DIAG_FILE_PATH = "filePath"
-
-    /** Optional lines-of-code count of a node. */
     const val DIAG_LOC = "loc"
-
-    /** Source node id of an edge. */
     const val DIAG_FROM = "from"
-
-    /** Target node id of an edge. */
     const val DIAG_TO = "to"
-
-    /** Optional label of an edge; also the display label of a group. */
     const val DIAG_LABEL = "label"
-
-    /** Node ids belonging to a group. */
     const val DIAG_NODE_IDS = "nodeIds"
-
-    /** Optional id of the enclosing group (nested groups). */
     const val DIAG_PARENT_ID = "parentId"
-
-    /** Group id on one side of a seam. */
     const val DIAG_FROM_GROUP_ID = "fromGroupId"
-
-    /** Group id on the other side of a seam. */
     const val DIAG_TO_GROUP_ID = "toGroupId"
-
-    /** Optional justification of a seam. */
     const val DIAG_RATIONALE = "rationale"
-
-    /** Ids of edges the seam crosses — the future public contract between modules. */
     const val DIAG_CROSSING_EDGE_IDS = "crossingEdgeIds"
+
+    const val RESP_CHECKS = "checks"
+    const val CHECK_KIND = "kind"
+    const val CHECK_SCOPE = "scope"
+    const val CHECK_REASON = "reason"
+    const val CHECK_TIMEOUT_SEC = "timeoutSec"
+    const val FIELD_CHECK_RESULTS = "checkResults"
 }

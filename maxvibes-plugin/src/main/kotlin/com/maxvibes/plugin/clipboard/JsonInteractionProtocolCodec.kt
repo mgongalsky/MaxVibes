@@ -17,6 +17,7 @@ import com.maxvibes.domain.model.planning.DiagramSeam
 import com.maxvibes.domain.model.planning.DiagramNodeKind
 import com.maxvibes.domain.model.planning.DiagramEdgeKind
 import com.maxvibes.domain.model.turn.TurnIntent
+import com.maxvibes.domain.model.check.CheckRequest
 
 /**
  * Pure [InteractionProtocolCodec] implementation backed by kotlinx.serialization.
@@ -116,6 +117,9 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
             }
             request.commandResults?.takeIf { it.isNotBlank() }?.let {
                 put(InteractionRequestSchema.FIELD_COMMAND_RESULTS, it)
+            }
+            request.checkResults?.takeIf { it.isNotBlank() }?.let {
+                put(InteractionRequestSchema.FIELD_CHECK_RESULTS, it)
             }
 
             // Current plan snapshot (planner panel) — lets the model see the live state,
@@ -234,6 +238,8 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
             commitMessage = obj[InteractionRequestSchema.RESP_COMMIT_MESSAGE]?.jsonPrimitive?.contentOrNull,
             commands = obj[InteractionRequestSchema.RESP_COMMANDS]?.jsonArray
                 ?.mapNotNull { parseCommand(it.jsonObject) } ?: emptyList(),
+            checks = obj[InteractionRequestSchema.RESP_CHECKS]?.jsonArray
+                ?.mapNotNull { parseCheck(it.jsonObject) } ?: emptyList(),
             questions = obj[InteractionRequestSchema.RESP_QUESTIONS]?.jsonArray
                 ?.mapNotNull { parseQuestion(it.jsonObject) } ?: emptyList(),
             plan = parsePlan(obj),
@@ -537,4 +543,25 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
 
             CodeViewRequest(path, granularity, elementPath)
         }
+
+    /**
+     * Parses a single `checks[]` entry.
+     *
+     * Returns `null` (skips the entry) when `kind` is absent or blank. Whether the
+     * value names a real check is decided later by the domain converter — the codec
+     * stays tolerant so one odd word cannot discard a response that already carries
+     * valid modifications.
+     */
+    private fun parseCheck(obj: JsonObject): InteractionCheck? {
+        val kind = obj[InteractionRequestSchema.CHECK_KIND]?.jsonPrimitive?.contentOrNull
+            ?.takeIf { it.isNotBlank() } ?: return null
+        return InteractionCheck(
+            kind = kind,
+            scope = obj[InteractionRequestSchema.CHECK_SCOPE]?.jsonPrimitive?.contentOrNull
+                ?.takeIf { it.isNotBlank() },
+            reason = obj[InteractionRequestSchema.CHECK_REASON]?.jsonPrimitive?.contentOrNull ?: "",
+            timeoutSec = obj[InteractionRequestSchema.CHECK_TIMEOUT_SEC]?.jsonPrimitive?.intOrNull
+                ?: CheckRequest.DEFAULT_TIMEOUT_SEC
+        )
+    }
 }

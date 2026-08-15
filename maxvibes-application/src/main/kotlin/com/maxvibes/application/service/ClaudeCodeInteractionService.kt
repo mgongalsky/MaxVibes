@@ -148,6 +148,33 @@ class CodingAgentInteractionService(
         )
     }
 
+    suspend fun submitCheckResults(
+        sessionId: String,
+        resultsForLlm: String
+    ): ClaudeCodeStepResult {
+        sessionLog?.begin(sessionId)
+        sessionLog?.event(
+            "submitCheckResults",
+            mapOf("len" to resultsForLlm.length)
+        )
+
+        if (sessionManager.statusFor(sessionId) != ClipboardSessionStatus.SESSION_ACTIVE) {
+            return error("Check results can only be submitted in SESSION_ACTIVE state")
+        }
+        if (!workspaceService.ensure(sessionId)) {
+            return error(
+                "Cannot restore session state for session $sessionId. Please start a new task."
+            )
+        }
+
+        return send(
+            CodingAgentTurnCommand(
+                sessionId = sessionId,
+                checkResults = resultsForLlm
+            )
+        )
+    }
+
     fun status(sessionId: String): ClipboardSessionStatus =
         sessionManager.statusFor(sessionId)
 

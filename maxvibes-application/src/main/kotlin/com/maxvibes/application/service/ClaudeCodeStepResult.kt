@@ -1,5 +1,6 @@
 package com.maxvibes.application.service
 
+import com.maxvibes.domain.model.check.CheckRequest
 import com.maxvibes.domain.model.code.RequestedViewInfo
 import com.maxvibes.domain.model.command.CommandRequest
 import com.maxvibes.domain.model.interaction.InteractionModification
@@ -9,6 +10,7 @@ import com.maxvibes.domain.model.planning.PlanDiagram
 import com.maxvibes.domain.model.turn.TurnIntent
 
 sealed class ClaudeCodeStepResult {
+
     data class WaitingForApprove(
         val assistantMessage: String,
         val requestedViews: List<RequestedViewInfo>,
@@ -58,6 +60,8 @@ sealed class ClaudeCodeStepResult {
         val commitMessage: String? = null,
         val durationMs: Long = 0L,
         val commands: List<CommandRequest> = emptyList(),
+        /** Проверки средствами IDE — сборка и тесты. Отдельно от [commands]: другой канал, другое разрешение. */
+        val checks: List<CheckRequest> = emptyList(),
         val costUsd: Double? = null,
         val numTurns: Int? = null,
         val diagram: PlanDiagram? = null,

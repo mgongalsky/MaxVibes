@@ -7,6 +7,9 @@ import com.maxvibes.domain.model.interaction.InteractionCommand
 import com.maxvibes.domain.model.interaction.InteractionModification
 import com.maxvibes.domain.model.modification.InsertPosition
 import com.maxvibes.domain.model.modification.Modification
+import com.maxvibes.domain.model.check.CheckKind
+import com.maxvibes.domain.model.check.CheckRequest
+import com.maxvibes.domain.model.interaction.InteractionCheck
 
 /**
  * Converts LLM-protocol DTOs into domain objects. Shared by
@@ -86,6 +89,24 @@ object ProtocolConverter {
             command = cmd.command,
             reason = cmd.reason.takeIf { it.isNotBlank() },
             timeoutSec = cmd.timeoutSec.coerceIn(1, 3600)
+        )
+    }
+
+    /**
+     * Converts an LLM-protocol [InteractionCheck] into a domain [CheckRequest].
+     * Skips entries naming an unknown kind; clamps the timeout to [1, 3600] seconds.
+     */
+    fun convertCheck(check: InteractionCheck): CheckRequest? {
+        val kind = try {
+            CheckKind.valueOf(check.kind.trim().uppercase())
+        } catch (_: Exception) {
+            return null
+        }
+        return CheckRequest(
+            kind = kind,
+            scope = check.scope?.trim()?.takeIf { it.isNotBlank() },
+            reason = check.reason.takeIf { it.isNotBlank() },
+            timeoutSec = check.timeoutSec.coerceIn(1, 3600)
         )
     }
 }

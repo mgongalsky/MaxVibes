@@ -16,7 +16,8 @@ interface ChatPanelCallbacks :
     AttachmentView,
     SessionView,
     QuestionView,
-    CommandView
+    CommandView,
+    CheckView
 
 /**
  * Thin public facade for chat interactions.

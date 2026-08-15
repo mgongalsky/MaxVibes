@@ -2,15 +2,15 @@ package com.maxvibes.application.service
 
 import com.maxvibes.application.port.output.ChatSessionRepository
 import com.maxvibes.application.port.output.CodeRepository
+import com.maxvibes.application.port.output.CodingAgentSessionLogPort
 import com.maxvibes.application.port.output.LoggerPort
 import com.maxvibes.application.port.output.NotificationPort
+import com.maxvibes.domain.model.chat.CodingAgentProvider
 import com.maxvibes.domain.model.chat.MessageRole
 import com.maxvibes.domain.model.code.CodeViewRequest
 import com.maxvibes.domain.model.interaction.ClipboardSessionStatus
 import com.maxvibes.domain.model.interaction.InteractionModification
 import com.maxvibes.domain.model.modification.ModificationResult
-import com.maxvibes.application.port.output.CodingAgentSessionLogPort
-import com.maxvibes.domain.model.chat.CodingAgentProvider
 
 internal class CodingAgentApprovalService(
     private val chatSessionRepository: ChatSessionRepository,
@@ -130,13 +130,15 @@ internal class CodingAgentApprovalService(
         sessionManager.transition(sessionId, ClipboardEvent.Approved)
         log(
             "Applying ${pending.modifications.size} approved modification(s), " +
-                    "${pending.commands.size} held command(s)"
+                    "${pending.commands.size} held command(s), " +
+                    "${pending.checks.size} held check(s)"
         )
         sessionLog?.event(
             "pending modifications approved",
             mapOf(
                 "mods" to pending.modifications.size,
-                "commands" to pending.commands.size
+                "commands" to pending.commands.size,
+                "checks" to pending.checks.size
             )
         )
 
@@ -172,6 +174,7 @@ internal class CodingAgentApprovalService(
             success = failureCount == 0,
             commitMessage = pending.commitMessage.takeIf { failureCount == 0 },
             commands = pending.commands.takeIf { failureCount == 0 }.orEmpty(),
+            checks = pending.checks.takeIf { failureCount == 0 }.orEmpty(),
             turnIntent = pending.turnIntent
         )
     }
@@ -214,6 +217,7 @@ internal class CodingAgentApprovalService(
         println("[MaxVibes ${policy.logTag}] $message")
         logger?.info(policy.logTag, message)
     }
+
     fun reject(sessionId: String): Boolean {
         val pending = pendingStore.take(sessionId) ?: return false
         finishRejection(
@@ -224,6 +228,7 @@ internal class CodingAgentApprovalService(
         )
         return true
     }
+
     private fun finishRejection(
         sessionId: String,
         rejectedCount: Int,

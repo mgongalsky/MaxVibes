@@ -1,12 +1,21 @@
 package com.maxvibes.plugin.ui
 
+import com.intellij.ui.JBColor
+import com.intellij.ui.components.JBLabel
+import com.intellij.util.ui.JBUI
 import com.maxvibes.domain.model.chat.ChatSession
 import com.maxvibes.domain.model.code.RequestedViewInfo
 import com.maxvibes.domain.model.interaction.AttachedImage
+import com.maxvibes.domain.model.interaction.InteractionModification
 import com.maxvibes.domain.model.modification.AppliedModInfo
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.domain.model.planning.PlanDiagram
-import com.maxvibes.domain.model.interaction.InteractionModification
+import java.awt.Color
+import java.awt.Component
+import java.awt.Container
+import java.util.ArrayDeque
+import javax.swing.JPanel
+import javax.swing.SwingUtilities
 
 internal fun normalizeSystemMessage(text: String): String? {
     val value = text.trim()
@@ -37,7 +46,6 @@ class ChatPanelCallbacksAdapter(
     private val onOpenDiagram: (PlanDiagram) -> Unit,
     private val onClearNavigation: () -> Unit
 ) : ChatPanelCallbacks {
-
     override fun appendToChat(text: String) {
         normalizeSystemMessage(text)?.let(conversationPanel::addSystemBubble)
     }
@@ -60,13 +68,7 @@ class ChatPanelCallbacksAdapter(
         appliedModifications: List<AppliedModInfo>
     ) {
         conversationPanel.addAssistantBubble(
-            text = text,
-            tokenInfo = tokenInfo,
-            modifications = modifications,
-            metaFiles = metaFiles,
-            reasoning = reasoning,
-            requestedViews = requestedViews,
-            appliedModifications = appliedModifications
+            text, tokenInfo, modifications, metaFiles, reasoning, requestedViews, appliedModifications
         )
         onRegisterElementPaths(modifications)
     }
@@ -79,6 +81,61 @@ class ChatPanelCallbacksAdapter(
         onDecline: (String?) -> Unit
     ): CommandBlockView =
         conversationPanel.addCommandBubble(command, reason, warnings, onRun, onDecline)
+
+    override fun addCheckBubble(
+        title: String,
+        reason: String?,
+        onRun: () -> Unit,
+        onDecline: (String?) -> Unit
+    ): CheckBlockView {
+        val block = conversationPanel.addCommandBubble(title, reason, emptyList(), onRun, onDecline)
+        restyleLatestBubbleAsIdeCheck(title)
+        return object : CheckBlockView {
+            override fun setQueued() = block.setQueued()
+            override fun setRunning() = block.setRunning()
+            override fun setResult(headline: String, details: String, success: Boolean) =
+                block.setResult(headline, details, success)
+
+            override fun setDeclined(comment: String?) = block.setDeclined(comment)
+        }
+    }
+
+    private fun restyleLatestBubbleAsIdeCheck(title: String) {
+        SwingUtilities.invokeLater {
+            val messages = conversationPanel.scrollPane.viewport.view as? Container ?: return@invokeLater
+            val bubble = messages.components.filterIsInstance<JPanel>().lastOrNull() ?: return@invokeLater
+            val bg = JBColor(Color(0xEEF7FA), Color(0x17282F))
+            val accent = JBColor(Color(0x247C96), Color(0x62C5DF))
+            recolorTree(bubble, bg)
+            findLabels(bubble).firstOrNull { it.text.contains("Terminal command") }?.apply {
+                text = "✓ IDE check · $title"
+                foreground = accent
+            }
+            bubble.border = JBUI.Borders.compound(
+                JBUI.Borders.customLine(accent, 0, 3, 0, 0),
+                JBUI.Borders.empty(6, 10, 6, 8)
+            )
+            bubble.revalidate()
+            bubble.repaint()
+        }
+    }
+
+    private fun recolorTree(component: Component, color: Color) {
+        if (component is JPanel || component is javax.swing.JTextArea) component.background = color
+        if (component is Container) component.components.forEach { recolorTree(it, color) }
+    }
+
+    private fun findLabels(root: Container): List<JBLabel> {
+        val labels = mutableListOf<JBLabel>()
+        val pending = ArrayDeque<Component>()
+        root.components.forEach(pending::addLast)
+        while (pending.isNotEmpty()) {
+            val component = pending.removeFirst()
+            if (component is JBLabel) labels += component
+            if (component is Container) component.components.forEach(pending::addLast)
+        }
+        return labels
+    }
 
     override fun addQuestionBubble(
         question: String,
@@ -95,17 +152,14 @@ class ChatPanelCallbacksAdapter(
         count: Int,
         onRunAll: () -> Unit,
         onDeclineAll: () -> Unit
-    ): CommandBatchBarView =
-        conversationPanel.addCommandBatchBar(count, onRunAll, onDeclineAll)
+    ): CommandBatchBarView = conversationPanel.addCommandBatchBar(count, onRunAll, onDeclineAll)
 
     override fun clearChatDisplay() {
         conversationPanel.clearMessages()
         onClearNavigation()
     }
 
-    override fun appendIconToLastBubble(icon: String) {
-        conversationPanel.appendIconToLastBubble(icon)
-    }
+    override fun appendIconToLastBubble(icon: String) = conversationPanel.appendIconToLastBubble(icon)
 
     override fun setInputEnabled(enabled: Boolean) {
         inputPanel.setControlsEnabled(enabled)
@@ -114,59 +168,20 @@ class ChatPanelCallbacksAdapter(
         claudeCliSettingsPanel.setControlsEnabled(enabled)
     }
 
-    override fun setStatus(text: String) {
-        onStatus(text)
-    }
-
-    override fun updateModeIndicator() {
-        onRender()
-    }
-
-    override fun updateBreadcrumb() {
-        onUpdateBreadcrumb()
-    }
-
-    override fun registerElementPaths(modifications: List<ModificationResult>) {
-        onRegisterElementPaths(modifications)
-    }
-
+    override fun setStatus(text: String) = onStatus(text)
+    override fun updateModeIndicator() = onRender()
+    override fun updateBreadcrumb() = onUpdateBreadcrumb()
+    override fun registerElementPaths(modifications: List<ModificationResult>) = onRegisterElementPaths(modifications)
     override fun formatMarkdown(text: String): String = text
-
-    override fun updateTokenDisplay() {
-        onUpdateTokenDisplay()
-    }
-
-    override fun setCommitMessage(message: String) {
-        onCommitMessage(message)
-    }
-
-    override fun setPlanOnlyMode(enabled: Boolean) {
-        inputPanel.setPlanOnly(enabled)
-    }
-
-    override fun onAttachmentsChanged(trace: String?, errors: String?) {
-        onRender()
-    }
-
-    override fun onImagesChanged(images: List<AttachedImage>) {
-        inputPanel.showImages(images)
-    }
-
-    override fun onError(message: String) {
-        onStatus(message)
-    }
-
-    override fun onSessionChanged(session: ChatSession?) {
-        onLoadSession()
-    }
-
-    override fun onSessionRenamed(session: ChatSession) {
-        onRender()
-    }
-
-    override fun onShowWelcome() {
-        onShowWelcome.invoke()
-    }
+    override fun updateTokenDisplay() = onUpdateTokenDisplay()
+    override fun setCommitMessage(message: String) = onCommitMessage(message)
+    override fun setPlanOnlyMode(enabled: Boolean) = inputPanel.setPlanOnly(enabled)
+    override fun onAttachmentsChanged(trace: String?, errors: String?) = onRender()
+    override fun onImagesChanged(images: List<AttachedImage>) = inputPanel.showImages(images)
+    override fun onError(message: String) = onStatus(message)
+    override fun onSessionChanged(session: ChatSession?) = onLoadSession()
+    override fun onSessionRenamed(session: ChatSession) = onRender()
+    override fun onShowWelcome() = onShowWelcome.invoke()
 
     override fun addPostApplyErrorsBubble(
         summary: String,
@@ -176,9 +191,7 @@ class ChatPanelCallbacksAdapter(
     ): PostApplyErrorsView =
         conversationPanel.addPostApplyErrorsBubble(summary, details, onSend, onDismiss)
 
-    override fun onOneShotChanged(label: String?) {
-        inputPanel.showOneShot(label)
-    }
+    override fun onOneShotChanged(label: String?) = inputPanel.showOneShot(label)
 
     override fun showDiagramButton(diagram: PlanDiagram) {
         conversationPanel.addDiagramButton { onOpenDiagram(diagram) }
@@ -191,17 +204,9 @@ class ChatPanelCallbacksAdapter(
         onReject: () -> Unit
     ): ModificationProposalView {
         val view = conversationPanel.addModificationProposalBubble(
-            modifications = modifications,
-            heldCommands = heldCommands,
-            onApply = onApply,
-            onReject = onReject
+            modifications, heldCommands, onApply, onReject
         )
-        // AwaitingModApprove shares the session status used by requestedViews, so the
-        // normal render pass briefly enables the legacy global Approve button. Hide it
-        // after that pass: modification decisions belong exclusively to this bubble.
-        javax.swing.SwingUtilities.invokeLater {
-            inputPanel.applyApproveState(false)
-        }
+        SwingUtilities.invokeLater { inputPanel.applyApproveState(false) }
         return view
     }
 }

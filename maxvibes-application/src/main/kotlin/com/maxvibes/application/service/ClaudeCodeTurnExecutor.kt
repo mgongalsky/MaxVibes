@@ -45,6 +45,7 @@ internal class CodingAgentTurnExecutor(
             ideErrors = command.ideErrors,
             specificPromptContent = command.specificPromptContent,
             commandResults = command.commandResults,
+            checkResults = command.checkResults,
             attachedImages = command.attachedImages,
             currentPlan = session.plan
         )
@@ -79,6 +80,7 @@ internal class CodingAgentTurnExecutor(
                 ideErrors = command.ideErrors,
                 specificPromptContent = command.specificPromptContent,
                 commandResults = command.commandResults,
+                checkResults = command.checkResults,
                 attachedImages = command.attachedImages,
                 currentPlan = session.plan
             )

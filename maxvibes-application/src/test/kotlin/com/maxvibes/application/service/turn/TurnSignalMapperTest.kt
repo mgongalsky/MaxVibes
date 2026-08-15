@@ -2,6 +2,8 @@ package com.maxvibes.application.service.turn
 
 import com.maxvibes.application.service.ClaudeCodeStepResult
 import com.maxvibes.domain.model.approval.AgentActionKind
+import com.maxvibes.domain.model.check.CheckKind
+import com.maxvibes.domain.model.check.CheckRequest
 import com.maxvibes.domain.model.code.ElementPath
 import com.maxvibes.domain.model.command.CommandRequest
 import com.maxvibes.domain.model.modification.Modification
@@ -24,12 +26,14 @@ class TurnSignalMapperTest {
 
     private fun completed(
         modifications: List<ModificationResult> = emptyList(),
-        commands: List<CommandRequest> = emptyList()
+        commands: List<CommandRequest> = emptyList(),
+        checks: List<CheckRequest> = emptyList()
     ) = ClaudeCodeStepResult.Completed(
         message = "done",
         modifications = modifications,
         success = true,
-        commands = commands
+        commands = commands,
+        checks = checks
     )
 
     @Test
@@ -151,5 +155,56 @@ class TurnSignalMapperTest {
         )
 
         assertEquals(TurnSignal.Pending(AgentActionKind.COMMAND), signal)
+    }
+
+    @Test
+    fun `a build check asks for the build permission, not the command one`() {
+        val result = completed(listOf(applied()), checks = listOf(CheckRequest(CheckKind.BUILD)))
+
+        assertEquals(TurnSignal.Pending(AgentActionKind.BUILD), TurnSignalMapper.from(result))
+    }
+
+    @Test
+    fun `a mixed batch asks by the strictest check, because tests run project code`() {
+        val result = completed(
+            checks = listOf(CheckRequest(CheckKind.BUILD), CheckRequest(CheckKind.TESTS))
+        )
+
+        assertEquals(TurnSignal.Pending(AgentActionKind.TESTS), TurnSignalMapper.from(result))
+    }
+
+    @Test
+    fun `commands win the turn when checks are queued alongside them`() {
+        val result = completed(
+            commands = listOf(CommandRequest("git status")),
+            checks = listOf(CheckRequest(CheckKind.BUILD))
+        )
+
+        assertEquals(TurnSignal.Pending(AgentActionKind.COMMAND), TurnSignalMapper.from(result))
+    }
+
+    @Test
+    fun `checks are pointless after a failed apply and end the turn`() {
+        val result = completed(
+            listOf(applied(), rejected()),
+            checks = listOf(CheckRequest(CheckKind.BUILD))
+        )
+
+        assertEquals(TurnSignal.Completed, TurnSignalMapper.from(result))
+    }
+
+    @Test
+    fun `held checks run before the agent continues on its own`() {
+        val signal = TurnSignalMapper.from(
+            ClaudeCodeStepResult.Completed(
+                message = "Check it",
+                modifications = emptyList(),
+                success = true,
+                checks = listOf(CheckRequest(CheckKind.TESTS)),
+                turnIntent = TurnIntent.CONTINUE
+            )
+        )
+
+        assertEquals(TurnSignal.Pending(AgentActionKind.TESTS), signal)
     }
 }

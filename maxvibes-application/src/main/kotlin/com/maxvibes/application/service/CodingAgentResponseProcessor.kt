@@ -1,5 +1,6 @@
 package com.maxvibes.application.service
 
+import com.maxvibes.domain.model.check.CheckRequest
 import com.maxvibes.domain.model.code.CodeViewRequest
 import com.maxvibes.domain.model.code.RequestedViewInfo
 import com.maxvibes.domain.model.command.CommandRequest
@@ -34,6 +35,7 @@ object CodingAgentResponseProcessor {
         data class HoldPending(
             val modifications: List<InteractionModification>,
             val commands: List<CommandRequest>,
+            val checks: List<CheckRequest>,
             val commitMessage: String?,
             val turnIntent: TurnIntent? = null
         ) : Intent
@@ -53,6 +55,9 @@ object CodingAgentResponseProcessor {
         val hasQuestions = response.questions.isNotEmpty()
         val commands: List<CommandRequest> = response.commands.mapNotNull {
             ProtocolConverter.convertCommand(it)
+        }
+        val checks: List<CheckRequest> = response.checks.mapNotNull {
+            ProtocolConverter.convertCheck(it)
         }
         val holdMods = hasMods && !ctx.planOnly
 
@@ -83,6 +88,7 @@ object CodingAgentResponseProcessor {
             intents += Intent.HoldPending(
                 modifications = response.modifications,
                 commands = commands,
+                checks = checks,
                 commitMessage = response.commitMessage?.takeIf { it.isNotBlank() },
                 turnIntent = response.turnIntent
             )
@@ -162,6 +168,7 @@ object CodingAgentResponseProcessor {
                 commitMessage = response.commitMessage?.takeIf { it.isNotBlank() },
                 durationMs = ctx.durationMs,
                 commands = commands,
+                checks = checks,
                 costUsd = ctx.costUsd,
                 numTurns = ctx.numTurns,
                 diagram = response.diagram,

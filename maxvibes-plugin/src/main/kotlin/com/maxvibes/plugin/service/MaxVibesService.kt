@@ -52,6 +52,9 @@ import com.maxvibes.plugin.command.ProcessCommandRunner
 import com.maxvibes.application.service.CodingAgentInteractionService
 import com.maxvibes.plugin.codex.CodexAppServerAdapter
 import com.maxvibes.domain.model.chat.CodingAgentProvider
+import com.maxvibes.application.port.input.RunCheckUseCase
+import com.maxvibes.application.service.CheckExecutionService
+import com.maxvibes.plugin.check.CheckRunnerProvider
 
 /**
  * Main service for MaxVibes plugin.
@@ -213,6 +216,16 @@ class MaxVibesService(private val project: Project) : Disposable {
             runner = commandRunner,
             logger = MaxVibesLogger
         )
+    }
+
+    /** Executes checks and formats their outcome for the agent. */
+    val runCheckUseCase: RunCheckUseCase by lazy {
+        CheckExecutionService(runner = checkRunner)
+    }
+
+    /** Runs LLM-requested checks with IDE means: compiler API for builds, run configurations for tests. */
+    val checkRunner: CheckRunnerPort by lazy {
+        CheckRunnerProvider.forProject(project)
     }
 
     // ========== Claude Code Service ==========

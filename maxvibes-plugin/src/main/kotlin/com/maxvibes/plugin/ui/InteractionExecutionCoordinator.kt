@@ -8,6 +8,7 @@ import com.maxvibes.domain.model.chat.ChatSession
 import com.maxvibes.domain.model.command.CommandExecution
 import com.maxvibes.plugin.service.MaxVibesLogger
 import com.maxvibes.application.service.ClaudeCodeStepResult
+import com.maxvibes.domain.model.check.CheckExecution
 
 /**
  * Owns interaction-specific background execution policy on top of
@@ -127,6 +128,19 @@ internal class InteractionExecutionCoordinator(
     ) {
         backgroundTaskRunner.run(
             title = "MaxVibes: Running command...",
+            cancellable = false,
+            publishIndicator = false,
+            action = action,
+            onSuccess = onResult
+        )
+    }
+
+    fun runCheck(
+        action: suspend () -> CheckExecution,
+        onResult: (CheckExecution) -> Unit
+    ) {
+        backgroundTaskRunner.run(
+            title = "MaxVibes: Running check...",
             cancellable = false,
             publishIndicator = false,
             action = action,

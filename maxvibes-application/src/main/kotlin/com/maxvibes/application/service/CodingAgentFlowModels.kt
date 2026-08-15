@@ -12,6 +12,9 @@ data class CodingAgentTurnCommand(
     val ideErrors: String? = null,
     val specificPromptContent: String? = null,
     val commandResults: String? = null,
+    // Kept apart from commandResults on purpose: the agent must be able to tell a red build
+    // from a failed shell command, otherwise the terminal cannot stay a fallback channel.
+    val checkResults: String? = null,
     val attachedImages: List<AttachedImage> = emptyList()
 )
 

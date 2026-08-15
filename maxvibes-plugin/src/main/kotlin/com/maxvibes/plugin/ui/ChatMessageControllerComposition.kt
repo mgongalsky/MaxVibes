@@ -2,31 +2,27 @@ package com.maxvibes.plugin.ui
 
 import com.intellij.openapi.project.Project
 import com.maxvibes.application.port.input.ContextAwareRequest
+import com.maxvibes.application.service.ChatTreeService
 import com.maxvibes.application.service.ClaudeCodeStepResult
 import com.maxvibes.application.service.ClipboardStepResult
 import com.maxvibes.application.service.approval.ApprovalService
 import com.maxvibes.application.service.turn.AgentTurnOrchestrator
 import com.maxvibes.application.service.turn.TurnAutopilot
+import com.maxvibes.domain.model.approval.AgentActionKind
 import com.maxvibes.domain.model.chat.ChatSession
 import com.maxvibes.domain.model.chat.MessageRole
 import com.maxvibes.domain.model.interaction.AttachedImage
 import com.maxvibes.domain.model.interaction.InteractionMode
 import com.maxvibes.plugin.service.MaxVibesService
 import com.maxvibes.plugin.settings.ApprovalPolicySettings
-import com.maxvibes.domain.model.approval.AgentActionKind
 
-/**
- * Composition root behind [ChatMessageController].
- *
- * Owns construction and cyclic lazy wiring of mode dispatchers, coordinators and
- * IntelliJ execution adapters. The public controller remains a stable thin facade.
- */
+/** Composition root behind [ChatMessageController]. */
 internal class ChatMessageControllerComposition(
     private val project: Project,
     private val service: MaxVibesService,
     private val callbacks: ChatPanelCallbacks
 ) {
-    private val chatTreeService
+    private val chatTreeService: ChatTreeService
         get() = service.chatTreeService
 
     val attachedTrace: String?
@@ -35,7 +31,7 @@ internal class ChatMessageControllerComposition(
     val attachedErrors: String?
         get() = attachmentCoordinator.errors
 
-    private val attachmentCoordinator: AttachmentCoordinator = AttachmentCoordinator(
+    private val attachmentCoordinator = AttachmentCoordinator(
         context = PendingTurnContext(ImageAttachments.MAX_IMAGES),
         attachmentView = callbacks,
         inputStatusView = callbacks,
@@ -88,7 +84,7 @@ internal class ChatMessageControllerComposition(
         )
     }
 
-    private val questionCoordinator: QuestionTurnCoordinator = QuestionTurnCoordinator(
+    private val questionCoordinator = QuestionTurnCoordinator(
         questionView = callbacks,
         callbacks = callbacks
     )
@@ -101,10 +97,11 @@ internal class ChatMessageControllerComposition(
         TurnAutopilot(
             orchestrator = AgentTurnOrchestrator(decideApproval = approvalService::decide),
             continueTurn = { sessionId, action ->
-                // Исчерпывающий when намеренно: новый вид действия должен ломать сборку
-                // здесь, а не молча получать чужое поведение.
                 when (action) {
                     AgentActionKind.COMMAND -> commandCoordinator.runAllAutomatically(sessionId)
+                    AgentActionKind.BUILD,
+                    AgentActionKind.TESTS -> checkCoordinator.runAllAutomatically(sessionId)
+
                     AgentActionKind.CONTINUATION -> claudeCodeDispatcher.continueWithoutHuman(sessionId)
                     AgentActionKind.VIEW_REQUEST,
                     AgentActionKind.MODIFICATION,
@@ -135,21 +132,38 @@ internal class ChatMessageControllerComposition(
         )
     }
 
+    private val checkCoordinator: CheckTurnCoordinator by lazy {
+        CheckTurnCoordinator(
+            runCheckUseCase = service.runCheckUseCase,
+            checkView = callbacks,
+            callbacks = callbacks,
+            addSystemMessage = { sessionId, text ->
+                chatTreeService.addMessage(sessionId, MessageRole.SYSTEM, text)
+            },
+            activeSessionId = { chatTreeService.getActiveSession().id },
+            executeAsync = { request, onDone ->
+                interactionExecutionCoordinator.runCheck(
+                    action = { service.runCheckUseCase.run(request) },
+                    onResult = onDone
+                )
+            },
+            onBatchComplete = { sessionId, mode, formatted ->
+                checkResultRouter.route(sessionId, mode, formatted)
+            }
+        )
+    }
+
     private val claudeCodeDispatcher: ClaudeCodeDispatcher by lazy {
         ClaudeCodeDispatcher(
             claudeCodeService = { service.claudeCodeService },
-            resolveSpecificPrompt = { name ->
-                service.specificPromptService.resolvePromptContent(name)
-            },
+            resolveSpecificPrompt = { name -> service.specificPromptService.resolvePromptContent(name) },
             chatTreeService = chatTreeService,
             callbacks = callbacks,
             presentQuestions = questionCoordinator::presentQuestions,
             presentCommands = { commands, sessionId, mode ->
                 commandCoordinator.presentCommands(commands, sessionId, mode)
             },
-            executeAsync = { title, session, action ->
-                runClaudeCodeBg(title, session, action)
-            },
+            executeAsync = { title, session, action -> runClaudeCodeBg(title, session, action) },
             turnAutopilot = { turnAutopilot }
         )
     }
@@ -157,17 +171,13 @@ internal class ChatMessageControllerComposition(
     private val clipboardDispatcher: ClipboardDispatcher by lazy {
         ClipboardDispatcher(
             clipboardService = { service.clipboardService },
-            resolveSpecificPrompt = { name ->
-                service.specificPromptService.resolvePromptContent(name)
-            },
+            resolveSpecificPrompt = { name -> service.specificPromptService.resolvePromptContent(name) },
             chatTreeService = chatTreeService,
             callbacks = callbacks,
             presentCommands = { commands, sessionId, mode ->
                 commandCoordinator.presentCommands(commands, sessionId, mode)
             },
-            executeAsync = { title, session, action ->
-                runClipboardBg(title, session, action)
-            }
+            executeAsync = { title, session, action -> runClipboardBg(title, session, action) }
         )
     }
 
@@ -182,8 +192,8 @@ internal class ChatMessageControllerComposition(
             presentCommands = { commands, sessionId, mode ->
                 commandCoordinator.presentCommands(commands, sessionId, mode)
             },
-            executeAsync = { progressTitle, session, isPlanOnly, useCheap, request ->
-                runApiBg(progressTitle, session, isPlanOnly, useCheap, request)
+            executeAsync = { title, session, planOnly, cheap, request ->
+                runApiBg(title, session, planOnly, cheap, request)
             }
         )
     }
@@ -201,12 +211,26 @@ internal class ChatMessageControllerComposition(
                     service.claudeCodeService.submitCommandResults(session.id, formatted)
                 }
             },
-            submitApi = { session, formatted ->
-                apiDispatcher.submitCommandResults(session, formatted)
+            submitApi = { session, formatted -> apiDispatcher.submitCommandResults(session, formatted) },
+            onMissingSession = { callbacks.setInputEnabled(true) }
+        )
+    }
+
+    private val checkResultRouter: CommandResultRouter by lazy {
+        CommandResultRouter(
+            chatTreeService = chatTreeService,
+            submitClipboard = { session, formatted ->
+                runClipboardBg("Sending check results...", session) {
+                    service.clipboardService.submitCommandResults(session.id, formatted)
+                }
             },
-            onMissingSession = {
-                callbacks.setInputEnabled(true)
-            }
+            submitClaudeCode = { session, formatted ->
+                runClaudeCodeBg("Sending check results...", session) {
+                    service.claudeCodeService.submitCheckResults(session.id, formatted)
+                }
+            },
+            submitApi = { session, formatted -> apiDispatcher.submitCommandResults(session, formatted) },
+            onMissingSession = { callbacks.setInputEnabled(true) }
         )
     }
 
@@ -220,31 +244,15 @@ internal class ChatMessageControllerComposition(
                 apiDispatcher.dispatchMessage(message, trace, errors, planOnly, dryRun)
             },
             dispatchClipboard = { message, trace, errors, planOnly, addHistory, promptName ->
-                clipboardDispatcher.dispatchMessage(
-                    message,
-                    trace,
-                    errors,
-                    planOnly,
-                    addHistory,
-                    promptName
-                )
+                clipboardDispatcher.dispatchMessage(message, trace, errors, planOnly, addHistory, promptName)
             },
             dispatchCheapApi = { message, trace, errors, planOnly, dryRun ->
                 apiDispatcher.dispatchCheapMessage(message, trace, errors, planOnly, dryRun)
             },
             dispatchClaudeCode = { message, trace, errors, planOnly, promptName, images ->
-                claudeCodeDispatcher.dispatchMessage(
-                    message,
-                    trace,
-                    errors,
-                    planOnly,
-                    promptName,
-                    images
-                )
+                claudeCodeDispatcher.dispatchMessage(message, trace, errors, planOnly, promptName, images)
             },
-            approveClaudeCode = { trace, errors ->
-                claudeCodeDispatcher.approve(trace, errors)
-            },
+            approveClaudeCode = { trace, errors -> claudeCodeDispatcher.approve(trace, errors) },
             redoClipboardJson = clipboardDispatcher::redoLastRequest
         )
     }
@@ -268,7 +276,15 @@ internal class ChatMessageControllerComposition(
         title = title,
         session = session,
         action = action,
-        onResult = { result -> claudeCodeDispatcher.handleResult(result, session) }
+        onResult = { result ->
+            if (result is ClaudeCodeStepResult.Completed &&
+                result.checks.isNotEmpty() &&
+                result.commands.isEmpty()
+            ) {
+                checkCoordinator.presentChecks(result.checks, session.id, InteractionMode.CLAUDE_CODE)
+            }
+            claudeCodeDispatcher.handleResult(result, session)
+        }
     )
 
     private fun runApiBg(
@@ -286,37 +302,20 @@ internal class ChatMessageControllerComposition(
     )
 
     fun redoClipboardJson() = turnSubmissionCoordinator.redoClipboardJson()
-
     fun approve() = turnSubmissionCoordinator.approve()
-
     fun attachTrace(traceContent: String) = attachmentCoordinator.attachTrace(traceContent)
-
     fun clearTrace() = attachmentCoordinator.clearTrace()
-
     fun clearErrors() = attachmentCoordinator.clearErrors()
-
     fun attachImage(image: AttachedImage): Boolean = attachmentCoordinator.attachImage(image)
-
     fun clearImages() = attachmentCoordinator.clearImages()
-
     fun removeImage(index: Int) = attachmentCoordinator.removeImage(index)
-
     fun fetchIdeErrors() = ideErrorsAttachmentLoader.fetch()
-
     fun clearAttachmentsAfterSend() = attachmentCoordinator.clearAfterSend()
-
     fun createNewSession() = sessionActions.createNewSession()
-
     fun deleteCurrentSession(sessionId: String) = sessionActions.deleteCurrentSession(sessionId)
-
-    fun renameSession(sessionId: String, newTitle: String) =
-        sessionActions.renameSession(sessionId, newTitle)
-
-    fun branchSession(parentSessionId: String, title: String) =
-        sessionActions.branchSession(parentSessionId, title)
-
+    fun renameSession(sessionId: String, newTitle: String) = sessionActions.renameSession(sessionId, newTitle)
+    fun branchSession(parentSessionId: String, title: String) = sessionActions.branchSession(parentSessionId, title)
     fun loadSession(sessionId: String) = sessionActions.loadSession(sessionId)
-
     fun selectSpecificPrompt(name: String?) = sessionActions.selectSpecificPrompt(name)
 
     fun sendMessage(
@@ -339,10 +338,10 @@ internal class ChatMessageControllerComposition(
         attachmentCoordinator.armOneShot(skillName, elementContext, label)
 
     fun clearOneShot() = attachmentCoordinator.clearOneShot()
+
     fun isAllowAllApprovals(): Boolean =
         approvalService.isAllowAll(chatTreeService.getActiveSession().id)
 
-    /** Turning trust on also unblocks a turn that is already parked waiting for a click. */
     fun setAllowAllApprovals(enabled: Boolean) {
         val sessionId = chatTreeService.getActiveSession().id
         approvalService.setAllowAll(sessionId, enabled)

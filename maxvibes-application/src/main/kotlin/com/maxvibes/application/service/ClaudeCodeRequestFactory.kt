@@ -34,6 +34,7 @@ internal object CodingAgentRequestFactory {
         ideErrors: String?,
         specificPromptContent: String?,
         commandResults: String? = null,
+        checkResults: String? = null,
         attachedImages: List<AttachedImage> = emptyList(),
         currentPlan: TaskPlan? = null
     ): ClipboardRequest {
@@ -49,6 +50,7 @@ internal object CodingAgentRequestFactory {
             specificPromptContent = specificPromptContent,
             omitSystemInstruction = policy.omitSystemInstructionFromRequest,
             commandResults = commandResults,
+            checkResults = checkResults,
             attachedImages = attachedImages,
             currentPlan = currentPlan
         )
@@ -66,6 +68,7 @@ internal object ClaudeCodeRequestFactory {
         ideErrors: String?,
         specificPromptContent: String?,
         commandResults: String? = null,
+        checkResults: String? = null,
         attachedImages: List<AttachedImage> = emptyList(),
         currentPlan: TaskPlan? = null
     ): ClipboardRequest = CodingAgentRequestFactory.create(
@@ -77,6 +80,7 @@ internal object ClaudeCodeRequestFactory {
         ideErrors = ideErrors,
         specificPromptContent = specificPromptContent,
         commandResults = commandResults,
+        checkResults = checkResults,
         attachedImages = attachedImages,
         currentPlan = currentPlan
     )

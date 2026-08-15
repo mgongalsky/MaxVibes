@@ -46,6 +46,15 @@ data class ClipboardRequest(
     /** Результаты shell-команд предыдущего хода (уже отформатированные для LLM). */
     val commandResults: String? = null,
 
+    /**
+     * Результаты проверок предыдущего хода — сборки и тестов (уже отформатированные).
+     *
+     * Отдельное поле, а не подмешивание в текст сообщения: агент должен отличать
+     * отчёт IDE от новой реплики пользователя, иначе автономный цикл принимает
+     * результат сборки за новую задачу.
+     */
+    val checkResults: String? = null,
+
     /** Attached images (screenshots) — one-shot, sent with this message only. Claude Code transport only. */
     val attachedImages: List<AttachedImage> = emptyList(),
 
@@ -86,6 +95,14 @@ data class InteractionResponse(
 
     /** Shell-команды, запрошенные LLM (last resort). Выполняются после подтверждения пользователем. */
     val commands: List<InteractionCommand> = emptyList(),
+
+    /**
+     * Проверки средствами IDE — сборка и прогон тестов.
+     *
+     * Основной путь для «а собирается ли оно»: в отличие от [commands] не требует
+     * терминала и получает собственное разрешение в политике автономии.
+     */
+    val checks: List<InteractionCheck> = emptyList(),
 
     /**
      * Questions the LLM asks the user before proceeding. When non-empty the turn
@@ -141,6 +158,22 @@ data class InteractionCommand(
     val command: String,
     val reason: String = "",
     val timeoutSec: Int = 120
+)
+
+/**
+ * Проверка в clipboard-формате (сырой вид из JSON-ответа LLM).
+ * Конвертируется в доменный CheckRequest на этапе обработки.
+ */
+data class InteractionCheck(
+    /**
+     * BUILD | TESTS. Строка, а не enum: незнакомое значение должно приводить к
+     * пропуску одной записи, а не к падению разбора всего ответа.
+     */
+    val kind: String,
+    /** Что проверять: модуль, FQN тестового класса, путь. Null — весь проект. */
+    val scope: String? = null,
+    val reason: String = "",
+    val timeoutSec: Int = 600
 )
 
 /**

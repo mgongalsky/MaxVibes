@@ -290,3 +290,13 @@ class JsonInteractionProtocolCodecTest {
         assertNull(result, "Expected null when no JSON indicators are present")
     }
 }
+
+@Test
+fun `response format routes builds and tests through IDE checks`() {
+    val hint = InteractionRequestSchema.RESPONSE_FORMAT_HINT
+
+    assertTrue(hint.contains("\"checks\""))
+    assertTrue(hint.contains("\"BUILD\""))
+    assertTrue(hint.contains("\"TESTS\""))
+    assertTrue(hint.contains("NEVER put build, compile, or test invocations in \"commands\""))
+}

@@ -76,6 +76,8 @@ class AutonomySettingsPanel(private val editor: ApprovalPolicyEditor) {
         AgentActionKind.VIEW_REQUEST -> "Requests for code:"
         AgentActionKind.MODIFICATION -> "Code modifications:"
         AgentActionKind.COMMAND -> "Terminal commands:"
+        AgentActionKind.BUILD -> "Project builds:"
+        AgentActionKind.TESTS -> "Test runs:"
         AgentActionKind.CONTINUATION -> "Continuing the work:"
     }
 

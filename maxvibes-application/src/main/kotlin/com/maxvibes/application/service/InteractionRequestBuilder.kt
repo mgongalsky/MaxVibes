@@ -32,6 +32,9 @@ internal object InteractionRequestBuilder {
      * @param commandResults formatted outcomes of the previous turn's shell commands
      *        (execution output or user declines). One-shot per-message context like
      *        [ideErrors] — always forwarded when provided, never stored in state.
+     * @param checkResults formatted outcomes of the previous turn's IDE checks (build
+     *        and test runs). Kept apart from [commandResults] on purpose: the agent must
+     *        be able to tell a failed build from a failed shell command.
      * @param currentPlan live plan state of the session (planner panel), including
      *        manual user toggles. Forwarded even in minimal mode — the plan is small
      *        and the model must see user edits. Null when the session has no plan.
@@ -47,6 +50,7 @@ internal object InteractionRequestBuilder {
         specificPromptContent: String? = null,
         omitSystemInstruction: Boolean = false,
         commandResults: String? = null,
+        checkResults: String? = null,
         attachedImages: List<AttachedImage> = emptyList(),
         currentPlan: TaskPlan? = null
     ): ClipboardRequest {
@@ -108,6 +112,8 @@ internal object InteractionRequestBuilder {
             // commandResults: one-shot outcomes of the previous turn's commands —
             // always forwarded, even in minimal mode (they ARE the payload of this turn).
             commandResults = commandResults,
+            // checkResults: same contract as commandResults, for IDE builds and test runs.
+            checkResults = checkResults,
             // attachedImages: one-shot payload, forwarded even in minimal mode — the transport
             // turns them into image content blocks next to the protocol JSON.
             attachedImages = attachedImages,
