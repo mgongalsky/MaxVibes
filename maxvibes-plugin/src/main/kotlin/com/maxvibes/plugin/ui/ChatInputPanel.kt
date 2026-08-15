@@ -67,6 +67,8 @@ class ChatInputPanel(
         preferredSize = Dimension(42, 26)
     }
     private var onVoiceToggle: () -> Unit = {}
+    private var onAutoApproveToggle: (Boolean) -> Unit = {}
+    private var isAutoApproveOn: () -> Boolean = { false }
 
     private val approveButton = JButton("\u2705 Approve").apply {
         toolTipText = "Approve & gather requested files (Claude Code)"
@@ -74,6 +76,9 @@ class ChatInputPanel(
         foreground = JBColor(Color(0x3E2C00), Color(0x241C00))
         putClientProperty("JButton.backgroundColor", JBColor(Color(0xF5C518), Color(0xD4AC0D)))
         putClientProperty("JButton.borderColor", JBColor(Color(0xC9A227), Color(0x9A7D0A)))
+    }
+    private val autoApproveCheckbox = JBCheckBox("\uD83D\uDD13 Auto").apply {
+        toolTipText = "Approve everything in this session automatically, until switched off"
     }
     private val dryRunCheckbox = JBCheckBox("Dry run").apply {
         toolTipText = "Show plan without applying changes"
@@ -183,6 +188,7 @@ class ChatInputPanel(
             add(planOnlyCheckbox)
             add(dryRunCheckbox)
             add(copyJsonButton)
+            add(autoApproveCheckbox)
             add(approveButton)
             add(voiceButton)
             add(sendButton)
@@ -235,6 +241,14 @@ class ChatInputPanel(
 
     fun setVoiceToggleAction(action: () -> Unit) {
         onVoiceToggle = action
+    }
+
+    /** The checkbox keeps no state: [isOn] is re-read on every render, so it cannot show another session's policy. */
+    fun setAutoApproveToggle(isOn: () -> Boolean, onToggle: (Boolean) -> Unit) {
+        isAutoApproveOn = isOn
+        onAutoApproveToggle = onToggle
+        autoApproveCheckbox.isSelected = isOn()
+        autoApproveCheckbox.addActionListener { onAutoApproveToggle(autoApproveCheckbox.isSelected) }
     }
 
     fun setVoiceState(state: VoiceInputState) {
@@ -316,6 +330,7 @@ class ChatInputPanel(
     }
 
     fun applyApproveState(approveVisible: Boolean) {
+        autoApproveCheckbox.isSelected = isAutoApproveOn()
         approveButton.isVisible = approveVisible
         if (approveVisible) {
             sendButton.isEnabled = false

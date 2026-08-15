@@ -270,4 +270,60 @@ class CommandTurnCoordinatorTest {
         assertEquals("needed for diagnostics", bubble.reason)
         assertEquals(listOf("warning one", "warning two"), bubble.warnings)
     }
+
+    @Test
+    fun `an autonomous batch runs sequentially without a human click`() {
+        present("one", "two")
+
+        coordinator.runAllAutomatically("s1")
+
+        assertTrue(callbacks.statusUpdates.any { it.contains("automatically") })
+        assertEquals(1, pendingExecutions.size)
+        assertTrue(callbacks.commandBubbles[1].stateChanges.contains("queued"))
+        completeNext(CommandStatus.SUCCESS)
+        assertEquals(1, pendingExecutions.size)
+        completeNext(CommandStatus.SUCCESS)
+        val batch = completedBatch!!
+        assertTrue(batch.third.contains("one=SUCCESS"))
+        assertTrue(batch.third.contains("two=SUCCESS"))
+        assertTrue(callbacks.batchBars[0].dismissed)
+    }
+
+    @Test
+    fun `an autonomous batch stops at the first failure exactly like a manual one`() {
+        present("one", "two", "three")
+
+        coordinator.runAllAutomatically("s1")
+        completeNext(CommandStatus.FAILED, exitCode = 1)
+
+        assertTrue(pendingExecutions.isEmpty())
+        val batch = completedBatch!!
+        assertTrue(batch.third.contains("one=FAILED"))
+        assertTrue(batch.third.contains("two=DECLINED[skipped: previous command failed]"))
+        assertTrue(batch.third.contains("three=DECLINED[skipped: previous command failed]"))
+    }
+
+    @Test
+    fun `auto run addressed to another session leaves the batch untouched`() {
+        present("one")
+
+        coordinator.runAllAutomatically("another-session")
+
+        assertTrue(pendingExecutions.isEmpty())
+        assertTrue(callbacks.commandBubbles[0].stateChanges.isEmpty())
+        assertNull(completedBatch)
+
+        callbacks.commandBubbles[0].onRun()
+        completeNext(CommandStatus.SUCCESS)
+        assertTrue(completedBatch!!.third.contains("one=SUCCESS"))
+    }
+
+    @Test
+    fun `auto run without a pending batch is a no-op`() {
+        coordinator.runAllAutomatically("s1")
+
+        assertTrue(pendingExecutions.isEmpty())
+        assertTrue(callbacks.commandBubbles.isEmpty())
+        assertNull(completedBatch)
+    }
 }

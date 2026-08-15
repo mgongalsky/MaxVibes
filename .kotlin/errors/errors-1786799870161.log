@@ -1,0 +1,270 @@
+kotlin version: 2.1.0
+error message: org.jetbrains.kotlin.backend.common.BackendException: Backend Internal error: Exception during IR lowering
+File being compiled: E:/Programs/Kotlin/MaxPilot/MaxVibes/maxvibes-plugin/src/main/kotlin/com/maxvibes/plugin/ui/SessionTreePanel.kt
+The root cause java.lang.RuntimeException was thrown at: org.jetbrains.kotlin.backend.jvm.codegen.FunctionCodegen.generate(FunctionCodegen.kt:48)
+	at org.jetbrains.kotlin.backend.common.CodegenUtil.reportBackendException(CodegenUtil.kt:253)
+	at org.jetbrains.kotlin.backend.common.CodegenUtil.reportBackendException$default(CodegenUtil.kt:236)
+	at org.jetbrains.kotlin.backend.common.phaser.PerformByIrFilePhase.invokeSequential(performByIrFile.kt:55)
+	at org.jetbrains.kotlin.backend.common.phaser.PerformByIrFilePhase.invoke(performByIrFile.kt:42)
+	at org.jetbrains.kotlin.backend.common.phaser.PerformByIrFilePhase.invoke(performByIrFile.kt:28)
+	at org.jetbrains.kotlin.backend.common.phaser.NamedCompilerPhase.phaseBody(CompilerPhase.kt:166)
+	at org.jetbrains.kotlin.backend.common.phaser.AbstractNamedCompilerPhase.invoke(CompilerPhase.kt:113)
+	at org.jetbrains.kotlin.backend.common.phaser.CompositePhase.invoke(PhaseBuilders.kt:27)
+	at org.jetbrains.kotlin.backend.common.phaser.CompositePhase.invoke(PhaseBuilders.kt:14)
+	at org.jetbrains.kotlin.backend.common.phaser.NamedCompilerPhase.phaseBody(CompilerPhase.kt:166)
+	at org.jetbrains.kotlin.backend.common.phaser.AbstractNamedCompilerPhase.invoke(CompilerPhase.kt:113)
+	at org.jetbrains.kotlin.backend.common.phaser.CompilerPhaseKt.invokeToplevel(CompilerPhase.kt:62)
+	at org.jetbrains.kotlin.backend.jvm.JvmIrCodegenFactory.invokeCodegen(JvmIrCodegenFactory.kt:371)
+	at org.jetbrains.kotlin.codegen.CodegenFactory.generateModule(CodegenFactory.kt:47)
+	at org.jetbrains.kotlin.backend.jvm.JvmIrCodegenFactory.generateModuleInFrontendIRMode(JvmIrCodegenFactory.kt:433)
+	at org.jetbrains.kotlin.cli.jvm.compiler.pipeline.JvmCompilerPipelineKt.generateCodeFromIr(jvmCompilerPipeline.kt:192)
+	at org.jetbrains.kotlin.cli.jvm.compiler.pipeline.JvmCompilerPipelineKt.runBackend(jvmCompilerPipeline.kt:80)
+	at org.jetbrains.kotlin.cli.jvm.compiler.pipeline.JvmCompilerPipelineLightTreeKt.compileModule(jvmCompilerPipelineLightTree.kt:264)
+	at org.jetbrains.kotlin.cli.jvm.compiler.pipeline.JvmCompilerPipelineLightTreeKt.compileSingleModuleUsingFrontendIrAndLightTree(jvmCompilerPipelineLightTree.kt:231)
+	at org.jetbrains.kotlin.cli.jvm.compiler.pipeline.JvmCompilerPipelineLightTreeKt.compileModulesUsingFrontendIrAndLightTree(jvmCompilerPipelineLightTree.kt:86)
+	at org.jetbrains.kotlin.cli.jvm.K2JVMCompiler.doExecute(K2JVMCompiler.kt:146)
+	at org.jetbrains.kotlin.cli.jvm.K2JVMCompiler.doExecute(K2JVMCompiler.kt:43)
+	at org.jetbrains.kotlin.cli.common.CLICompiler.execImpl(CLICompiler.kt:102)
+	at org.jetbrains.kotlin.cli.common.CLICompiler.exec(CLICompiler.kt:316)
+	at org.jetbrains.kotlin.incremental.IncrementalJvmCompilerRunner.runCompiler(IncrementalJvmCompilerRunner.kt:464)
+	at org.jetbrains.kotlin.incremental.IncrementalJvmCompilerRunner.runCompiler(IncrementalJvmCompilerRunner.kt:73)
+	at org.jetbrains.kotlin.incremental.IncrementalCompilerRunner.doCompile(IncrementalCompilerRunner.kt:506)
+	at org.jetbrains.kotlin.incremental.IncrementalCompilerRunner.compileImpl(IncrementalCompilerRunner.kt:423)
+	at org.jetbrains.kotlin.incremental.IncrementalCompilerRunner.compileNonIncrementally(IncrementalCompilerRunner.kt:301)
+	at org.jetbrains.kotlin.incremental.IncrementalCompilerRunner.compile(IncrementalCompilerRunner.kt:129)
+	at org.jetbrains.kotlin.daemon.CompileServiceImplBase.execIncrementalCompiler(CompileServiceImpl.kt:674)
+	at org.jetbrains.kotlin.daemon.CompileServiceImplBase.access$execIncrementalCompiler(CompileServiceImpl.kt:91)
+	at org.jetbrains.kotlin.daemon.CompileServiceImpl.compile(CompileServiceImpl.kt:1659)
+	at jdk.internal.reflect.GeneratedMethodAccessor12.invoke(Unknown Source)
+	at java.base/jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:568)
+	at java.rmi/sun.rmi.server.UnicastServerRef.dispatch(UnicastServerRef.java:360)
+	at java.rmi/sun.rmi.transport.Transport$1.run(Transport.java:200)
+	at java.rmi/sun.rmi.transport.Transport$1.run(Transport.java:197)
+	at java.base/java.security.AccessController.doPrivileged(AccessController.java:712)
+	at java.rmi/sun.rmi.transport.Transport.serviceCall(Transport.java:196)
+	at java.rmi/sun.rmi.transport.tcp.TCPTransport.handleMessages(TCPTransport.java:587)
+	at java.rmi/sun.rmi.transport.tcp.TCPTransport$ConnectionHandler.run0(TCPTransport.java:828)
+	at java.rmi/sun.rmi.transport.tcp.TCPTransport$ConnectionHandler.lambda$run$0(TCPTransport.java:705)
+	at java.base/java.security.AccessController.doPrivileged(AccessController.java:399)
+	at java.rmi/sun.rmi.transport.tcp.TCPTransport$ConnectionHandler.run(TCPTransport.java:704)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1136)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:635)
+	at java.base/java.lang.Thread.run(Thread.java:833)
+Caused by: java.lang.RuntimeException: Exception while generating code for:
+FUN name:getTreeCellRendererComponent visibility:public modality:OPEN <> ($this:com.maxvibes.plugin.ui.SessionCellRenderer, tree:javax.swing.JTree, value:kotlin.Any?, sel:kotlin.Boolean, expanded:kotlin.Boolean, leaf:kotlin.Boolean, row:kotlin.Int, hasFocus:kotlin.Boolean) returnType:java.awt.Component
+  overridden:
+    public open fun getTreeCellRendererComponent (p0: @[FlexibleNullability] javax.swing.JTree?, p1: @[FlexibleNullability] kotlin.Any?, p2: kotlin.Boolean, p3: kotlin.Boolean, p4: kotlin.Boolean, p5: kotlin.Int, p6: kotlin.Boolean): @[FlexibleNullability] java.awt.Component? declared in javax.swing.tree.DefaultTreeCellRenderer
+  $this: VALUE_PARAMETER name:<this> type:com.maxvibes.plugin.ui.SessionCellRenderer
+  VALUE_PARAMETER name:tree index:0 type:javax.swing.JTree
+  VALUE_PARAMETER name:value index:1 type:kotlin.Any?
+  VALUE_PARAMETER name:sel index:2 type:kotlin.Boolean
+  VALUE_PARAMETER name:expanded index:3 type:kotlin.Boolean
+  VALUE_PARAMETER name:leaf index:4 type:kotlin.Boolean
+  VALUE_PARAMETER name:row index:5 type:kotlin.Int
+  VALUE_PARAMETER name:hasFocus index:6 type:kotlin.Boolean
+  BLOCK_BODY
+    COMPOSITE type=kotlin.Unit origin=null
+      CALL 'public open fun getTreeCellRendererComponent (p0: @[FlexibleNullability] javax.swing.JTree?, p1: @[FlexibleNullability] kotlin.Any?, p2: kotlin.Boolean, p3: kotlin.Boolean, p4: kotlin.Boolean, p5: kotlin.Int, p6: kotlin.Boolean): @[FlexibleNullability] java.awt.Component? declared in javax.swing.tree.DefaultTreeCellRenderer' superQualifier='CLASS IR_EXTERNAL_JAVA_DECLARATION_STUB CLASS name:DefaultTreeCellRenderer modality:OPEN visibility:public superTypes:[javax.swing.JLabel; javax.swing.tree.TreeCellRenderer]' type=@[FlexibleNullability] java.awt.Component? origin=null
+        $this: GET_VAR '<this>: com.maxvibes.plugin.ui.SessionCellRenderer declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=com.maxvibes.plugin.ui.SessionCellRenderer origin=null
+        p0: GET_VAR 'tree: javax.swing.JTree declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=javax.swing.JTree origin=null
+        p1: GET_VAR 'value: kotlin.Any? declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=kotlin.Any? origin=null
+        p2: GET_VAR 'sel: kotlin.Boolean declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=kotlin.Boolean origin=null
+        p3: GET_VAR 'expanded: kotlin.Boolean declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=kotlin.Boolean origin=null
+        p4: GET_VAR 'leaf: kotlin.Boolean declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=kotlin.Boolean origin=null
+        p5: GET_VAR 'row: kotlin.Int declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=kotlin.Int origin=null
+        p6: GET_VAR 'hasFocus: kotlin.Boolean declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=kotlin.Boolean origin=null
+      COMPOSITE type=kotlin.Unit origin=null
+    VAR name:node type:com.maxvibes.plugin.ui.TreeNodeData? [val]
+      BLOCK type=com.maxvibes.plugin.ui.TreeNodeData? origin=SAFE_CALL
+        VAR IR_TEMPORARY_VARIABLE name:tmp0 type:kotlin.Any? [val]
+          BLOCK type=@[FlexibleNullability] kotlin.Any? origin=FOLDED_SAFE_CALL
+            WHEN type=@[FlexibleNullability] kotlin.Any? origin=FOLDED_SAFE_CALL
+              BRANCH
+                if: COMPOSITE type=kotlin.Boolean origin=null
+                  VAR IR_TEMPORARY_VARIABLE name:tmp0_safe_receiver type:javax.swing.tree.DefaultMutableTreeNode? [val]
+                    WHEN type=javax.swing.tree.DefaultMutableTreeNode? origin=null
+                      BRANCH
+                        if: TYPE_OP type=kotlin.Boolean origin=INSTANCEOF typeOperand=javax.swing.tree.DefaultMutableTreeNode
+                          GET_VAR 'value: kotlin.Any? declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=kotlin.Any? origin=null
+                        then: GET_VAR 'value: kotlin.Any? declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=kotlin.Any? origin=null
+                      BRANCH
+                        if: CONST Boolean type=kotlin.Boolean value=true
+                        then: CONST Null type=javax.swing.tree.DefaultMutableTreeNode? value=null
+                  CALL 'public final fun not (): kotlin.Boolean [operator] declared in kotlin.Boolean' type=kotlin.Boolean origin=null
+                    $this: CALL 'public final fun EQEQ (arg0: kotlin.Any?, arg1: kotlin.Any?): kotlin.Boolean declared in kotlin.internal.ir' type=kotlin.Boolean origin=null
+                      arg0: GET_VAR 'val tmp0_safe_receiver: javax.swing.tree.DefaultMutableTreeNode? [val] declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=javax.swing.tree.DefaultMutableTreeNode? origin=null
+                      arg1: CONST Null type=kotlin.Nothing? value=null
+                then: CALL 'public open fun getUserObject (): @[FlexibleNullability] kotlin.Any? declared in javax.swing.tree.DefaultMutableTreeNode' type=@[FlexibleNullability] kotlin.Any? origin=GET_PROPERTY
+                  $this: GET_VAR 'val tmp0_safe_receiver: javax.swing.tree.DefaultMutableTreeNode? [val] declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=javax.swing.tree.DefaultMutableTreeNode? origin=null
+              BRANCH
+                if: CONST Boolean type=kotlin.Boolean value=true
+                then: CONST Null type=kotlin.Nothing? value=null
+        WHEN type=com.maxvibes.plugin.ui.TreeNodeData? origin=null
+          BRANCH
+            if: TYPE_OP type=kotlin.Boolean origin=INSTANCEOF typeOperand=com.maxvibes.plugin.ui.TreeNodeData
+              GET_VAR 'val tmp0: kotlin.Any? [val] declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=kotlin.Any? origin=null
+            then: GET_VAR 'val tmp0: kotlin.Any? [val] declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=kotlin.Any? origin=null
+          BRANCH
+            if: CONST Boolean type=kotlin.Boolean value=true
+            then: CONST Null type=com.maxvibes.plugin.ui.TreeNodeData? value=null
+    WHEN type=kotlin.Unit origin=IF
+      BRANCH
+        if: CALL 'public final fun EQEQ (arg0: kotlin.Any?, arg1: kotlin.Any?): kotlin.Boolean declared in kotlin.internal.ir' type=kotlin.Boolean origin=EQEQ
+          arg0: GET_VAR 'val node: com.maxvibes.plugin.ui.TreeNodeData? [val] declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=com.maxvibes.plugin.ui.TreeNodeData? origin=null
+          arg1: CONST Null type=kotlin.Nothing? value=null
+        then: BLOCK type=kotlin.Unit origin=null
+          CALL 'public open fun setText (p0: @[FlexibleNullability] kotlin.String?): kotlin.Unit [fake_override] declared in com.maxvibes.plugin.ui.SessionCellRenderer' type=kotlin.Unit origin=EQ
+            $this: GET_VAR '<this>: com.maxvibes.plugin.ui.SessionCellRenderer declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=com.maxvibes.plugin.ui.SessionCellRenderer origin=null
+            p0: BLOCK type=@[FlexibleNullability] kotlin.String? origin=FOLDED_ELVIS
+              WHEN type=@[FlexibleNullability] kotlin.String? origin=FOLDED_ELVIS
+                BRANCH
+                  if: CALL 'public final fun ANDAND (arg0: kotlin.Boolean, arg1: kotlin.Boolean): kotlin.Boolean declared in kotlin.internal.ir' type=kotlin.Boolean origin=null
+                    arg0: COMPOSITE type=kotlin.Boolean origin=null
+                      CALL 'public final fun not (): kotlin.Boolean [operator] declared in kotlin.Boolean' type=kotlin.Boolean origin=null
+                        $this: CALL 'public final fun EQEQ (arg0: kotlin.Any?, arg1: kotlin.Any?): kotlin.Boolean declared in kotlin.internal.ir' type=kotlin.Boolean origin=null
+                          arg0: GET_VAR 'value: kotlin.Any? declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=kotlin.Any? origin=null
+                          arg1: CONST Null type=kotlin.Nothing? value=null
+                    arg1: COMPOSITE type=kotlin.Boolean origin=null
+                      VAR IR_TEMPORARY_VARIABLE name:tmp2_elvis_lhs type:kotlin.String [val]
+                        CALL 'public open fun toString (): kotlin.String declared in kotlin.Any' type=kotlin.String origin=null
+                          $this: GET_VAR 'value: kotlin.Any? declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=kotlin.Any? origin=null
+                      CALL 'public final fun not (): kotlin.Boolean [operator] declared in kotlin.Boolean' type=kotlin.Boolean origin=null
+                        $this: CALL 'public final fun EQEQ (arg0: kotlin.Any?, arg1: kotlin.Any?): kotlin.Boolean declared in kotlin.internal.ir' type=kotlin.Boolean origin=null
+                          arg0: GET_VAR 'val tmp2_elvis_lhs: kotlin.String [val] declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=kotlin.String origin=null
+                          arg1: CONST Null type=kotlin.Nothing? value=null
+                  then: GET_VAR 'val tmp2_elvis_lhs: kotlin.String [val] declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=kotlin.String origin=null
+                BRANCH
+                  if: CONST Boolean type=kotlin.Boolean value=true
+                  then: CONST String type=kotlin.String value=""
+          RETURN type=kotlin.Nothing from='public open fun getTreeCellRendererComponent (tree: javax.swing.JTree, value: kotlin.Any?, sel: kotlin.Boolean, expanded: kotlin.Boolean, leaf: kotlin.Boolean, row: kotlin.Int, hasFocus: kotlin.Boolean): java.awt.Component declared in com.maxvibes.plugin.ui.SessionCellRenderer'
+            GET_VAR '<this>: com.maxvibes.plugin.ui.SessionCellRenderer declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=com.maxvibes.plugin.ui.SessionCellRenderer origin=null
+    VAR name:icon type:kotlin.String [val]
+      WHEN type=kotlin.String origin=WHEN
+        BRANCH
+          if: CALL 'public final fun greater (arg0: kotlin.Int, arg1: kotlin.Int): kotlin.Boolean declared in kotlin.internal.ir' type=kotlin.Boolean origin=GT
+            arg0: CALL 'public final fun <get-childCount> (): kotlin.Int declared in com.maxvibes.plugin.ui.TreeNodeData' type=kotlin.Int origin=GET_PROPERTY
+              $this: GET_VAR 'val node: com.maxvibes.plugin.ui.TreeNodeData? [val] declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=com.maxvibes.plugin.ui.TreeNodeData? origin=null
+            arg1: CONST Int type=kotlin.Int value=0
+          then: CONST String type=kotlin.String value="\uD83D\uDCC2"
+        BRANCH
+          if: CALL 'public final fun EQEQ (arg0: kotlin.Any?, arg1: kotlin.Any?): kotlin.Boolean declared in kotlin.internal.ir' type=kotlin.Boolean origin=EQEQ
+            arg0: CALL 'public final fun <get-messageCount> (): kotlin.Int declared in com.maxvibes.plugin.ui.TreeNodeData' type=kotlin.Int origin=GET_PROPERTY
+              $this: GET_VAR 'val node: com.maxvibes.plugin.ui.TreeNodeData? [val] declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=com.maxvibes.plugin.ui.TreeNodeData? origin=null
+            arg1: CONST Int type=kotlin.Int value=0
+          then: CONST String type=kotlin.String value="\uD83D\uDCC4"
+        BRANCH
+          if: CONST Boolean type=kotlin.Boolean value=true
+          then: CONST String type=kotlin.String value="\uD83D\uDCAC"
+    VAR name:title type:kotlin.String [val]
+      CALL 'private final fun escapeHtml (text: kotlin.String): kotlin.String declared in com.maxvibes.plugin.ui.SessionCellRenderer' type=kotlin.String origin=null
+        $this: GET_VAR '<this>: com.maxvibes.plugin.ui.SessionCellRenderer declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=com.maxvibes.plugin.ui.SessionCellRenderer origin=null
+        text: CALL 'public final fun <get-title> (): kotlin.String declared in com.maxvibes.plugin.ui.TreeNodeData' type=kotlin.String origin=GET_PROPERTY
+          $this: GET_VAR 'val node: com.maxvibes.plugin.ui.TreeNodeData? [val] declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=com.maxvibes.plugin.ui.TreeNodeData? origin=null
+    VAR name:date type:@[FlexibleNullability] kotlin.String? [val]
+      CALL 'public final fun format (p0: @[FlexibleNullability] java.util.Date?): @[FlexibleNullability] kotlin.String? [fake_override] declared in java.text.SimpleDateFormat' type=@[FlexibleNullability] kotlin.String? origin=null
+        $this: GET_FIELD 'FIELD PROPERTY_BACKING_FIELD name:dateFormat type:java.text.SimpleDateFormat visibility:private [final]' type=java.text.SimpleDateFormat origin=null
+          receiver: GET_VAR '<this>: com.maxvibes.plugin.ui.SessionCellRenderer declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=com.maxvibes.plugin.ui.SessionCellRenderer origin=null
+        p0: CONSTRUCTOR_CALL 'public constructor <init> (p0: kotlin.Long) declared in java.util.Date' type=java.util.Date origin=null
+          p0: CALL 'public final fun <get-updatedAt> (): kotlin.Long declared in com.maxvibes.plugin.ui.TreeNodeData' type=kotlin.Long origin=GET_PROPERTY
+            $this: GET_VAR 'val node: com.maxvibes.plugin.ui.TreeNodeData? [val] declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=com.maxvibes.plugin.ui.TreeNodeData? origin=null
+    VAR name:tokenStr type:kotlin.String [val]
+      WHEN type=kotlin.String origin=IF
+        BRANCH
+          if: CALL 'public final fun greater (arg0: kotlin.Int, arg1: kotlin.Int): kotlin.Boolean declared in kotlin.internal.ir' type=kotlin.Boolean origin=GT
+            arg0: CALL 'public final fun <get-totalTokens> (): kotlin.Int declared in com.maxvibes.plugin.ui.TreeNodeData' type=kotlin.Int origin=GET_PROPERTY
+              $this: GET_VAR 'val node: com.maxvibes.plugin.ui.TreeNodeData? [val] declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=com.maxvibes.plugin.ui.TreeNodeData? origin=null
+            arg1: CONST Int type=kotlin.Int value=0
+          then: STRING_CONCATENATION type=kotlin.String
+            CONST String type=kotlin.String value=" • "
+            CALL 'private final fun formatTok (n: kotlin.Int): kotlin.String declared in com.maxvibes.plugin.ui.SessionCellRenderer' type=kotlin.String origin=null
+              $this: GET_VAR '<this>: com.maxvibes.plugin.ui.SessionCellRenderer declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=com.maxvibes.plugin.ui.SessionCellRenderer origin=null
+              n: CALL 'public final fun <get-totalTokens> (): kotlin.Int declared in com.maxvibes.plugin.ui.TreeNodeData' type=kotlin.Int origin=GET_PROPERTY
+                $this: GET_VAR 'val node: com.maxvibes.plugin.ui.TreeNodeData? [val] declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=com.maxvibes.plugin.ui.TreeNodeData? origin=null
+            CONST String type=kotlin.String value=" tok"
+        BRANCH
+          if: CONST Boolean type=kotlin.Boolean value=true
+          then: CONST String type=kotlin.String value=""
+    VAR name:meta type:kotlin.String [val]
+      CALL 'public final fun buildString (builderAction: @[ExtensionFunctionType] kotlin.Function1<java.lang.StringBuilder, kotlin.Unit>): kotlin.String [inline] declared in kotlin.text.StringsKt' type=kotlin.String origin=null
+        builderAction: BLOCK type=@[ExtensionFunctionType] kotlin.Function1<java.lang.StringBuilder, kotlin.Unit> origin=LAMBDA
+          COMPOSITE type=kotlin.Unit origin=null
+          FUNCTION_REFERENCE 'private final fun getTreeCellRendererComponent$lambda$0 ($date: @[FlexibleNullability] kotlin.String?, $node: com.maxvibes.plugin.ui.TreeNodeData?, $tokenStr: kotlin.String): kotlin.Unit declared in com.maxvibes.plugin.ui.SessionCellRenderer' type=@[ExtensionFunctionType] kotlin.Function1<java.lang.StringBuilder, kotlin.Unit> origin=INLINE_LAMBDA reflectionTarget=null
+            $date: GET_VAR 'val date: @[FlexibleNullability] kotlin.String? [val] declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=@[FlexibleNullability] kotlin.String? origin=null
+            $node: GET_VAR 'val node: com.maxvibes.plugin.ui.TreeNodeData? [val] declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=com.maxvibes.plugin.ui.TreeNodeData? origin=null
+            $tokenStr: GET_VAR 'val tokenStr: kotlin.String [val] declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=kotlin.String origin=null
+    VAR name:gray type:kotlin.String [val]
+      WHEN type=kotlin.String origin=IF
+        BRANCH
+          if: CALL 'public open fun isBright (): kotlin.Boolean declared in com.intellij.ui.JBColor' type=kotlin.Boolean origin=null
+          then: CONST String type=kotlin.String value="#888888"
+        BRANCH
+          if: CONST Boolean type=kotlin.Boolean value=true
+          then: CONST String type=kotlin.String value="#999999"
+    CALL 'public open fun setText (p0: @[FlexibleNullability] kotlin.String?): kotlin.Unit [fake_override] declared in com.maxvibes.plugin.ui.SessionCellRenderer' type=kotlin.Unit origin=EQ
+      $this: GET_VAR '<this>: com.maxvibes.plugin.ui.SessionCellRenderer declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=com.maxvibes.plugin.ui.SessionCellRenderer origin=null
+      p0: STRING_CONCATENATION type=kotlin.String
+        CONST String type=kotlin.String value="<html><span>"
+        GET_VAR 'val icon: kotlin.String [val] declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=kotlin.String origin=null
+        CONST String type=kotlin.String value=" <b>"
+        GET_VAR 'val title: kotlin.String [val] declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=kotlin.String origin=null
+        CONST String type=kotlin.String value="</b></span><br><span style='font-size:9px;color:"
+        GET_VAR 'val gray: kotlin.String [val] declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=kotlin.String origin=null
+        CONST String type=kotlin.String value="'>"
+        GET_VAR 'val meta: kotlin.String [val] declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=kotlin.String origin=null
+        CONST String type=kotlin.String value="</span></html>"
+    CALL 'public open fun setBorder (p0: @[FlexibleNullability] javax.swing.border.Border?): kotlin.Unit [fake_override] declared in com.maxvibes.plugin.ui.SessionCellRenderer' type=kotlin.Unit origin=EQ
+      $this: GET_VAR '<this>: com.maxvibes.plugin.ui.SessionCellRenderer declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=com.maxvibes.plugin.ui.SessionCellRenderer origin=null
+      p0: CALL 'public open fun empty (p0: kotlin.Int, p1: kotlin.Int): @[NotNull(value = <null>, exception = <null>)] @[EnhancedNullability] com.intellij.util.ui.JBEmptyBorder declared in com.intellij.util.ui.JBUI.Borders' type=@[EnhancedNullability] @[NotNull(value = <null>, exception = <null>)] com.intellij.util.ui.JBEmptyBorder origin=null
+        p0: CONST Int type=kotlin.Int value=3
+        p1: CONST Int type=kotlin.Int value=2
+    RETURN type=kotlin.Nothing from='public open fun getTreeCellRendererComponent (tree: javax.swing.JTree, value: kotlin.Any?, sel: kotlin.Boolean, expanded: kotlin.Boolean, leaf: kotlin.Boolean, row: kotlin.Int, hasFocus: kotlin.Boolean): java.awt.Component declared in com.maxvibes.plugin.ui.SessionCellRenderer'
+      GET_VAR '<this>: com.maxvibes.plugin.ui.SessionCellRenderer declared in com.maxvibes.plugin.ui.SessionCellRenderer.getTreeCellRendererComponent' type=com.maxvibes.plugin.ui.SessionCellRenderer origin=null
+
+	at org.jetbrains.kotlin.backend.jvm.codegen.FunctionCodegen.generate(FunctionCodegen.kt:48)
+	at org.jetbrains.kotlin.backend.jvm.codegen.FunctionCodegen.generate$default(FunctionCodegen.kt:41)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ClassCodegen.generateMethodNode(ClassCodegen.kt:407)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ClassCodegen.generateMethod(ClassCodegen.kt:424)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ClassCodegen.generate(ClassCodegen.kt:169)
+	at org.jetbrains.kotlin.backend.jvm.FileCodegen.lower(JvmPhases.kt:39)
+	at org.jetbrains.kotlin.backend.common.phaser.PhaseFactoriesKt.createFilePhase$lambda$4(PhaseFactories.kt:71)
+	at org.jetbrains.kotlin.backend.common.phaser.PhaseBuildersKt$createSimpleNamedCompilerPhase$1.phaseBody(PhaseBuilders.kt:69)
+	at org.jetbrains.kotlin.backend.common.phaser.SimpleNamedCompilerPhase.phaseBody(CompilerPhase.kt:226)
+	at org.jetbrains.kotlin.backend.common.phaser.AbstractNamedCompilerPhase.invoke(CompilerPhase.kt:113)
+	at org.jetbrains.kotlin.backend.common.phaser.PerformByIrFilePhase.invokeSequential(performByIrFile.kt:52)
+	... 46 more
+Caused by: java.lang.OutOfMemoryError: GC overhead limit exceeded
+	at org.jetbrains.org.objectweb.asm.tree.MethodNode.visitLineNumber(MethodNode.java:512)
+	at org.jetbrains.org.objectweb.asm.MethodVisitor.visitLineNumber(MethodVisitor.java:761)
+	at org.jetbrains.org.objectweb.asm.MethodVisitor.visitLineNumber(MethodVisitor.java:761)
+	at org.jetbrains.org.objectweb.asm.MethodVisitor.visitLineNumber(MethodVisitor.java:761)
+	at org.jetbrains.org.objectweb.asm.tree.LineNumberNode.accept(LineNumberNode.java:67)
+	at org.jetbrains.org.objectweb.asm.tree.InsnList.accept(InsnList.java:144)
+	at org.jetbrains.org.objectweb.asm.tree.MethodNode.accept(MethodNode.java:751)
+	at org.jetbrains.kotlin.codegen.inline.InlineCodegen.inlineCall(InlineCodegen.kt:148)
+	at org.jetbrains.kotlin.codegen.inline.InlineCodegen.performInline(InlineCodegen.kt:52)
+	at org.jetbrains.kotlin.backend.jvm.codegen.IrInlineCodegen.genInlineCall(IrInlineCodegen.kt:163)
+	at org.jetbrains.kotlin.backend.jvm.codegen.IrInlineCallGenerator.genCall(IrInlineCallGenerator.kt:36)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ExpressionCodegen.visitCall(ExpressionCodegen.kt:598)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ExpressionCodegen.visitCall(ExpressionCodegen.kt:134)
+	at org.jetbrains.kotlin.ir.expressions.IrCall.accept(IrCall.kt:24)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ExpressionCodegen.visitVariable(ExpressionCodegen.kt:735)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ExpressionCodegen.visitVariable(ExpressionCodegen.kt:134)
+	at org.jetbrains.kotlin.ir.declarations.IrVariable.accept(IrVariable.kt:36)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ExpressionCodegen.visitStatementContainer(ExpressionCodegen.kt:524)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ExpressionCodegen.visitBlockBody(ExpressionCodegen.kt:529)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ExpressionCodegen.visitBlockBody(ExpressionCodegen.kt:134)
+	at org.jetbrains.kotlin.ir.expressions.IrBlockBody.accept(IrBlockBody.kt:20)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ExpressionCodegen.generate(ExpressionCodegen.kt:236)
+	at org.jetbrains.kotlin.backend.jvm.codegen.FunctionCodegen.doGenerate(FunctionCodegen.kt:124)
+	at org.jetbrains.kotlin.backend.jvm.codegen.FunctionCodegen.generate(FunctionCodegen.kt:45)
+	at org.jetbrains.kotlin.backend.jvm.codegen.FunctionCodegen.generate$default(FunctionCodegen.kt:41)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ClassCodegen.generateMethodNode(ClassCodegen.kt:407)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ClassCodegen.generateMethod(ClassCodegen.kt:424)
+	at org.jetbrains.kotlin.backend.jvm.codegen.ClassCodegen.generate(ClassCodegen.kt:169)
+	at org.jetbrains.kotlin.backend.jvm.FileCodegen.lower(JvmPhases.kt:39)
+	at org.jetbrains.kotlin.backend.common.phaser.PhaseFactoriesKt.createFilePhase$lambda$4(PhaseFactories.kt:71)
+	at org.jetbrains.kotlin.backend.common.phaser.PhaseFactoriesKt$$Lambda$349/0x0000000800f46470.invoke(Unknown Source)
+	at org.jetbrains.kotlin.backend.common.phaser.PhaseBuildersKt$createSimpleNamedCompilerPhase$1.phaseBody(PhaseBuilders.kt:69)
+
+

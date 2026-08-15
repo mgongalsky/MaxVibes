@@ -50,6 +50,12 @@
                 id="com.maxvibes.plugin.settings"
                 displayName="MaxVibes"/>
 
+        <projectConfigurable
+                parentId="com.maxvibes.plugin.settings"
+                instance="com.maxvibes.plugin.settings.AutonomySettingsConfigurable"
+                id="com.maxvibes.plugin.settings.autonomy"
+                displayName="Autonomy"/>
+
         <toolWindow
                 id="MaxVibes"
                 anchor="right"

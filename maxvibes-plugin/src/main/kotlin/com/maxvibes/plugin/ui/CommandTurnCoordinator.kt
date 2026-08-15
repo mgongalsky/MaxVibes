@@ -79,6 +79,20 @@ class CommandTurnCoordinator(
         }
     }
 
+    /**
+     * Starts the pending batch without a human click, when the approval policy
+     * allows terminal commands. Reuses the Run all path on purpose, so an
+     * autonomous batch fails exactly like a manual one: sequentially, stopping
+     * at the first non-zero exit code and declining the rest.
+     */
+    fun runAllAutomatically(sessionId: String) {
+        val turn = commandTurn ?: return
+        if (turn.sessionId != sessionId) return
+        MaxVibesLogger.info("Controller", "auto-run commands", mapOf("count" to turn.items.size))
+        callbacks.setStatus("🤖 Running ${turn.items.size} command(s) automatically...")
+        startRunAll(turn)
+    }
+
     private fun startRunAll(turn: CommandTurn) {
         if (commandTurn !== turn || turn.runAllActive) return
         turn.runAllActive = true

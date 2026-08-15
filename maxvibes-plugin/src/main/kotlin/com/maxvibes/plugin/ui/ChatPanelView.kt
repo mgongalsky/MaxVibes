@@ -265,4 +265,6 @@ class ChatPanelView(
         usageSupported = supported
         if (!supported) limitsBar.isVisible = false
     }
+    fun setAutoApproveToggle(isOn: () -> Boolean, onToggle: (Boolean) -> Unit) =
+        inputPanel.setAutoApproveToggle(isOn, onToggle)
 }

@@ -4,6 +4,7 @@ import com.maxvibes.adapter.llm.dto.toChatMessageDTO
 import com.maxvibes.application.service.ChatTreeService
 import com.maxvibes.application.service.CodingAgentInteractionService
 import com.maxvibes.application.service.ClaudeCodeStepResult
+import com.maxvibes.application.service.turn.TurnAutopilot
 import com.maxvibes.domain.model.chat.ChatSession
 import com.maxvibes.domain.model.chat.MessageRole
 import com.maxvibes.domain.model.command.CommandRequest
@@ -14,6 +15,7 @@ import com.maxvibes.domain.model.modification.AppliedModInfo
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.domain.model.modification.toCategory
 import com.maxvibes.plugin.service.MaxVibesLogger
+import com.maxvibes.application.service.turn.TurnSignalMapper
 
 /**
  * Claude Code mode dispatcher extracted from [ChatMessageController].
@@ -28,6 +30,11 @@ import com.maxvibes.plugin.service.MaxVibesLogger
  * unit-testable. [claudeCodeService] is a provider on purpose: it is only
  * dereferenced inside [executeAsync] actions, so tests that record actions
  * without running them never need the real service.
+ *
+ * [turnAutopilot] is a provider for the same reason plus one more: the autopilot
+ * continues the turn through this dispatcher, so the two reference each other and
+ * the provider breaks the construction cycle. When it yields null the dispatcher
+ * behaves exactly as it did before autonomy existed.
  */
 class ClaudeCodeDispatcher(
     private val claudeCodeService: () -> CodingAgentInteractionService,
@@ -36,7 +43,8 @@ class ClaudeCodeDispatcher(
     private val callbacks: MessageFlowView,
     private val presentQuestions: (questions: List<InteractionQuestion>) -> Unit,
     private val presentCommands: (commands: List<CommandRequest>, sessionId: String, mode: InteractionMode) -> Unit,
-    private val executeAsync: (title: String, session: ChatSession, action: suspend () -> ClaudeCodeStepResult) -> Unit
+    private val executeAsync: (title: String, session: ChatSession, action: suspend () -> ClaudeCodeStepResult) -> Unit,
+    private val turnAutopilot: () -> TurnAutopilot? = { null }
 ) {
     private var modificationProposalView: ModificationProposalView? = null
 
@@ -65,6 +73,8 @@ class ClaudeCodeDispatcher(
         }
         session = chatTreeService.addMessage(session.id, MessageRole.USER, fullMsg)
         callbacks.addUserMessageBubble(userInput, images)
+
+        turnAutopilot()?.startTurn(session.id)
 
         callbacks.setInputEnabled(false)
         callbacks.setStatus("Claude Code: sending...")
@@ -97,6 +107,7 @@ class ClaudeCodeDispatcher(
                 "hasErrors" to (errs != null)
             )
         )
+        turnAutopilot()?.onHumanApproved(session.id)
         callbacks.setInputEnabled(false)
         callbacks.setStatus("Claude Code: approving...")
         executeAsync("Claude Code: approving...", session) {
@@ -104,6 +115,34 @@ class ClaudeCodeDispatcher(
                 sessionId = session.id,
                 attachedContext = trace,
                 ideErrors = errs
+            )
+        }
+    }
+
+    /**
+     * Continues the turn without a human, on the autopilot's decision.
+     *
+     * Mirrors [approve] but never records a manual step. The session check is not
+     * defensive noise: the user can switch chats while the agent is thinking, and
+     * resuming someone else's turn in the visible chat would be wrong.
+     */
+    fun continueTurnAutomatically(sessionId: String) {
+        val session = chatTreeService.getActiveSession()
+        if (session.id != sessionId) return
+
+        MaxVibesLogger.info(
+            "ClaudeCodeDispatcher",
+            "auto-continue",
+            mapOf("sessionId" to sessionId)
+        )
+        modificationProposalView?.setApplying()
+        callbacks.setInputEnabled(false)
+        callbacks.setStatus("🤖 Continuing automatically...")
+        executeAsync("Claude Code: continuing...", session) {
+            claudeCodeService().approve(
+                sessionId = session.id,
+                attachedContext = null,
+                ideErrors = null
             )
         }
     }
@@ -286,6 +325,7 @@ class ClaudeCodeDispatcher(
                     presentCommands(result.commands, session.id, InteractionMode.CLAUDE_CODE)
                     callbacks.updateModeIndicator()
                     callbacks.updateBreadcrumb()
+                    notifyTurn(result, session)
                     return
                 }
                 if (result.commands.isNotEmpty()) callbacks.appendToChat("⚠️ ${result.commands.size} command(s) skipped — fix failed modifications first")
@@ -310,6 +350,13 @@ class ClaudeCodeDispatcher(
                 callbacks.setStatus("⚠️ Claude Code transport error")
             }
         }
+
+        notifyTurn(result, session)
+    }
+
+    private fun notifyTurn(result: ClaudeCodeStepResult, session: ChatSession) {
+        val autopilot = turnAutopilot() ?: return
+        autopilot.onStep(session.id, TurnSignalMapper.from(result))
     }
 
     /**

@@ -266,6 +266,10 @@ class ChatPanelComposition(
         sessionUiCoordinator.loadCurrentSession()
         modeCoordinator.initialize()
         runtimeCoordinator.start()
+        view.setAutoApproveToggle(
+            isOn = { messageController.isAllowAllApprovals() },
+            onToggle = { messageController.setAllowAllApprovals(it) }
+        )
     }
 
     fun refreshHeader() {

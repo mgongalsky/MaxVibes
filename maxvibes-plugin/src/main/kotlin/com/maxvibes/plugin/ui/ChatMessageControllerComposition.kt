@@ -4,11 +4,16 @@ import com.intellij.openapi.project.Project
 import com.maxvibes.application.port.input.ContextAwareRequest
 import com.maxvibes.application.service.ClaudeCodeStepResult
 import com.maxvibes.application.service.ClipboardStepResult
+import com.maxvibes.application.service.approval.ApprovalService
+import com.maxvibes.application.service.turn.AgentTurnOrchestrator
+import com.maxvibes.application.service.turn.TurnAutopilot
 import com.maxvibes.domain.model.chat.ChatSession
 import com.maxvibes.domain.model.chat.MessageRole
 import com.maxvibes.domain.model.interaction.AttachedImage
 import com.maxvibes.domain.model.interaction.InteractionMode
 import com.maxvibes.plugin.service.MaxVibesService
+import com.maxvibes.plugin.settings.ApprovalPolicySettings
+import com.maxvibes.domain.model.approval.AgentActionKind
 
 /**
  * Composition root behind [ChatMessageController].
@@ -88,6 +93,22 @@ internal class ChatMessageControllerComposition(
         callbacks = callbacks
     )
 
+    private val approvalService: ApprovalService by lazy {
+        ApprovalService { ApprovalPolicySettings.getInstance(project).load() }
+    }
+
+    private val turnAutopilot: TurnAutopilot by lazy {
+        TurnAutopilot(
+            orchestrator = AgentTurnOrchestrator(decideApproval = approvalService::decide),
+            continueTurn = { sessionId, action ->
+                when (action) {
+                    AgentActionKind.COMMAND -> commandCoordinator.runAllAutomatically(sessionId)
+                    else -> claudeCodeDispatcher.continueTurnAutomatically(sessionId)
+                }
+            }
+        )
+    }
+
     private val commandCoordinator: CommandTurnCoordinator by lazy {
         CommandTurnCoordinator(
             executeCommandUseCase = service.executeCommandUseCase,
@@ -123,7 +144,8 @@ internal class ChatMessageControllerComposition(
             },
             executeAsync = { title, session, action ->
                 runClaudeCodeBg(title, session, action)
-            }
+            },
+            turnAutopilot = { turnAutopilot }
         )
     }
 
@@ -312,4 +334,13 @@ internal class ChatMessageControllerComposition(
         attachmentCoordinator.armOneShot(skillName, elementContext, label)
 
     fun clearOneShot() = attachmentCoordinator.clearOneShot()
+    fun isAllowAllApprovals(): Boolean =
+        approvalService.isAllowAll(chatTreeService.getActiveSession().id)
+
+    /** Turning trust on also unblocks a turn that is already parked waiting for a click. */
+    fun setAllowAllApprovals(enabled: Boolean) {
+        val sessionId = chatTreeService.getActiveSession().id
+        approvalService.setAllowAll(sessionId, enabled)
+        if (enabled) turnAutopilot.resumeParked(sessionId)
+    }
 }
