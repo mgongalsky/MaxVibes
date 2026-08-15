@@ -270,9 +270,17 @@ class MaxVibesService(private val project: Project) : Disposable {
      */
     private val claudeCodeAdapter: ClaudeCodeProcessAdapter by claudeCodeAdapterLazy
     private val codexAdapter: CodexAppServerAdapter by codexAdapterLazy
-    private fun selectedCodingAgentProvider(): CodingAgentProvider = runCatching {
-        CodingAgentProvider.valueOf(MaxVibesSettings.getInstance().codingAgentProvider)
-    }.getOrDefault(CodingAgentProvider.CLAUDE_CODE)
+    private fun selectedCodingAgentProvider(): CodingAgentProvider {
+        val raw = MaxVibesSettings.getInstance().codingAgentProvider
+        val resolved = runCatching { CodingAgentProvider.valueOf(raw) }
+            .getOrDefault(CodingAgentProvider.CLAUDE_CODE)
+        MaxVibesLogger.info(
+            "MaxVibesService",
+            "coding agent resolved",
+            mapOf("raw" to raw, "resolved" to resolved.name)
+        )
+        return resolved
+    }
 
     private val claudeCodeInteractionServiceLazy: Lazy<CodingAgentInteractionService> = lazy {
         CodingAgentInteractionService(

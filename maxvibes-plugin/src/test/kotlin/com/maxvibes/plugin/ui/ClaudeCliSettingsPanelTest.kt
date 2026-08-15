@@ -1,5 +1,7 @@
 package com.maxvibes.plugin.ui
 
+import com.maxvibes.domain.model.chat.CodingAgentProvider
+import com.maxvibes.domain.model.interaction.CodingAgentCapabilities
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -13,6 +15,7 @@ import javax.swing.SwingUtilities
 class ClaudeCliSettingsPanelTest {
 
     private class FakeSettings(
+        override var provider: CodingAgentProvider = CodingAgentProvider.CLAUDE_CODE,
         override var model: String = "",
         override var effortLevel: String = ""
     ) : ClaudeCliSettings
@@ -22,8 +25,9 @@ class ClaudeCliSettingsPanelTest {
         val settings = FakeSettings(model = "opus", effortLevel = "high")
         val statuses = mutableListOf<String>()
 
-        val panel = ClaudeCliSettingsPanel(settings) { statuses += it }
+        val panel = ClaudeCliSettingsPanel(settings, { statuses += it }) {}
 
+        assertEquals(CodingAgentProvider.CLAUDE_CODE, panel.agentCombo().selectedItem)
         assertEquals("opus", panel.modelCombo().selectedItem)
         assertEquals("high", panel.effortCombo().selectedItem)
         assertTrue(statuses.isEmpty())
@@ -34,7 +38,7 @@ class ClaudeCliSettingsPanelTest {
     fun `combo selections are committed through the binder`() = onEdt {
         val settings = FakeSettings()
         val statuses = mutableListOf<String>()
-        val panel = ClaudeCliSettingsPanel(settings) { statuses += it }
+        val panel = ClaudeCliSettingsPanel(settings, { statuses += it }) {}
 
         panel.modelCombo().selectedItem = "sonnet"
         panel.effortCombo().selectedItem = "xhigh"
@@ -43,8 +47,8 @@ class ClaudeCliSettingsPanelTest {
         assertEquals("xhigh", settings.effortLevel)
         assertEquals(
             listOf(
-                "CLI model: sonnet — applies on next send",
-                "CLI effort: xhigh — applies on next send"
+                "Claude Code model: sonnet \u2014 applies on next send",
+                "Claude Code effort: xhigh \u2014 applies on next send"
             ),
             statuses
         )
@@ -53,7 +57,7 @@ class ClaudeCliSettingsPanelTest {
     @Test
     fun `Auto selections clear stored overrides`() = onEdt {
         val settings = FakeSettings(model = "opus", effortLevel = "high")
-        val panel = ClaudeCliSettingsPanel(settings) {}
+        val panel = ClaudeCliSettingsPanel(settings, {}) {}
 
         panel.modelCombo().selectedItem = "Auto"
         panel.effortCombo().selectedItem = "Auto"
@@ -63,8 +67,44 @@ class ClaudeCliSettingsPanelTest {
     }
 
     @Test
+    fun `the offered values come from the selected agent`() = onEdt {
+        val panel = ClaudeCliSettingsPanel(FakeSettings(), {}) {}
+        val claude = CodingAgentCapabilities.of(CodingAgentProvider.CLAUDE_CODE)
+
+        assertEquals(claude.models, panel.modelCombo().items().drop(1))
+        assertEquals(claude.reasoningLevels, panel.effortCombo().items().drop(1))
+    }
+
+    @Test
+    fun `switching the agent swaps the offered values and notifies the owner`() = onEdt {
+        val settings = FakeSettings()
+        val statuses = mutableListOf<String>()
+        val switched = mutableListOf<CodingAgentProvider>()
+        val panel = ClaudeCliSettingsPanel(settings, { statuses += it }) { switched += it }
+
+        panel.agentCombo().selectedItem = CodingAgentProvider.CODEX
+
+        val codex = CodingAgentCapabilities.of(CodingAgentProvider.CODEX)
+        assertEquals(CodingAgentProvider.CODEX, settings.provider)
+        assertEquals(listOf(CodingAgentProvider.CODEX), switched)
+        assertEquals(codex.models, panel.modelCombo().items().drop(1))
+        assertEquals(codex.reasoningLevels, panel.effortCombo().items().drop(1))
+        assertTrue(statuses.isEmpty())
+    }
+
+    @Test
+    fun `re-selecting the current agent is not reported as a switch`() = onEdt {
+        val switched = mutableListOf<CodingAgentProvider>()
+        val panel = ClaudeCliSettingsPanel(FakeSettings(), {}) { switched += it }
+
+        panel.agentCombo().selectedItem = CodingAgentProvider.CLAUDE_CODE
+
+        assertTrue(switched.isEmpty())
+    }
+
+    @Test
     fun `visibility and enablement are controlled as one component`() = onEdt {
-        val panel = ClaudeCliSettingsPanel(FakeSettings()) {}
+        val panel = ClaudeCliSettingsPanel(FakeSettings(), {}) {}
 
         panel.setClaudeCodeVisible(true)
         panel.setControlsEnabled(false)
@@ -73,15 +113,18 @@ class ClaudeCliSettingsPanelTest {
         assertTrue(panel.findAll(JComboBox::class.java).all { !it.isEnabled })
     }
 
+    private fun ClaudeCliSettingsPanel.agentCombo(): JComboBox<*> =
+        findAll(JComboBox::class.java).single { it.getItemAt(0) is CodingAgentProvider }
+
     private fun ClaudeCliSettingsPanel.modelCombo(): JComboBox<*> =
-        findAll(JComboBox::class.java).single {
-            it.toolTipText?.startsWith("Claude Code CLI model") == true
-        }
+        findAll(JComboBox::class.java).single { it.isEditable }
 
     private fun ClaudeCliSettingsPanel.effortCombo(): JComboBox<*> =
         findAll(JComboBox::class.java).single {
             it.toolTipText?.startsWith("Reasoning effort") == true
         }
+
+    private fun JComboBox<*>.items(): List<Any?> = (0 until itemCount).map { getItemAt(it) }
 
     private fun <T : Component> Container.findAll(type: Class<T>): List<T> {
         val result = mutableListOf<T>()

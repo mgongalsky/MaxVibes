@@ -92,6 +92,9 @@ class MaxVibesSettingsPanel {
     private val anthropicPanel: JPanel
     private val ollamaPanel: JPanel
 
+    private lateinit var claudeCodeAgentPanel: JPanel
+    private lateinit var codexAgentPanel: JPanel
+
     val panel: JPanel
 
     init {
@@ -157,6 +160,7 @@ class MaxVibesSettingsPanel {
         panel = buildPanel()
         setupListeners()
         updateProviderPanels()
+        updateCodingAgentPanels()
         updateModelComboBox()
     }
 
@@ -202,6 +206,26 @@ class MaxVibesSettingsPanel {
         }
     }
 
+    private fun createClaudeCodeAgentPanel(): JPanel = FormBuilder.createFormBuilder()
+        .addLabeledComponent(JBLabel("Binary path:"), claudeCodePathField)
+        .addLabeledComponent(JBLabel("Extra CLI args:"), claudeCodeExtraArgsField)
+        .addLabeledComponent(JBLabel("Model:"), claudeCodeModelField)
+        .addLabeledComponent(JBLabel("Max output tokens:"), claudeCodeMaxOutputTokensField)
+        .addLabeledComponent(JBLabel("Thinking budget:"), claudeCodeThinkingBudgetField)
+        .addLabeledComponent(JBLabel("Effort:"), claudeCodeEffortCombo)
+        .addLabeledComponent(JBLabel("Read timeout (sec):"), claudeCodeReadTimeoutField)
+        .addLabeledComponent(JBLabel("Start timeout (sec):"), claudeCodeStartTimeoutField)
+        .panel
+
+    private fun createCodexAgentPanel(): JPanel = FormBuilder.createFormBuilder()
+        .addLabeledComponent(JBLabel("Binary path:"), codexPathField)
+        .addLabeledComponent(JBLabel("Extra app-server args:"), codexExtraArgsField)
+        .addLabeledComponent(JBLabel("Model:"), codexModelField)
+        .addLabeledComponent(JBLabel("Reasoning effort:"), codexReasoningEffortField)
+        .addLabeledComponent(JBLabel("Read timeout (sec):"), codexReadTimeoutField)
+        .addLabeledComponent(JBLabel("Start timeout (sec):"), codexStartTimeoutField)
+        .panel
+
     private fun buildPanel(): JPanel {
         val temperaturePanel = JPanel(FlowLayout(FlowLayout.LEFT, 5, 0)).apply {
             add(temperatureSlider)
@@ -223,6 +247,14 @@ class MaxVibesSettingsPanel {
             add(ollamaPanel)
         }
 
+        claudeCodeAgentPanel = createClaudeCodeAgentPanel()
+        codexAgentPanel = createCodexAgentPanel()
+        val agentPanelsContainer = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            add(claudeCodeAgentPanel)
+            add(codexAgentPanel)
+        }
+
         return FormBuilder.createFormBuilder()
             .addLabeledComponent(JBLabel("LLM Provider:"), providerComboBox)
             .addComponent(providerPanelsContainer)
@@ -232,22 +264,7 @@ class MaxVibesSettingsPanel {
             .addSeparator()
             .addComponent(JBLabel("Coding Agent (CLI mode):"))
             .addLabeledComponent(JBLabel("Provider:"), codingAgentProviderCombo)
-            .addComponent(JBLabel("Claude Code:"))
-            .addLabeledComponent(JBLabel("Binary path:"), claudeCodePathField)
-            .addLabeledComponent(JBLabel("Extra CLI args:"), claudeCodeExtraArgsField)
-            .addLabeledComponent(JBLabel("Model:"), claudeCodeModelField)
-            .addLabeledComponent(JBLabel("Max output tokens:"), claudeCodeMaxOutputTokensField)
-            .addLabeledComponent(JBLabel("Thinking budget:"), claudeCodeThinkingBudgetField)
-            .addLabeledComponent(JBLabel("Effort:"), claudeCodeEffortCombo)
-            .addLabeledComponent(JBLabel("Read timeout (sec):"), claudeCodeReadTimeoutField)
-            .addLabeledComponent(JBLabel("Start timeout (sec):"), claudeCodeStartTimeoutField)
-            .addComponent(JBLabel("Codex:"))
-            .addLabeledComponent(JBLabel("Binary path:"), codexPathField)
-            .addLabeledComponent(JBLabel("Extra app-server args:"), codexExtraArgsField)
-            .addLabeledComponent(JBLabel("Model:"), codexModelField)
-            .addLabeledComponent(JBLabel("Reasoning effort:"), codexReasoningEffortField)
-            .addLabeledComponent(JBLabel("Read timeout (sec):"), codexReadTimeoutField)
-            .addLabeledComponent(JBLabel("Start timeout (sec):"), codexStartTimeoutField)
+            .addComponent(agentPanelsContainer)
             .addSeparator()
             .addComponent(mockFallbackCheckBox)
             .addComponent(testPanel)
@@ -260,6 +277,7 @@ class MaxVibesSettingsPanel {
             updateProviderPanels()
             updateModelComboBox()
         }
+        codingAgentProviderCombo.addActionListener { updateCodingAgentPanels() }
         temperatureSlider.addChangeListener {
             val temp = temperatureSlider.value / 100.0
             temperatureLabel.text = String.format("%.2f", temp)
@@ -283,6 +301,16 @@ class MaxVibesSettingsPanel {
         ollamaPanel.isVisible = providerKey == "OLLAMA"
     }
 
+    /**
+     * Hidden groups keep their values: a group is only invisible, never cleared,
+     * so switching agents cannot silently drop the other agent's binary path.
+     */
+    private fun updateCodingAgentPanels() {
+        val providerKey = getSelectedCodingAgentProviderKey()
+        claudeCodeAgentPanel.isVisible = providerKey == "CLAUDE_CODE"
+        codexAgentPanel.isVisible = providerKey == "CODEX"
+    }
+
     private fun updateModelComboBox() {
         val models = MaxVibesSettings.DEFAULT_MODELS[getSelectedProviderKey()] ?: emptyList()
         modelComboBox.removeAllItems()
@@ -299,6 +327,10 @@ class MaxVibesSettingsPanel {
         return if (index >= 0) MaxVibesSettings.PROVIDERS[index].first else "ANTHROPIC"
     }
 
+    private fun getSelectedCodingAgentProviderKey(): String =
+        MaxVibesSettings.CODING_AGENT_PROVIDERS
+            .getOrNull(codingAgentProviderCombo.selectedIndex)?.first ?: "CLAUDE_CODE"
+
     private fun getSelectedModelId(): String {
         if (customModelField.text.isNotBlank()) return customModelField.text.trim()
         val models = MaxVibesSettings.DEFAULT_MODELS[getSelectedProviderKey()] ?: emptyList()
@@ -314,13 +346,13 @@ class MaxVibesSettingsPanel {
                 val service = LLMServiceFactory.create(createCurrentConfig())
                 val info = service.getProviderInfo()
                 SwingUtilities.invokeLater {
-                    statusLabel.text = "✓ Connected: $info"
+                    statusLabel.text = "\u2713 Connected: $info"
                     statusLabel.foreground = java.awt.Color(0, 128, 0)
                     testConnectionButton.isEnabled = true
                 }
             } catch (e: Exception) {
                 SwingUtilities.invokeLater {
-                    statusLabel.text = "✗ Error: ${e.message?.take(50)}"
+                    statusLabel.text = "\u2717 Error: ${e.message?.take(50)}"
                     statusLabel.foreground = java.awt.Color(200, 0, 0)
                     testConnectionButton.isEnabled = true
                 }
@@ -384,6 +416,7 @@ class MaxVibesSettingsPanel {
         val codingAgentProviderIndex = MaxVibesSettings.CODING_AGENT_PROVIDERS
             .indexOfFirst { it.first == settings.codingAgentProvider }
         codingAgentProviderCombo.selectedIndex = codingAgentProviderIndex.coerceAtLeast(0)
+        updateCodingAgentPanels()
 
         claudeCodePathField.text = settings.claudeCodePath
         claudeCodeExtraArgsField.text = settings.claudeCodeExtraArgs
@@ -413,8 +446,7 @@ class MaxVibesSettingsPanel {
         settings.openAIApiKey = String(openAIKeyField.password)
         settings.anthropicApiKey = String(anthropicKeyField.password)
 
-        settings.codingAgentProvider = MaxVibesSettings.CODING_AGENT_PROVIDERS
-            .getOrNull(codingAgentProviderCombo.selectedIndex)?.first ?: "CLAUDE_CODE"
+        settings.codingAgentProvider = getSelectedCodingAgentProviderKey()
 
         settings.claudeCodePath = claudeCodePathField.text.trim().ifBlank { "claude" }
         settings.claudeCodeExtraArgs = claudeCodeExtraArgsField.text
@@ -445,8 +477,7 @@ class MaxVibesSettingsPanel {
     }
 
     fun isModified(settings: MaxVibesSettings): Boolean {
-        val selectedCodingAgentProvider = MaxVibesSettings.CODING_AGENT_PROVIDERS
-            .getOrNull(codingAgentProviderCombo.selectedIndex)?.first ?: "CLAUDE_CODE"
+        val selectedCodingAgentProvider = getSelectedCodingAgentProviderKey()
         val pathChanged = settings.claudeCodePath != claudeCodePathField.text.trim().ifBlank { "claude" }
         val argsChanged = settings.claudeCodeExtraArgs != claudeCodeExtraArgsField.text
         val claudeModelChanged = settings.claudeCodeModel != claudeCodeModelField.text.trim()

@@ -1,5 +1,6 @@
 package com.maxvibes.plugin.ui
 
+import com.maxvibes.domain.model.chat.CodingAgentProvider
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -8,6 +9,7 @@ import org.junit.jupiter.api.Test
 class ClaudeCliSettingsBinderTest {
 
     private class FakeSettings(
+        override var provider: CodingAgentProvider = CodingAgentProvider.CLAUDE_CODE,
         override var model: String = "",
         override var effortLevel: String = ""
     ) : ClaudeCliSettings
@@ -46,7 +48,7 @@ class ClaudeCliSettingsBinderTest {
         binder.commitModel("  sonnet  ")
 
         assertEquals("sonnet", settings.model)
-        assertEquals(listOf("CLI model: sonnet \u2014 applies on next send"), statuses)
+        assertEquals(listOf("Claude Code model: sonnet \u2014 applies on next send"), statuses)
     }
 
     @Test
@@ -56,7 +58,7 @@ class ClaudeCliSettingsBinderTest {
         binder.commitModel("AUTO")
 
         assertEquals("", settings.model)
-        assertEquals(listOf("CLI model: Auto \u2014 applies on next send"), statuses)
+        assertEquals(listOf("Claude Code model: Auto \u2014 applies on next send"), statuses)
     }
 
     @Test
@@ -134,7 +136,7 @@ class ClaudeCliSettingsBinderTest {
         binder.commitEffort("xhigh")
 
         assertEquals("xhigh", settings.effortLevel)
-        assertEquals(listOf("CLI effort: xhigh \u2014 applies on next send"), statuses)
+        assertEquals(listOf("Claude Code effort: xhigh \u2014 applies on next send"), statuses)
     }
 
     @Test
@@ -144,7 +146,7 @@ class ClaudeCliSettingsBinderTest {
         binder.commitEffort("Auto")
 
         assertEquals("", settings.effortLevel)
-        assertEquals(listOf("CLI effort: Auto \u2014 applies on next send"), statuses)
+        assertEquals(listOf("Claude Code effort: Auto \u2014 applies on next send"), statuses)
     }
 
     @Test
@@ -180,5 +182,24 @@ class ClaudeCliSettingsBinderTest {
         binder.syncModel { binder.commitEffort("high") }
 
         assertEquals("high", settings.effortLevel)
+    }
+
+    @Test
+    fun `the status names the selected agent`() {
+        settings.provider = CodingAgentProvider.CODEX
+
+        binder.commitModel("gpt-5.6-sol")
+
+        assertEquals(listOf("Codex model: gpt-5.6-sol \u2014 applies on next send"), statuses)
+    }
+
+    @Test
+    fun `capabilities follow the selected provider`() {
+        assertEquals("Claude Code", binder.capabilities.displayName)
+
+        settings.provider = CodingAgentProvider.CODEX
+
+        assertEquals("Codex", binder.capabilities.displayName)
+        assertTrue(binder.capabilities.reasoningLevels.contains("minimal"))
     }
 }

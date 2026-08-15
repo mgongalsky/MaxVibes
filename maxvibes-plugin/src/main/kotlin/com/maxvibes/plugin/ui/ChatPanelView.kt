@@ -20,6 +20,7 @@ import javax.swing.BoxLayout
 import javax.swing.JButton
 import javax.swing.JPanel
 import javax.swing.SwingConstants
+import com.maxvibes.domain.model.chat.CodingAgentProvider
 
 data class ChatPanelViewActions(
     val onNavigateToPath: (String) -> String,
@@ -32,6 +33,7 @@ data class ChatPanelViewActions(
     val onTogglePlanStep: (String, PlanStepStatus) -> Unit,
     val onOpenPlanDoc: (String) -> Unit,
     val onModeSelected: (InteractionMode) -> Unit,
+    val onAgentSelected: (CodingAgentProvider) -> Unit,
     val onIndicatorAction: (IndicatorAction) -> Unit,
     val onOpenCcLog: () -> Unit,
     val onShowSessions: () -> Unit,
@@ -83,7 +85,8 @@ class ChatPanelView(
     )
     internal val claudeCliSettingsPanel = ClaudeCliSettingsPanel(
         settings = claudeCliSettings,
-        onStatus = ::setStatus
+        onStatus = ::setStatus,
+        onAgentChanged = actions.onAgentSelected
     )
     internal val liveTurnPanel = LiveTurnPanel(
         onStop = actions.onStop,
@@ -193,10 +196,12 @@ class ChatPanelView(
     }
 
     fun onUsage(usage: SubscriptionUsage) {
+        if (!usageSupported) return
         limitsBar.onUsage(usage)
     }
 
     fun onRateLimit(event: AgentStreamEvent.RateLimitUpdate) {
+        if (!usageSupported) return
         limitsBar.onRateLimit(event)
     }
 
@@ -252,5 +257,12 @@ class ChatPanelView(
             add(inputPanel, BorderLayout.CENTER)
             add(statusBar, BorderLayout.SOUTH)
         }, BorderLayout.SOUTH)
+    }
+
+    /** False for agents without a subscription-usage API; keeps stale numbers off the screen. */
+    private var usageSupported = true
+    fun setUsageSupported(supported: Boolean) {
+        usageSupported = supported
+        if (!supported) limitsBar.isVisible = false
     }
 }

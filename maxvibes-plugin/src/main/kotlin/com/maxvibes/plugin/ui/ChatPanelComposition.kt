@@ -15,6 +15,9 @@ import com.intellij.openapi.options.ShowSettingsUtil
 import com.maxvibes.plugin.settings.MaxVibesSettingsConfigurable
 import com.maxvibes.plugin.settings.VoiceTranscriptionSettings
 import com.maxvibes.plugin.voice.VoiceInputCoordinator
+import com.maxvibes.domain.model.chat.CodingAgentProvider
+import com.maxvibes.domain.model.interaction.CodingAgentCapabilities
+import com.maxvibes.plugin.service.MaxVibesLogger
 
 /**
  * Composition root behind the thin [ChatPanel] facade.
@@ -36,19 +39,7 @@ class ChatPanelComposition(
 
     val view = ChatPanelView(
         project = project,
-        claudeCliSettings = object : ClaudeCliSettings {
-            override var model: String
-                get() = settings.claudeCodeModel
-                set(value) {
-                    settings.claudeCodeModel = value
-                }
-
-            override var effortLevel: String
-                get() = settings.claudeCodeEffortLevel
-                set(value) {
-                    settings.claudeCodeEffortLevel = value
-                }
-        },
+        claudeCliSettings = AgentCliSettingsAdapter(settings),
         actions = ChatPanelViewActions(
             onNavigateToPath = { ChatNavigationHelper.navigateToElement(project, it) },
             onSelectPrompt = { messageController.selectSpecificPrompt(it) },
@@ -70,6 +61,7 @@ class ChatPanelComposition(
             },
             onOpenPlanDoc = { environmentActions.openPlanDoc(it) },
             onModeSelected = { modeCoordinator.handleSelection(it) },
+            onAgentSelected = ::switchAgent,
             onIndicatorAction = { modeCoordinator.handleIndicatorAction(it) },
             onOpenCcLog = { environmentActions.openClaudeCodeLog() },
             onShowSessions = onShowSessions,
@@ -209,17 +201,13 @@ class ChatPanelComposition(
     }
 
     private val runtimeCoordinator: ChatRuntimeCoordinator by lazy {
-        val usagePoller = SubscriptionUsagePoller(
-            port = ClaudeOAuthUsageAdapter(),
-            onUsage = view::onUsage
-        )
         ChatRuntimeCoordinator(
             streamHub = service.agentStreamHub,
             activeSessionId = { chatTreeService.getActiveSession().id },
             onActiveEvent = view::onLiveEvent,
             onRateLimit = view::onRateLimit,
-            startUsagePolling = usagePoller::start,
-            stopUsagePolling = usagePoller::stop
+            startUsagePolling = ::refreshUsagePolling,
+            stopUsagePolling = ::stopUsagePolling
         )
     }
 
@@ -330,5 +318,54 @@ class ChatPanelComposition(
     override fun dispose() {
         runCatching { runtimeCoordinator.dispose() }
         runCatching { view.disposeView() }
+    }
+
+    /**
+     * The remote session reference is provider-specific, so a resume id from the previous
+     * agent must not survive the switch — the next turn starts a fresh agent session.
+     */
+    private fun switchAgent(provider: CodingAgentProvider) {
+        MaxVibesLogger.info(
+            "ChatPanelComposition",
+            "agent switch requested",
+            mapOf(
+                "chosen" to provider.name,
+                "persisted" to settings.codingAgentProvider
+            )
+        )
+        service.abortClaudeCode()
+        val session = chatTreeService.getActiveSession()
+        chatTreeService.saveSession(
+            session.copy(agentCliSession = null, claudeCodeSessionId = null)
+        )
+        refreshUsagePolling()
+        val name = CodingAgentCapabilities.of(provider).displayName
+        view.addSystemBubble("Coding agent switched to $name — the next message starts a fresh agent session.")
+        render()
+    }
+    private var usagePoller: SubscriptionUsagePoller? = null
+
+    /**
+     * [SubscriptionUsagePoller.stop] is terminal, so an unsupported agent drops the instance
+     * entirely and a supported one always gets a freshly started poller.
+     */
+    private fun refreshUsagePolling() {
+        val provider = AgentCliSettingsAdapter(settings).provider
+        val supported = CodingAgentCapabilities.of(provider).supportsSubscriptionUsage
+        view.setUsageSupported(supported)
+        if (!supported) {
+            stopUsagePolling()
+            return
+        }
+        if (usagePoller == null) {
+            usagePoller = SubscriptionUsagePoller(
+                port = ClaudeOAuthUsageAdapter(),
+                onUsage = view::onUsage
+            ).also { it.start() }
+        }
+    }
+    private fun stopUsagePolling() {
+        usagePoller?.stop()
+        usagePoller = null
     }
 }
