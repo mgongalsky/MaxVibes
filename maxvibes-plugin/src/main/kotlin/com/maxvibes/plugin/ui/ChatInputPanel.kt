@@ -11,6 +11,7 @@ import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextArea
 import com.intellij.util.ui.JBUI
 import com.maxvibes.domain.model.interaction.AttachedImage
+import com.maxvibes.plugin.voice.VoiceInputState
 import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Cursor
@@ -31,7 +32,6 @@ import javax.swing.JPanel
 import javax.swing.KeyStroke
 import javax.swing.ScrollPaneConstants
 
-/** One send request read off the input row. */
 data class InputSubmission(
     val text: String,
     val planOnly: Boolean,
@@ -39,14 +39,7 @@ data class InputSubmission(
     val addHistory: Boolean
 )
 
-/**
- * Bottom region of the chat tool window: the attachment bar (trace, IDE errors, image
- * previews, one-shot skill chip), the message field and the send row, wrapped around the
- * prompt and usage strips it is handed.
- *
- * Owns its widgets, layout and listeners; every decision leaves through the constructor
- * callbacks. Holds no project or service reference.
- */
+/** Bottom chat input region. Owns widgets and delegates all decisions through callbacks. */
 class ChatInputPanel(
     private val promptBar: JComponent,
     private val usageBar: JComponent,
@@ -61,18 +54,20 @@ class ChatInputPanel(
     private val onClearImages: () -> Unit,
     private val onClearOneShot: () -> Unit
 ) : JPanel(BorderLayout(5, 4)) {
-
     private val inputArea = JBTextArea(3, 40).apply {
-        lineWrap = true; wrapStyleWord = true; border = JBUI.Borders.empty(8)
+        lineWrap = true
+        wrapStyleWord = true
+        border = JBUI.Borders.empty(8)
     }
+    private val sendButton = JButton("Send").apply {
+        toolTipText = "Send message (Ctrl+Enter)"
+    }
+    private val voiceButton = JButton("🎙").apply {
+        toolTipText = "Start voice input"
+        preferredSize = Dimension(42, 26)
+    }
+    private var onVoiceToggle: () -> Unit = {}
 
-    private val sendButton = JButton("Send").apply { toolTipText = "Send message (Ctrl+Enter)" }
-
-    /**
-     * Visible only in Claude Code mode while the session awaits approval. The amber
-     * highlight goes through client properties because Darcula's ButtonUI ignores a plain
-     * `background`; JBColor adapts light/dark.
-     */
     private val approveButton = JButton("\u2705 Approve").apply {
         toolTipText = "Approve & gather requested files (Claude Code)"
         isVisible = false
@@ -80,26 +75,20 @@ class ChatInputPanel(
         putClientProperty("JButton.backgroundColor", JBColor(Color(0xF5C518), Color(0xD4AC0D)))
         putClientProperty("JButton.borderColor", JBColor(Color(0xC9A227), Color(0x9A7D0A)))
     }
-
     private val dryRunCheckbox = JBCheckBox("Dry run").apply {
         toolTipText = "Show plan without applying changes"
     }
-    private val planOnlyCheckbox = JBCheckBox("\uD83D\uDCAC Plan").apply { toolTipText = "Plan-only mode" }
-
-    /**
-     * When checked, the list of previously gathered file paths rides along with the next
-     * Clipboard request (paths only, no content) so a fresh LLM chat knows what was already
-     * in context. Visible only in Clipboard mode; resets after each send.
-     */
+    private val planOnlyCheckbox = JBCheckBox("\uD83D\uDCAC Plan").apply {
+        toolTipText = "Plan-only mode"
+    }
     private val addHistoryCheckbox = JBCheckBox("Add History").apply {
         toolTipText = "Share gathered file list with LLM (use when starting a new LLM chat)"
         isVisible = false
     }
-
     private val copyJsonButton = JButton("\uD83D\uDCCB Copy JSON").apply {
-        toolTipText = "Re-copy last generated JSON"; isVisible = false
+        toolTipText = "Re-copy last generated JSON"
+        isVisible = false
     }
-
     private val attachErrorsButton = JButton("\uD83D\uDC1E Errors").apply {
         toolTipText = "Attach IDE errors from open files"
         font = font.deriveFont(11f)
@@ -112,9 +101,10 @@ class ChatInputPanel(
     }
     private val clearErrorsButton = JButton("\u2715").apply {
         toolTipText = "Remove attached errors"
-        font = font.deriveFont(9f); preferredSize = Dimension(20, 20); isVisible = false
+        font = font.deriveFont(9f)
+        preferredSize = Dimension(20, 20)
+        isVisible = false
     }
-
     private val attachTraceButton = JButton("\uD83D\uDCCE Trace").apply {
         toolTipText = "Paste error/stacktrace/logs (Ctrl+Shift+V)"
         font = font.deriveFont(11f)
@@ -127,26 +117,25 @@ class ChatInputPanel(
     }
     private val clearTraceButton = JButton("\u2715").apply {
         toolTipText = "Remove attached trace"
-        font = font.deriveFont(9f); preferredSize = Dimension(20, 20); isVisible = false
+        font = font.deriveFont(9f)
+        preferredSize = Dimension(20, 20)
+        isVisible = false
     }
-
-    /** One-shot editor-skill chip. */
     private val oneShotChip = JBLabel("").apply {
         foreground = JBColor(Color(0x7B1FA2), Color(0xBA68C8))
         font = font.deriveFont(Font.BOLD, 11f)
         isVisible = false
     }
-
     private val clearOneShotButton = JButton("\u2715").apply {
         toolTipText = "Cancel one-shot skill"
-        font = font.deriveFont(9f); preferredSize = Dimension(20, 20); isVisible = false
+        font = font.deriveFont(9f)
+        preferredSize = Dimension(20, 20)
+        isVisible = false
     }
-
     private val attachmentsPanel = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
         background = JBColor.background()
         isVisible = false
     }
-
     private val traceBar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
         background = JBColor.background()
         border = JBUI.Borders.empty(2, 8, 0, 8)
@@ -160,8 +149,6 @@ class ChatInputPanel(
 
     private var hasImages = false
     private var oneShotArmed = false
-
-    /** Bar visibility as decided by [AttachmentIndicators]; the one-shot chip is ORed on top. */
     private var attachmentsRequireBar = false
 
     init {
@@ -177,8 +164,6 @@ class ChatInputPanel(
 
     private fun buildTextArea(): JPanel = JPanel(BorderLayout()).apply {
         border = JBUI.Borders.customLine(JBColor.border(), 1)
-        // Viewport wrapper: without it JBTextArea grows unbounded with content, the row
-        // below clips, and caret navigation above the fold misbehaves.
         add(JBScrollPane(inputArea).apply {
             border = JBUI.Borders.empty()
             preferredSize = Dimension(10, 96)
@@ -199,6 +184,7 @@ class ChatInputPanel(
             add(dryRunCheckbox)
             add(copyJsonButton)
             add(approveButton)
+            add(voiceButton)
             add(sendButton)
         }, BorderLayout.CENTER)
         add(usageBar, BorderLayout.SOUTH)
@@ -213,6 +199,7 @@ class ChatInputPanel(
         attachErrorsButton.addActionListener { onAttachErrors() }
         clearErrorsButton.addActionListener { onClearErrors() }
         clearOneShotButton.addActionListener { onClearOneShot() }
+        voiceButton.addActionListener { onVoiceToggle() }
 
         inputArea.addKeyListener(object : KeyAdapter() {
             override fun keyPressed(e: KeyEvent) {
@@ -226,13 +213,13 @@ class ChatInputPanel(
             }
         })
 
-        runCatching {
-            ActionManager.getInstance().getAction(IdeActions.ACTION_PASTE)
-        }.getOrNull()?.let { pasteAction ->
-            object : DumbAwareAction() {
-                override fun actionPerformed(e: AnActionEvent) = pasteImageOrText()
-            }.registerCustomShortcutSet(pasteAction.shortcutSet, inputArea)
-        }
+        runCatching { ActionManager.getInstance().getAction(IdeActions.ACTION_PASTE) }
+            .getOrNull()
+            ?.let { pasteAction ->
+                object : DumbAwareAction() {
+                    override fun actionPerformed(e: AnActionEvent) = pasteImageOrText()
+                }.registerCustomShortcutSet(pasteAction.shortcutSet, inputArea)
+            }
 
         inputArea.actionMap.put("maxvibes-paste", object : AbstractAction() {
             override fun actionPerformed(e: ActionEvent) = pasteImageOrText()
@@ -241,16 +228,54 @@ class ChatInputPanel(
         inputArea.inputMap.put(KeyStroke.getKeyStroke("shift INSERT"), "maxvibes-paste")
     }
 
-    /** A clipboard image becomes an attachment; anything else pastes as plain text. */
     private fun pasteImageOrText() {
         val image = ImageAttachments.fromClipboard()
         if (image != null) onImagePasted(image) else inputArea.paste()
     }
 
-    /**
-     * Reads the send request and resets the field plus the one-shot Add History flag.
-     * Returns null for a blank field, in which case nothing is reset.
-     */
+    fun setVoiceToggleAction(action: () -> Unit) {
+        onVoiceToggle = action
+    }
+
+    fun setVoiceState(state: VoiceInputState) {
+        when (state) {
+            VoiceInputState.IDLE -> {
+                voiceButton.text = "🎙"
+                voiceButton.toolTipText = "Start voice input"
+                voiceButton.isEnabled = true
+            }
+
+            VoiceInputState.STARTING -> {
+                voiceButton.text = "…"
+                voiceButton.toolTipText = "Opening microphone"
+                voiceButton.isEnabled = false
+            }
+
+            VoiceInputState.RECORDING -> {
+                voiceButton.text = "■"
+                voiceButton.toolTipText = "Stop and transcribe"
+                voiceButton.isEnabled = true
+            }
+
+            VoiceInputState.TRANSCRIBING -> {
+                voiceButton.text = "…"
+                voiceButton.toolTipText = "Transcribing voice"
+                voiceButton.isEnabled = false
+            }
+        }
+    }
+
+    fun insertTranscript(transcript: String) {
+        val normalized = transcript.trim()
+        if (normalized.isEmpty()) return
+        val position = inputArea.caretPosition.coerceIn(0, inputArea.text.length)
+        val prefix = if (position > 0 && !inputArea.text[position - 1].isWhitespace()) " " else ""
+        val suffix = if (position < inputArea.text.length && !inputArea.text[position].isWhitespace()) " " else ""
+        inputArea.insert(prefix + normalized + suffix, position)
+        inputArea.caretPosition = position + prefix.length + normalized.length
+        inputArea.requestFocusInWindow()
+    }
+
     fun takeSubmission(): InputSubmission? {
         val text = inputArea.text.trim()
         if (text.isBlank()) return null
@@ -269,7 +294,6 @@ class ChatInputPanel(
         inputArea.text = text
     }
 
-    /** Fills or appends the field and focuses it. Does not send. */
     fun prefill(text: String, append: Boolean) {
         if (append && inputArea.text.isNotBlank()) {
             inputArea.text = inputArea.text.trimEnd() + " " + text
@@ -284,7 +308,6 @@ class ChatInputPanel(
         planOnlyCheckbox.isSelected = enabled
     }
 
-    /** Applies the send-row part of a [ModeUiPolicy] decision. */
     fun applyModeDecision(decision: ModeUiDecision) {
         sendButton.text = decision.sendButtonText
         dryRunCheckbox.isVisible = decision.dryRunVisible
@@ -292,7 +315,6 @@ class ChatInputPanel(
         addHistoryCheckbox.isVisible = decision.addHistoryVisible
     }
 
-    /** While approval is pending the only way forward is Approve or a new chat. */
     fun applyApproveState(approveVisible: Boolean) {
         approveButton.isVisible = approveVisible
         if (approveVisible) {
@@ -305,15 +327,12 @@ class ChatInputPanel(
 
     fun updateIndicators(trace: String?, errors: String?) {
         val state = AttachmentIndicators.describe(trace, errors, hasImages)
-
         traceIndicator.isVisible = state.traceVisible
         clearTraceButton.isVisible = state.traceVisible
         state.traceText?.let { traceIndicator.text = it }
-
         errorsIndicator.isVisible = state.errorsVisible
         clearErrorsButton.isVisible = state.errorsVisible
         state.errorsText?.let { errorsIndicator.text = it }
-
         attachmentsRequireBar = state.barVisible
         refreshBar()
     }
@@ -352,7 +371,6 @@ class ChatInputPanel(
         val clearListener = object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) = onClearImages()
         }
-
         val previewIcon = runCatching {
             val bytes = java.util.Base64.getDecoder().decode(image.base64Data)
             val buffered = javax.imageio.ImageIO.read(java.io.ByteArrayInputStream(bytes))
@@ -369,13 +387,11 @@ class ChatInputPanel(
             )
             cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
             toolTipText = "Attached image ${index + 1} \u2014 click to remove"
-
             val previewLabel = if (previewIcon != null) JBLabel(previewIcon) else JBLabel("\uD83D\uDDBC")
             val indexLabel = JBLabel("#${index + 1}").apply {
                 foreground = JBColor.GRAY
                 font = font.deriveFont(10f)
             }
-
             add(previewLabel)
             add(indexLabel)
             addMouseListener(clearListener)
@@ -388,7 +404,7 @@ class ChatInputPanel(
         listOf<JComponent>(
             inputArea, sendButton, approveButton, dryRunCheckbox, planOnlyCheckbox,
             addHistoryCheckbox, copyJsonButton, attachTraceButton, clearTraceButton,
-            attachErrorsButton, clearErrorsButton
+            attachErrorsButton, clearErrorsButton, voiceButton
         ).forEach { it.isEnabled = enabled }
     }
 }

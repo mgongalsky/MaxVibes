@@ -6,11 +6,11 @@ import com.intellij.credentialStore.generateServiceName
 import com.intellij.ide.passwordSafe.PasswordSafe
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.PersistentStateComponent
+import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
 import com.intellij.util.xmlb.XmlSerializerUtil
 
-/** Persisted, non-secret configuration for the OpenAI-compatible transcription endpoint. */
 data class VoiceTranscriptionConfiguration(
     val endpoint: String = VoiceTranscriptionSettings.DEFAULT_ENDPOINT,
     val model: String = VoiceTranscriptionSettings.DEFAULT_MODEL,
@@ -31,6 +31,7 @@ data class VoiceTranscriptionConfiguration(
  * Application-level voice settings. The API key lives in PasswordSafe; only endpoint,
  * model, language and glossary are serialized to maxvibes-voice.xml.
  */
+@Service(Service.Level.APP)
 @State(
     name = "MaxVibesVoiceTranscriptionSettings",
     storages = [Storage("maxvibes-voice.xml")]

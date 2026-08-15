@@ -1,5 +1,6 @@
 package com.maxvibes.plugin.ui
 
+import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.project.Project
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
@@ -10,6 +11,9 @@ import com.maxvibes.domain.model.chat.ChatSession
 import com.maxvibes.domain.model.interaction.AttachedImage
 import com.maxvibes.domain.model.interaction.InteractionMode
 import com.maxvibes.domain.model.planning.PlanStepStatus
+import com.maxvibes.plugin.settings.MaxVibesSettingsConfigurable
+import com.maxvibes.plugin.settings.VoiceTranscriptionSettings
+import com.maxvibes.plugin.voice.VoiceInputCoordinator
 import java.awt.BorderLayout
 import java.awt.FlowLayout
 import javax.swing.BoxLayout
@@ -17,7 +21,6 @@ import javax.swing.JButton
 import javax.swing.JPanel
 import javax.swing.SwingConstants
 
-/** All user actions emitted by [ChatPanelView]. */
 data class ChatPanelViewActions(
     val onNavigateToPath: (String) -> String,
     val onSelectPrompt: (String?) -> Unit,
@@ -54,18 +57,12 @@ data class ChatPanelViewActions(
     val onClearOneShot: () -> Unit
 )
 
-/**
- * Swing surface of the chat tool window.
- *
- * Owns all child panels, layout and rendering. Application orchestration enters only
- * through [ChatPanelViewActions]; no service or controller is retained here.
- */
+/** Swing surface of the chat tool window. */
 class ChatPanelView(
     project: Project,
     claudeCliSettings: ClaudeCliSettings,
     actions: ChatPanelViewActions
 ) : JPanel(BorderLayout()) {
-
     private val statusLabel = JBLabel("Ready").apply { foreground = JBColor.GRAY }
     private val tokenLabel = JBLabel("").apply {
         foreground = JBColor.GRAY
@@ -76,9 +73,7 @@ class ChatPanelView(
     internal val conversationPanel = ConversationPanel(project) { path ->
         setStatus(actions.onNavigateToPath(path))
     }
-
     internal val limitsBar = LimitsBarPanel()
-
     internal val specificPromptPanel = SpecificPromptPanel(
         onSelectPrompt = actions.onSelectPrompt,
         onCreatePrompt = actions.onCreatePrompt,
@@ -86,12 +81,10 @@ class ChatPanelView(
         onDeletePrompt = actions.onDeletePrompt,
         onManagePrompts = actions.onManagePrompts
     )
-
     internal val claudeCliSettingsPanel = ClaudeCliSettingsPanel(
         settings = claudeCliSettings,
         onStatus = ::setStatus
     )
-
     internal val liveTurnPanel = LiveTurnPanel(
         onStop = actions.onStop,
         onPartialFlush = { partial, reason ->
@@ -99,12 +92,10 @@ class ChatPanelView(
             if (partial.isNotBlank()) conversationPanel.addAssistantBubble(partial)
         }
     )
-
     internal val planPanel = PlanPanel(
         onToggleStep = actions.onTogglePlanStep,
         onOpenDoc = actions.onOpenPlanDoc
     )
-
     internal val headerPanel = ChatHeaderPanel(
         onModeSelected = actions.onModeSelected,
         onIndicatorAction = actions.onIndicatorAction,
@@ -121,7 +112,6 @@ class ChatPanelView(
         onSelectSession = actions.onSelectSession,
         onRenameSession = actions.onRenameSession
     )
-
     internal val inputPanel = ChatInputPanel(
         promptBar = buildPromptPanel(),
         usageBar = limitsBar,
@@ -136,20 +126,31 @@ class ChatPanelView(
         onClearImages = actions.onClearImages,
         onClearOneShot = actions.onClearOneShot
     )
+    private val voiceCoordinator = VoiceInputCoordinator(
+        projectName = project.name,
+        configuration = { VoiceTranscriptionSettings.getInstance().configuration() },
+        openSettings = {
+            ShowSettingsUtil.getInstance().showSettingsDialog(
+                project,
+                MaxVibesSettingsConfigurable::class.java
+            )
+        },
+        onState = inputPanel::setVoiceState,
+        onTranscript = inputPanel::insertTranscript,
+        onStatus = ::setStatus
+    )
 
-    val transcriptView: SessionTranscriptView =
-        ConversationPanelTranscriptView(conversationPanel)
+    val transcriptView: SessionTranscriptView = ConversationPanelTranscriptView(conversationPanel)
 
     init {
+        inputPanel.setVoiceToggleAction { voiceCoordinator.toggle() }
         setupUI()
     }
 
     fun render(state: ChatPanelState) {
         headerPanel.updateBreadcrumb(state.sessionPath)
         planPanel.update(state.plan)
-        claudeCliSettingsPanel.setClaudeCodeVisible(
-            state.mode == InteractionMode.CLAUDE_CODE
-        )
+        claudeCliSettingsPanel.setClaudeCodeVisible(state.mode == InteractionMode.CLAUDE_CODE)
         inputPanel.updateIndicators(state.attachedTrace, state.attachedErrors)
         tokenLabel.text = state.currentSession?.tokenUsage?.formatDisplay().orEmpty()
         headerPanel.updateContextCount(state.contextFilesCount)
@@ -208,6 +209,7 @@ class ChatPanelView(
     }
 
     fun disposeView() {
+        voiceCoordinator.close()
         liveTurnPanel.dispose()
     }
 
@@ -221,7 +223,6 @@ class ChatPanelView(
     private fun setupUI() {
         border = JBUI.Borders.empty()
         background = JBColor.background()
-
         val statusBar = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             border = JBUI.Borders.empty(2, 10, 2, 10)
@@ -232,24 +233,19 @@ class ChatPanelView(
             })
             add(JPanel(BorderLayout()).apply {
                 background = JBColor.background()
-                add(tokenLabel.apply {
-                    horizontalAlignment = SwingConstants.LEFT
-                }, BorderLayout.WEST)
+                add(tokenLabel.apply { horizontalAlignment = SwingConstants.LEFT }, BorderLayout.WEST)
             })
         }
-
         val conversationWithPlan = JPanel(BorderLayout()).apply {
             background = JBColor.background()
             add(planPanel, BorderLayout.NORTH)
             add(conversationPanel, BorderLayout.CENTER)
         }
-
         val conversationSplitter = com.intellij.ui.OnePixelSplitter(true, 0.72f).apply {
             firstComponent = conversationWithPlan
             secondComponent = liveTurnPanel
             setAndLoadSplitterProportionKey("MaxVibes.liveTurnSplitterProportion")
         }
-
         add(headerPanel, BorderLayout.NORTH)
         add(conversationSplitter, BorderLayout.CENTER)
         add(JPanel(BorderLayout()).apply {

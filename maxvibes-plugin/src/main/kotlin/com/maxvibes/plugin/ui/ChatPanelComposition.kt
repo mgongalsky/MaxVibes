@@ -11,6 +11,10 @@ import com.maxvibes.plugin.service.MaxVibesService
 import com.maxvibes.plugin.settings.MaxVibesSettings
 import javax.swing.JComponent
 import javax.swing.JOptionPane
+import com.intellij.openapi.options.ShowSettingsUtil
+import com.maxvibes.plugin.settings.MaxVibesSettingsConfigurable
+import com.maxvibes.plugin.settings.VoiceTranscriptionSettings
+import com.maxvibes.plugin.voice.VoiceInputCoordinator
 
 /**
  * Composition root behind the thin [ChatPanel] facade.

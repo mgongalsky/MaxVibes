@@ -24,68 +24,78 @@ class OpenAiCompatibleTranscriptionAdapterTest {
     }
 
     @Test
-    fun `sends authenticated multipart request and parses transcript`() = runBlocking {
-        val capturedAuthorization = AtomicReference<String>()
-        val capturedContentType = AtomicReference<String>()
-        val capturedBody = AtomicReference<String>()
-        val endpoint = startServer { exchange ->
-            capturedAuthorization.set(exchange.requestHeaders.getFirst("Authorization"))
-            capturedContentType.set(exchange.requestHeaders.getFirst("Content-Type"))
-            capturedBody.set(exchange.requestBody.readBytes().toString(Charsets.ISO_8859_1))
-            respond(exchange, 200, "{\"text\":\"  Привет, Kotlin  \"}")
+    fun sendsAuthenticatedMultipartRequestAndParsesTranscript() {
+        runBlocking {
+            val capturedAuthorization = AtomicReference<String>()
+            val capturedContentType = AtomicReference<String>()
+            val capturedBody = AtomicReference<String>()
+            val endpoint = startServer { exchange ->
+                capturedAuthorization.set(exchange.requestHeaders.getFirst("Authorization"))
+                capturedContentType.set(exchange.requestHeaders.getFirst("Content-Type"))
+                capturedBody.set(exchange.requestBody.readBytes().toString(Charsets.ISO_8859_1))
+                respond(exchange, 200, "{\"text\":\"  Привет, Kotlin  \"}")
+            }
+
+            val result = OpenAiCompatibleTranscriptionAdapter(endpoint, "voice-secret").transcribe(
+                request(prompt = "MaxVibes, Kotlin", language = "ru")
+            )
+
+            assertEquals(Result.Success(VoiceTranscript("Привет, Kotlin")), result)
+            assertEquals("Bearer voice-secret", capturedAuthorization.get())
+            assertTrue(capturedContentType.get().startsWith("multipart/form-data; boundary="))
+            val body = capturedBody.get()
+            assertTrue(body.contains("name=\"model\"\r\n\r\nwhisper-1"))
+            assertTrue(body.contains("name=\"language\"\r\n\r\nru"))
+            assertTrue(body.contains("name=\"prompt\"\r\n\r\nMaxVibes, Kotlin"))
+            assertTrue(body.contains("name=\"file\"; filename=\"recording.wav\""))
+            assertTrue(body.contains("Content-Type: audio/wav"))
         }
-
-        val result = OpenAiCompatibleTranscriptionAdapter(endpoint, "voice-secret").transcribe(
-            request(prompt = "MaxVibes, Kotlin", language = "ru")
-        )
-
-        assertEquals(Result.Success(VoiceTranscript("Привет, Kotlin")), result)
-        assertEquals("Bearer voice-secret", capturedAuthorization.get())
-        assertTrue(capturedContentType.get().startsWith("multipart/form-data; boundary="))
-        val body = capturedBody.get()
-        assertTrue(body.contains("name=\"model\"\r\n\r\nwhisper-1"))
-        assertTrue(body.contains("name=\"language\"\r\n\r\nru"))
-        assertTrue(body.contains("name=\"prompt\"\r\n\r\nMaxVibes, Kotlin"))
-        assertTrue(body.contains("name=\"file\"; filename=\"recording.wav\""))
-        assertTrue(body.contains("Content-Type: audio/wav"))
     }
 
     @Test
-    fun `maps authentication failure`() = runBlocking {
-        val endpoint = startServer { respond(it, 401, "unauthorized") }
+    fun mapsAuthenticationFailure() {
+        runBlocking {
+            val endpoint = startServer { respond(it, 401, "unauthorized") }
 
-        val result = OpenAiCompatibleTranscriptionAdapter(endpoint, "bad-key")
-            .transcribe(request())
+            val result = OpenAiCompatibleTranscriptionAdapter(endpoint, "bad-key")
+                .transcribe(request())
 
-        assertIs<Result.Failure<VoiceTranscriptionError.Authentication>>(result)
+            assertIs<Result.Failure<VoiceTranscriptionError.Authentication>>(result)
+        }
     }
 
     @Test
-    fun `maps rate limit failure`() = runBlocking {
-        val endpoint = startServer { respond(it, 429, "slow down") }
+    fun mapsRateLimitFailure() {
+        runBlocking {
+            val endpoint = startServer { respond(it, 429, "slow down") }
 
-        val result = OpenAiCompatibleTranscriptionAdapter(endpoint, "key")
-            .transcribe(request())
+            val result = OpenAiCompatibleTranscriptionAdapter(endpoint, "key")
+                .transcribe(request())
 
-        assertIs<Result.Failure<VoiceTranscriptionError.RateLimit>>(result)
+            assertIs<Result.Failure<VoiceTranscriptionError.RateLimit>>(result)
+        }
     }
 
     @Test
-    fun `rejects successful response without text`() = runBlocking {
-        val endpoint = startServer { respond(it, 200, "{\"duration\":1}") }
+    fun rejectsSuccessfulResponseWithoutText() {
+        runBlocking {
+            val endpoint = startServer { respond(it, 200, "{\"duration\":1}") }
 
-        val result = OpenAiCompatibleTranscriptionAdapter(endpoint, "key")
-            .transcribe(request())
+            val result = OpenAiCompatibleTranscriptionAdapter(endpoint, "key")
+                .transcribe(request())
 
-        assertIs<Result.Failure<VoiceTranscriptionError.InvalidResponse>>(result)
+            assertIs<Result.Failure<VoiceTranscriptionError.InvalidResponse>>(result)
+        }
     }
 
     @Test
-    fun `rejects missing adapter configuration without network call`() = runBlocking {
-        val result = OpenAiCompatibleTranscriptionAdapter("", "")
-            .transcribe(request())
+    fun rejectsMissingAdapterConfigurationWithoutNetworkCall() {
+        runBlocking {
+            val result = OpenAiCompatibleTranscriptionAdapter("", "")
+                .transcribe(request())
 
-        assertIs<Result.Failure<VoiceTranscriptionError.InvalidRequest>>(result)
+            assertIs<Result.Failure<VoiceTranscriptionError.InvalidRequest>>(result)
+        }
     }
 
     private fun request(
