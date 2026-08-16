@@ -334,6 +334,10 @@ class MaxVibesService(private val project: Project) : Disposable {
             CodingAgentProvider.CODEX -> codexInteractionServiceLazy.value
         }
 
+    /** Display name of the coding agent [claudeCodeService] will actually talk to. */
+    val activeCodingAgentName: String
+        get() = selectedCodingAgentProvider().displayName
+
     /**
      * Live-stream hub for the Claude Code mode: the adapter emits AgentStreamEvents
      * into it (as AgentStreamSink), the UI subscribes via addListener (Set 2).

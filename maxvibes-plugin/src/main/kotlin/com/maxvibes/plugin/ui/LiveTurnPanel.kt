@@ -83,7 +83,7 @@ class LiveTurnPanel(
         font = font.deriveFont(Font.BOLD, 11f)
         foreground = JBColor(Color(0x2196F3), Color(0x64B5F6))
     }
-    private val stalledLabel = JBLabel("\u26A0 stalled - see CC log").apply {
+    private val stalledLabel = JBLabel("\u26A0 stalled - see agent log").apply {
         font = font.deriveFont(Font.BOLD, 11f)
         foreground = JBColor(Color(0xB7950B), Color(0xF4D03F))
         border = JBUI.Borders.emptyLeft(8)
@@ -92,7 +92,7 @@ class LiveTurnPanel(
     private val stopButton = JButton("\u25A0 Stop").apply {
         font = font.deriveFont(11f)
         isFocusPainted = false
-        toolTipText = "Kill the Claude Code process tree; partial output stays in chat"
+        toolTipText = "Kill the coding agent process tree; partial output stays in chat"
     }
     private val feedPanel = JPanel().apply {
         layout = BoxLayout(this, BoxLayout.Y_AXIS)

@@ -1,9 +1,9 @@
 package com.maxvibes.domain.model.chat
 
 /** Coding-agent implementation associated with persisted remote session state. */
-enum class CodingAgentProvider {
-    CLAUDE_CODE,
-    CODEX
+enum class CodingAgentProvider(val displayName: String) {
+    CLAUDE_CODE("Claude Code"),
+    CODEX("Codex")
 }
 
 /**

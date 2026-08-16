@@ -74,7 +74,9 @@ internal class InteractionExecutionCoordinator(
         action: suspend () -> ClaudeCodeStepResult,
         onResult: (ClaudeCodeStepResult) -> Unit
     ) {
-        inputStatusView.setStatus("Claude Code: running")
+        // Заголовок уже назван активным агентом — собственная строка здесь врала бы
+        // про Claude Code, когда за диалогом стоит Codex.
+        inputStatusView.setStatus(title)
         backgroundTaskRunner.run(
             title = "MaxVibes: $title",
             cancellable = true,
@@ -97,7 +99,7 @@ internal class InteractionExecutionCoordinator(
             onSuccess = onResult,
             onCancel = {
                 resetClaudeCodeSession(session.id)
-                appendToChat("⚠️ Cancelled")
+                appendToChat("\u26A0\uFE0F Cancelled")
                 inputStatusView.setInputEnabled(true)
                 inputStatusView.updateModeIndicator()
             }

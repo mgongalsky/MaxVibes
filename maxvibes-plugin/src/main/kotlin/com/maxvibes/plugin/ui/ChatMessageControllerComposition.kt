@@ -187,7 +187,8 @@ internal class ChatMessageControllerComposition(
             presentCommands = ::presentCommandsLogged,
             executeAsync = { title, session, action -> runClaudeCodeBg(title, session, action) },
             turnAutopilot = { turnAutopilot },
-            maxFormatRetries = { ApprovalPolicySettings.getInstance(project).loadMaxFormatRetries() }
+            maxFormatRetries = { ApprovalPolicySettings.getInstance(project).loadMaxFormatRetries() },
+            agentName = { service.activeCodingAgentName }
         )
     }
 

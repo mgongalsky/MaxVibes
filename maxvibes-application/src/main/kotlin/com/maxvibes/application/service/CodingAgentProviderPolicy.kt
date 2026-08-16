@@ -19,13 +19,13 @@ internal data class CodingAgentProviderPolicy(
     companion object {
         fun forProvider(provider: CodingAgentProvider): CodingAgentProviderPolicy = when (provider) {
             CodingAgentProvider.CLAUDE_CODE -> CodingAgentProviderPolicy(
-                displayName = "Claude Code",
+                displayName = provider.displayName,
                 logTag = "ClaudeCode",
                 systemPromptDelivery = CodingAgentSystemPromptDelivery.PROCESS_START
             )
 
             CodingAgentProvider.CODEX -> CodingAgentProviderPolicy(
-                displayName = "Codex",
+                displayName = provider.displayName,
                 logTag = "Codex",
                 systemPromptDelivery = CodingAgentSystemPromptDelivery.REQUEST
             )

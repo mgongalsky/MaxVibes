@@ -6,6 +6,7 @@ import com.maxvibes.application.service.CodingAgentInteractionService
 import com.maxvibes.application.service.ClaudeCodeStepResult
 import com.maxvibes.application.service.turn.TurnAutopilot
 import com.maxvibes.domain.model.chat.ChatSession
+import com.maxvibes.domain.model.chat.CodingAgentProvider
 import com.maxvibes.domain.model.chat.MessageRole
 import com.maxvibes.domain.model.command.CommandRequest
 import com.maxvibes.domain.model.interaction.AttachedImage
@@ -39,6 +40,11 @@ import com.maxvibes.application.service.turn.TurnSignalMapper
  * [maxFormatRetries] limits how many times in a row the agent may be asked to redo
  * a step whose modifications never reached the code — whether they could not be
  * parsed or failed to apply.
+ *
+ * [agentName] is the display name of the CLI actually behind this dialog: the same
+ * dispatcher serves Codex, so statuses and progress titles must not claim it is
+ * Claude Code. Deliberately a separate lambda instead of asking [claudeCodeService]
+ * — that one must stay untouched outside [executeAsync].
  */
 class ClaudeCodeDispatcher(
     private val claudeCodeService: () -> CodingAgentInteractionService,
@@ -49,7 +55,8 @@ class ClaudeCodeDispatcher(
     private val presentCommands: (commands: List<CommandRequest>, sessionId: String, mode: InteractionMode) -> Unit,
     private val executeAsync: (title: String, session: ChatSession, action: suspend () -> ClaudeCodeStepResult) -> Unit,
     private val turnAutopilot: () -> TurnAutopilot? = { null },
-    private val maxFormatRetries: () -> Int = { 2 }
+    private val maxFormatRetries: () -> Int = { 2 },
+    private val agentName: () -> String = { CodingAgentProvider.CLAUDE_CODE.displayName }
 ) {
     private var modificationProposalView: ModificationProposalView? = null
 
@@ -97,11 +104,12 @@ class ClaudeCodeDispatcher(
         pendingFix.remove(session.id)
         fixRetries.remove(session.id)
 
+        val sending = "${agentName()}: sending..."
         callbacks.setInputEnabled(false)
-        callbacks.setStatus("Claude Code: sending...")
+        callbacks.setStatus(sending)
 
         val capturedSession = session
-        executeAsync("Claude Code: sending...", capturedSession) {
+        executeAsync(sending, capturedSession) {
             claudeCodeService().handleUserInput(
                 sessionId = capturedSession.id,
                 userInput = userInput,
@@ -116,7 +124,7 @@ class ClaudeCodeDispatcher(
         }
     }
 
-    /** Approves the current Claude Code turn with pre-collected text attachments. */
+    /** Approves the current coding-agent turn with pre-collected text attachments. */
     fun approve(trace: String?, errs: String?) {
         val session = chatTreeService.getActiveSession()
         MaxVibesLogger.info(
@@ -129,9 +137,10 @@ class ClaudeCodeDispatcher(
             )
         )
         turnAutopilot()?.onHumanApproved(session.id)
+        val approving = "${agentName()}: approving..."
         callbacks.setInputEnabled(false)
-        callbacks.setStatus("Claude Code: approving...")
-        executeAsync("Claude Code: approving...", session) {
+        callbacks.setStatus(approving)
+        executeAsync(approving, session) {
             claudeCodeService().approve(
                 sessionId = session.id,
                 attachedContext = trace,
@@ -159,7 +168,7 @@ class ClaudeCodeDispatcher(
         modificationProposalView?.setApplying()
         callbacks.setInputEnabled(false)
         callbacks.setStatus("\uD83E\uDD16 Continuing automatically...")
-        executeAsync("Claude Code: continuing...", session) {
+        executeAsync("${agentName()}: continuing...", session) {
             claudeCodeService().approve(
                 sessionId = session.id,
                 attachedContext = null,
@@ -212,7 +221,7 @@ class ClaudeCodeDispatcher(
             )
             callbacks.setInputEnabled(false)
             callbacks.setStatus("\uD83E\uDD16 Просим агента переделать сорвавшиеся правки...")
-            executeAsync("Claude Code: fixing modifications...", session) {
+            executeAsync("${agentName()}: fixing modifications...", session) {
                 claudeCodeService().handleUserInput(
                     sessionId = session.id,
                     userInput = correction
@@ -228,7 +237,7 @@ class ClaudeCodeDispatcher(
         )
         callbacks.setInputEnabled(false)
         callbacks.setStatus("\uD83E\uDD16 Continuing on its own...")
-        executeAsync("Claude Code: continuing...", session) {
+        executeAsync("${agentName()}: continuing...", session) {
             claudeCodeService().handleUserInput(
                 sessionId = session.id,
                 userInput = "[AUTO-CONTINUE] No new instruction from the user. " +
@@ -243,13 +252,13 @@ class ClaudeCodeDispatcher(
             is ClaudeCodeStepResult.Error -> chatTreeService.addMessage(
                 session.id,
                 MessageRole.SYSTEM,
-                "Claude Code error: ${result.message}"
+                "${agentName()} error: ${result.message}"
             )
 
             is ClaudeCodeStepResult.TransportError -> chatTreeService.addMessage(
                 session.id,
                 MessageRole.SYSTEM,
-                "Claude Code transport error: ${result.detail}"
+                "${agentName()} transport error: ${result.detail}"
             )
 
             else -> Unit
@@ -437,15 +446,15 @@ class ClaudeCodeDispatcher(
                 callbacks.appendToChat("\u274C ${result.message}")
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
-                callbacks.setStatus("Claude Code error")
+                callbacks.setStatus("${agentName()} error")
             }
 
             is ClaudeCodeStepResult.TransportError -> {
                 callbacks.appendToChat("\u274C Transport: ${result.detail}")
-                callbacks.appendToChat("Check Claude Code settings (binary path, args) and retry.")
+                callbacks.appendToChat("Check ${agentName()} settings (binary path, args) and retry.")
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
-                callbacks.setStatus("\u26A0\uFE0F Claude Code transport error")
+                callbacks.setStatus("\u26A0\uFE0F ${agentName()} transport error")
             }
         }
 
@@ -500,7 +509,7 @@ class ClaudeCodeDispatcher(
     }
 
     /**
-     * Formats the bubble-footer info line for Claude Code turns.
+     * Formats the bubble-footer info line for coding-agent turns.
      * Layout: `↑1234 · ↓567 · 42s` — components are omitted when their value is zero.
      * Returns null when nothing meaningful is available so the bubble suppresses the footer.
      */
