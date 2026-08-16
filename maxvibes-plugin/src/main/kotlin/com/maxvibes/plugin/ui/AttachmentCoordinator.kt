@@ -2,48 +2,34 @@ package com.maxvibes.plugin.ui
 
 import com.maxvibes.domain.model.interaction.AttachedImage
 
-/**
- * Owns pending one-turn attachments and keeps their UI representation in sync.
- */
 internal class AttachmentCoordinator(
     private val context: PendingTurnContext,
     private val attachmentView: AttachmentView,
     private val inputStatusView: InputStatusView,
     private val maxImages: Int
 ) {
-    val trace: String?
-        get() = context.trace
-
-    val errors: String?
-        get() = context.errors
+    val trace: String? get() = context.trace
+    val errors: String? get() = context.errors
 
     fun snapshot(): PendingTurnSnapshot = context.snapshot()
-
-    /** Returns the current snapshot and clears all one-turn state and UI chips. */
-    fun consume(): PendingTurnSnapshot {
-        val snapshot = context.snapshot()
-        clearAfterSend()
-        return snapshot
-    }
+    fun consume(): PendingTurnSnapshot = context.snapshot().also { clearAfterSend() }
 
     fun attachTrace(traceContent: String) {
         context.attachTrace(traceContent)
         publishTextAttachments()
+        inputStatusView.setStatus("📎 Text attached (${traceContent.length} characters)")
     }
 
     fun clearTrace() {
-        context.clearTrace()
-        publishTextAttachments()
+        context.clearTrace(); publishTextAttachments()
     }
 
     fun attachErrors(errorsContent: String) {
-        context.attachErrors(errorsContent)
-        publishTextAttachments()
+        context.attachErrors(errorsContent); publishTextAttachments()
     }
 
     fun clearErrors() {
-        context.clearErrors()
-        publishTextAttachments()
+        context.clearErrors(); publishTextAttachments()
     }
 
     fun attachImage(image: AttachedImage): Boolean {
@@ -51,7 +37,6 @@ internal class AttachmentCoordinator(
             inputStatusView.setStatus("🖼 Max $maxImages images per message")
             return false
         }
-
         val images = context.imagesSnapshot()
         attachmentView.onImagesChanged(images)
         inputStatusView.setStatus("🖼 Image attached (${images.size})")
@@ -59,14 +44,11 @@ internal class AttachmentCoordinator(
     }
 
     fun clearImages() {
-        context.clearImages()
-        attachmentView.onImagesChanged(emptyList())
+        context.clearImages(); attachmentView.onImagesChanged(emptyList())
     }
 
     fun removeImage(index: Int) {
-        if (context.removeImage(index)) {
-            attachmentView.onImagesChanged(context.imagesSnapshot())
-        }
+        if (context.removeImage(index)) attachmentView.onImagesChanged(context.imagesSnapshot())
     }
 
     fun armOneShot(skillName: String?, elementContext: String?, label: String) {
@@ -75,8 +57,7 @@ internal class AttachmentCoordinator(
     }
 
     fun clearOneShot() {
-        context.clearOneShot()
-        attachmentView.onOneShotChanged(null)
+        context.clearOneShot(); attachmentView.onOneShotChanged(null)
     }
 
     fun clearAfterSend() {
@@ -86,7 +67,5 @@ internal class AttachmentCoordinator(
         if (hadOneShot) attachmentView.onOneShotChanged(null)
     }
 
-    private fun publishTextAttachments() {
-        attachmentView.onAttachmentsChanged(context.trace, context.errors)
-    }
+    private fun publishTextAttachments() = attachmentView.onAttachmentsChanged(context.trace, context.errors)
 }

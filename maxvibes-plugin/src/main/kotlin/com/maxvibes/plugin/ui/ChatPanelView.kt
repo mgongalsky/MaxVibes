@@ -56,7 +56,8 @@ data class ChatPanelViewActions(
     val onClearErrors: () -> Unit,
     val onImagePasted: (AttachedImage) -> Unit,
     val onClearImages: () -> Unit,
-    val onClearOneShot: () -> Unit
+    val onClearOneShot: () -> Unit,
+    val onAttachText: (String) -> Unit = {}
 )
 
 /** Swing surface of the chat tool window. */
@@ -91,7 +92,7 @@ class ChatPanelView(
     internal val liveTurnPanel = LiveTurnPanel(
         onStop = actions.onStop,
         onPartialFlush = { partial, reason ->
-            conversationPanel.addSystemBubble("⚠ Turn ended: $reason")
+            conversationPanel.addSystemBubble("\u26A0 Turn ended: $reason")
             if (partial.isNotBlank()) conversationPanel.addAssistantBubble(partial)
         }
     )
@@ -127,7 +128,8 @@ class ChatPanelView(
         onClearErrors = actions.onClearErrors,
         onImagePasted = actions.onImagePasted,
         onClearImages = actions.onClearImages,
-        onClearOneShot = actions.onClearOneShot
+        onClearOneShot = actions.onClearOneShot,
+        onAttachText = actions.onAttachText
     )
     private val voiceCoordinator = VoiceInputCoordinator(
         projectName = project.name,
@@ -270,6 +272,7 @@ class ChatPanelView(
         usageSupported = supported
         if (!supported) limitsBar.isVisible = false
     }
+
     fun setAutoApproveToggle(isOn: () -> Boolean, onToggle: (Boolean) -> Unit) =
         inputPanel.setAutoApproveToggle(isOn, onToggle)
 

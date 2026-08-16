@@ -813,7 +813,10 @@ class ConversationPanel(
             }, BorderLayout.SOUTH)
         })
 
-        fun refresh() { messagesPanel.revalidate(); messagesPanel.repaint() }
+        fun refresh() {
+            messagesPanel.revalidate(); messagesPanel.repaint()
+        }
+
         fun statusLabel(text: String, color: Color) = JBLabel(text).apply {
             font = font.deriveFont(Font.BOLD, 11f); foreground = color
             alignmentX = Component.LEFT_ALIGNMENT
@@ -825,6 +828,7 @@ class ConversationPanel(
                 statusRow.add(statusLabel("\u27A4 Sent to model", JBColor(Color(0x1E8449), Color(0x58D68D))))
                 refresh()
             }
+
             override fun setDismissed() = SwingUtilities.invokeLater {
                 controls.isVisible = false
                 statusRow.add(statusLabel("\u2716 Dismissed", JBColor(Color(0x922B21), Color(0xD98880))))
@@ -1265,5 +1269,33 @@ class ConversationPanel(
             override fun setRejected() =
                 setStatus("✕ Rejected — nothing was applied", JBColor(Color(0x922B21), Color(0xD98880)))
         }
+    }
+
+    /** Чип текстового вложения: клик открывает сохранённый файл вкладкой редактора. */
+    fun addAttachmentBubble(relativePath: String, caption: String) {
+        val label = JBLabel(caption).apply {
+            foreground = JBColor(Color(0xB8, 0x6B, 0x00), Color(0xE8, 0xA0, 0x3C))
+            toolTipText = relativePath
+            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            border = JBUI.Borders.empty(2, 8)
+            addMouseListener(object : MouseAdapter() {
+                override fun mouseClicked(e: MouseEvent) {
+                    val file = project.basePath?.let { base ->
+                        LocalFileSystem.getInstance()
+                            .refreshAndFindFileByIoFile(File(base, relativePath))
+                    }
+                    if (file == null) {
+                        Messages.showWarningDialog(project, relativePath, "Файл вложения не найден")
+                    } else {
+                        FileEditorManager.getInstance(project).openFile(file, true)
+                    }
+                }
+            })
+        }
+        addComp(JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
+            isOpaque = false
+            alignmentX = Component.LEFT_ALIGNMENT
+            add(label)
+        })
     }
 }

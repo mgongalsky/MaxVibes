@@ -56,6 +56,13 @@ interface ConversationView {
         onApply: () -> Unit,
         onReject: () -> Unit
     ): ModificationProposalView
+
+    /**
+     * Рисует чип сохранённого текстового вложения.
+     *
+     * Дефолт пустой: тестовые двойники этого контракта чипы не показывают.
+     */
+    fun addAttachmentBubble(relativePath: String, caption: String) {}
 }
 
 /** Input field, status line and mode indicators. */

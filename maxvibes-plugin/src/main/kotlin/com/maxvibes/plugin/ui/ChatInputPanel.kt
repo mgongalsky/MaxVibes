@@ -1,48 +1,23 @@
 package com.maxvibes.plugin.ui
 
-import com.intellij.openapi.actionSystem.ActionManager
-import com.intellij.openapi.actionSystem.AnActionEvent
-import com.intellij.openapi.actionSystem.IdeActions
-import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.ui.JBColor
-import com.intellij.ui.components.JBCheckBox
-import com.intellij.ui.components.JBLabel
-import com.intellij.ui.components.JBScrollPane
-import com.intellij.ui.components.JBTextArea
+import com.intellij.ui.components.*
 import com.intellij.util.ui.JBUI
 import com.maxvibes.domain.model.interaction.AttachedImage
-import com.maxvibes.plugin.voice.VoiceInputState
-import java.awt.BorderLayout
-import java.awt.Color
-import java.awt.Cursor
-import java.awt.Dimension
-import java.awt.FlowLayout
-import java.awt.Font
-import java.awt.Image
-import java.awt.event.ActionEvent
-import java.awt.event.KeyAdapter
-import java.awt.event.KeyEvent
-import java.awt.event.MouseAdapter
-import java.awt.event.MouseEvent
-import javax.swing.AbstractAction
-import javax.swing.ImageIcon
-import javax.swing.JButton
-import javax.swing.JComponent
-import javax.swing.JPanel
-import javax.swing.KeyStroke
-import javax.swing.ScrollPaneConstants
-import javax.swing.JSpinner
-import javax.swing.SpinnerNumberModel
 import com.maxvibes.plugin.settings.ApprovalPolicySettings
+import com.maxvibes.plugin.voice.VoiceInputState
+import java.awt.*
+import java.awt.datatransfer.Clipboard
+import java.awt.datatransfer.DataFlavor
+import java.awt.datatransfer.Transferable
+import java.awt.event.*
+import javax.swing.*
+import javax.swing.text.AbstractDocument
+import javax.swing.text.AttributeSet
+import javax.swing.text.DocumentFilter
 
-data class InputSubmission(
-    val text: String,
-    val planOnly: Boolean,
-    val dryRun: Boolean,
-    val addHistory: Boolean
-)
+data class InputSubmission(val text: String, val planOnly: Boolean, val dryRun: Boolean, val addHistory: Boolean)
 
-/** Bottom chat input region. Owns widgets and delegates all decisions through callbacks. */
 class ChatInputPanel(
     private val promptBar: JComponent,
     private val usageBar: JComponent,
@@ -55,405 +30,263 @@ class ChatInputPanel(
     private val onClearErrors: () -> Unit,
     private val onImagePasted: (AttachedImage) -> Unit,
     private val onClearImages: () -> Unit,
-    private val onClearOneShot: () -> Unit
+    private val onClearOneShot: () -> Unit,
+    private val onAttachText: (String) -> Unit = {}
 ) : JPanel(BorderLayout(5, 4)) {
     private val inputArea = JBTextArea(3, 40).apply {
         lineWrap = true
         wrapStyleWord = true
         border = JBUI.Borders.empty(8)
     }
-    private val sendButton = JButton("Send").apply {
-        toolTipText = "Send message (Ctrl+Enter)"
+    private val sendButton = JButton("Send")
+    private val approveButton = JButton("\u2705 Approve").apply { isVisible = false }
+    private val copyJsonButton = JButton("\uD83D\uDCCB Copy JSON").apply { isVisible = false }
+    private val attachButton = JButton("\uD83D\uDCCE Clipboard").apply {
+        toolTipText = "Attach clipboard text (Ctrl+Shift+V)"
     }
-    private val voiceButton = JButton("🎙").apply {
-        toolTipText = "Start voice input"
-        preferredSize = Dimension(42, 26)
-    }
-    private var onVoiceToggle: () -> Unit = {}
-    private var onAutoApproveToggle: (Boolean) -> Unit = {}
-    private var isAutoApproveOn: () -> Boolean = { false }
-
-    private val approveButton = JButton("\u2705 Approve").apply {
-        toolTipText = "Approve & gather requested files (Claude Code)"
+    private val errorsButton = JButton("\uD83D\uDC1E Errors")
+    private val voiceButton = JButton("\uD83C\uDF99")
+    private val clearTextButton = JButton("\u2715").apply { isVisible = false }
+    private val clearErrorsButton = JButton("\u2715").apply { isVisible = false }
+    private val textChip = JBLabel().apply {
+        foreground = JBColor(Color(0xFF9800), Color(0xFFB74D))
+        cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
         isVisible = false
-        foreground = JBColor(Color(0x3E2C00), Color(0x241C00))
-        putClientProperty("JButton.backgroundColor", JBColor(Color(0xF5C518), Color(0xD4AC0D)))
-        putClientProperty("JButton.borderColor", JBColor(Color(0xC9A227), Color(0x9A7D0A)))
     }
-    private val autoApproveCheckbox = JBCheckBox("\uD83D\uDD13 Auto").apply {
-        toolTipText = "Approve everything in this session automatically, until switched off"
-    }
-    private val autonomyIterationsSpinner = JSpinner(
+    private val errorsChip = JBLabel().apply { isVisible = false }
+    private val imageChip = JBLabel().apply { isVisible = false }
+    private val oneShotChip = JBLabel().apply { isVisible = false }
+    private val attachmentBar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 2)).apply { isVisible = false }
+    private val planOnly = JBCheckBox("\uD83D\uDCAC Plan")
+    private val dryRun = JBCheckBox("Dry run")
+    private val addHistory = JBCheckBox("Add History").apply { isVisible = false }
+    private val autoApprove = JBCheckBox("\uD83D\uDD13 Auto")
+    private val iterations = JSpinner(
         SpinnerNumberModel(
             ApprovalPolicySettings.DEFAULT_AUTONOMOUS_ITERATIONS,
             ApprovalPolicySettings.MIN_AUTONOMOUS_ITERATIONS,
             ApprovalPolicySettings.MAX_AUTONOMOUS_ITERATIONS,
             1
         )
-    ).apply {
-        toolTipText = "Autonomous LLM iterations: how many steps the agent may take on its own " +
-                "before it stops and asks you"
-        preferredSize = Dimension(52, 26)
-    }
-    private val dryRunCheckbox = JBCheckBox("Dry run").apply {
-        toolTipText = "Show plan without applying changes"
-    }
-    private val planOnlyCheckbox = JBCheckBox("\uD83D\uDCAC Plan").apply {
-        toolTipText = "Plan-only mode"
-    }
-    private val addHistoryCheckbox = JBCheckBox("Add History").apply {
-        toolTipText = "Share gathered file list with LLM (use when starting a new LLM chat)"
-        isVisible = false
-    }
-    private val copyJsonButton = JButton("\uD83D\uDCCB Copy JSON").apply {
-        toolTipText = "Re-copy last generated JSON"
-        isVisible = false
-    }
-    private val attachErrorsButton = JButton("\uD83D\uDC1E Errors").apply {
-        toolTipText = "Attach IDE errors from open files"
-        font = font.deriveFont(11f)
-        preferredSize = Dimension(85, 26)
-    }
-    private val errorsIndicator = JBLabel("").apply {
-        foreground = JBColor(Color(0xD32F2F), Color(0xEF5350))
-        font = font.deriveFont(Font.BOLD, 11f)
-        isVisible = false
-    }
-    private val clearErrorsButton = JButton("\u2715").apply {
-        toolTipText = "Remove attached errors"
-        font = font.deriveFont(9f)
-        preferredSize = Dimension(20, 20)
-        isVisible = false
-    }
-    private val attachTraceButton = JButton("\uD83D\uDCCE Trace").apply {
-        toolTipText = "Paste error/stacktrace/logs (Ctrl+Shift+V)"
-        font = font.deriveFont(11f)
-        preferredSize = Dimension(80, 26)
-    }
-    private val traceIndicator = JBLabel("").apply {
-        foreground = JBColor(Color(0xFF9800), Color(0xFFB74D))
-        font = font.deriveFont(Font.BOLD, 11f)
-        isVisible = false
-    }
-    private val clearTraceButton = JButton("\u2715").apply {
-        toolTipText = "Remove attached trace"
-        font = font.deriveFont(9f)
-        preferredSize = Dimension(20, 20)
-        isVisible = false
-    }
-    private val oneShotChip = JBLabel("").apply {
-        foreground = JBColor(Color(0x7B1FA2), Color(0xBA68C8))
-        font = font.deriveFont(Font.BOLD, 11f)
-        isVisible = false
-    }
-    private val clearOneShotButton = JButton("\u2715").apply {
-        toolTipText = "Cancel one-shot skill"
-        font = font.deriveFont(9f)
-        preferredSize = Dimension(20, 20)
-        isVisible = false
-    }
-    private val attachmentsPanel = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
-        background = JBColor.background()
-        isVisible = false
-    }
-    private val traceBar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
-        background = JBColor.background()
-        border = JBUI.Borders.empty(2, 8, 0, 8)
-        add(traceIndicator)
-        add(clearTraceButton)
-        add(errorsIndicator)
-        add(clearErrorsButton)
-        add(attachmentsPanel)
-        isVisible = false
-    }
-
+    )
+    private var onVoiceToggle: () -> Unit = {}
+    private var attachedText: String? = null
     private var hasImages = false
-    private var oneShotArmed = false
-    private var attachmentsRequireBar = false
+    private var hasOneShot = false
+    private var suppressAutoAttach = false
 
     init {
         border = JBUI.Borders.empty(4, 8, 8, 8)
-        background = JBColor.background()
-        attachmentsPanel.add(oneShotChip)
-        attachmentsPanel.add(clearOneShotButton)
-        add(traceBar, BorderLayout.NORTH)
-        add(buildTextArea(), BorderLayout.CENTER)
-        add(buildBottomRows(), BorderLayout.SOUTH)
-        wireListeners()
-    }
-
-    private fun buildTextArea(): JPanel = JPanel(BorderLayout()).apply {
-        border = JBUI.Borders.customLine(JBColor.border(), 1)
-        add(JBScrollPane(inputArea).apply {
-            border = JBUI.Borders.empty()
-            preferredSize = Dimension(10, 96)
-            verticalScrollBarPolicy = ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED
-            horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
-        }, BorderLayout.CENTER)
-    }
-
-    private fun buildBottomRows(): JPanel = JPanel(BorderLayout()).apply {
-        background = JBColor.background()
-        add(promptBar, BorderLayout.NORTH)
-        add(JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
-            background = JBColor.background()
-            add(attachErrorsButton)
-            add(attachTraceButton)
-            add(addHistoryCheckbox)
-            add(planOnlyCheckbox)
-            add(dryRunCheckbox)
-            add(copyJsonButton)
-            add(JBLabel("Iters").apply {
-                font = font.deriveFont(11f)
-                toolTipText = autonomyIterationsSpinner.toolTipText
-            })
-            add(autonomyIterationsSpinner)
-            add(autoApproveCheckbox)
-            add(approveButton)
-            add(voiceButton)
-            add(sendButton)
-        }, BorderLayout.CENTER)
-        add(usageBar, BorderLayout.SOUTH)
-    }
-
-    private fun wireListeners() {
-        sendButton.addActionListener { onSend() }
-        approveButton.addActionListener { onApprove() }
-        copyJsonButton.addActionListener { onCopyJson() }
-        attachTraceButton.addActionListener { onAttachTrace() }
-        clearTraceButton.addActionListener { onClearTrace() }
-        attachErrorsButton.addActionListener { onAttachErrors() }
-        clearErrorsButton.addActionListener { onClearErrors() }
-        clearOneShotButton.addActionListener { onClearOneShot() }
-        voiceButton.addActionListener { onVoiceToggle() }
-
+        installPasteInterception()
+        listOf(
+            textChip,
+            clearTextButton,
+            errorsChip,
+            clearErrorsButton,
+            imageChip,
+            oneShotChip
+        ).forEach(attachmentBar::add)
+        add(attachmentBar, BorderLayout.NORTH)
+        add(JBScrollPane(inputArea).apply { preferredSize = Dimension(10, 96) }, BorderLayout.CENTER)
+        add(JPanel(BorderLayout()).apply {
+            add(promptBar, BorderLayout.NORTH)
+            add(JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
+                add(errorsButton); add(attachButton); add(addHistory); add(planOnly); add(dryRun); add(copyJsonButton)
+                add(JBLabel("Iters")); add(iterations); add(autoApprove); add(approveButton); add(voiceButton); add(
+                sendButton
+            )
+            }, BorderLayout.CENTER)
+            add(usageBar, BorderLayout.SOUTH)
+        }, BorderLayout.SOUTH)
+        sendButton.addActionListener { onSend() }; approveButton.addActionListener { onApprove() }
+        copyJsonButton.addActionListener { onCopyJson() }; attachButton.addActionListener { onAttachTrace() }
+        errorsButton.addActionListener { onAttachErrors() }; clearTextButton.addActionListener { onClearTrace() }
+        clearErrorsButton.addActionListener { onClearErrors() }; voiceButton.addActionListener { onVoiceToggle() }
+        textChip.addMouseListener(object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) {
+                attachedText?.let { TextClipboardAttachments.showPreview(this@ChatInputPanel, it) }
+            }
+        })
         inputArea.addKeyListener(object : KeyAdapter() {
             override fun keyPressed(e: KeyEvent) {
                 if (e.keyCode == KeyEvent.VK_ENTER && e.isControlDown) {
-                    onSend()
-                    e.consume()
+                    onSend(); e.consume()
                 } else if (e.keyCode == KeyEvent.VK_V && e.isControlDown && e.isShiftDown) {
-                    onAttachTrace()
-                    e.consume()
+                    onAttachTrace(); e.consume()
                 }
             }
         })
-
-        runCatching { ActionManager.getInstance().getAction(IdeActions.ACTION_PASTE) }
-            .getOrNull()
-            ?.let { pasteAction ->
-                object : DumbAwareAction() {
-                    override fun actionPerformed(e: AnActionEvent) = pasteImageOrText()
-                }.registerCustomShortcutSet(pasteAction.shortcutSet, inputArea)
-            }
-
-        inputArea.actionMap.put("maxvibes-paste", object : AbstractAction() {
-            override fun actionPerformed(e: ActionEvent) = pasteImageOrText()
-        })
-        inputArea.inputMap.put(KeyStroke.getKeyStroke("ctrl V"), "maxvibes-paste")
-        inputArea.inputMap.put(KeyStroke.getKeyStroke("shift INSERT"), "maxvibes-paste")
-    }
-
-    private fun pasteImageOrText() {
-        val image = ImageAttachments.fromClipboard()
-        if (image != null) onImagePasted(image) else inputArea.paste()
     }
 
     fun setVoiceToggleAction(action: () -> Unit) {
         onVoiceToggle = action
     }
 
-    /** The checkbox keeps no state: [isOn] is re-read on every render, so it cannot show another session's policy. */
     fun setAutoApproveToggle(isOn: () -> Boolean, onToggle: (Boolean) -> Unit) {
-        isAutoApproveOn = isOn
-        onAutoApproveToggle = onToggle
-        autoApproveCheckbox.isSelected = isOn()
-        autoApproveCheckbox.addActionListener { onAutoApproveToggle(autoApproveCheckbox.isSelected) }
+        autoApprove.isSelected = isOn(); autoApprove.addActionListener { onToggle(autoApprove.isSelected) }
     }
 
-    /**
-     * Лимит автономных итераций LLM.
-     *
-     * Слушатель вешается здесь, а не в [wireListeners], потому что вызов идёт
-     * ровно один раз при инициализации панели — до него панель не знает, откуда
-     * брать и куда класть значение.
-     */
     fun setAutonomyLimit(current: () -> Int, onChange: (Int) -> Unit) {
-        autonomyIterationsSpinner.value = current()
-        autonomyIterationsSpinner.addChangeListener {
-            onChange(autonomyIterationsSpinner.value as Int)
-        }
+        iterations.value = current(); iterations.addChangeListener { onChange(iterations.value as Int) }
     }
 
     fun setVoiceState(state: VoiceInputState) {
-        when (state) {
-            VoiceInputState.IDLE -> {
-                voiceButton.text = "🎙"
-                voiceButton.toolTipText = "Start voice input"
-                voiceButton.isEnabled = true
-            }
-
-            VoiceInputState.STARTING -> {
-                voiceButton.text = "…"
-                voiceButton.toolTipText = "Opening microphone"
-                voiceButton.isEnabled = false
-            }
-
-            VoiceInputState.RECORDING -> {
-                voiceButton.text = "■"
-                voiceButton.toolTipText = "Stop and transcribe"
-                voiceButton.isEnabled = true
-            }
-
-            VoiceInputState.TRANSCRIBING -> {
-                voiceButton.text = "…"
-                voiceButton.toolTipText = "Transcribing voice"
-                voiceButton.isEnabled = false
-            }
-        }
+        voiceButton.text = when (state) {
+            VoiceInputState.IDLE -> "\uD83C\uDF99"; VoiceInputState.RECORDING -> "\u25A0"; else -> "\u2026"
+        }; voiceButton.isEnabled = state == VoiceInputState.IDLE || state == VoiceInputState.RECORDING
     }
 
     fun insertTranscript(transcript: String) {
-        val normalized = transcript.trim()
-        if (normalized.isEmpty()) return
-        val position = inputArea.caretPosition.coerceIn(0, inputArea.text.length)
-        val prefix = if (position > 0 && !inputArea.text[position - 1].isWhitespace()) " " else ""
-        val suffix = if (position < inputArea.text.length && !inputArea.text[position].isWhitespace()) " " else ""
-        inputArea.insert(prefix + normalized + suffix, position)
-        inputArea.caretPosition = position + prefix.length + normalized.length
-        inputArea.requestFocusInWindow()
+        if (transcript.isNotBlank()) prefill(transcript.trim(), true)
     }
 
     fun takeSubmission(): InputSubmission? {
         val text = inputArea.text.trim()
         if (text.isBlank()) return null
-        val submission = InputSubmission(
-            text = text,
-            planOnly = planOnlyCheckbox.isSelected,
-            dryRun = dryRunCheckbox.isSelected,
-            addHistory = addHistoryCheckbox.isSelected
-        )
-        inputArea.text = ""
-        addHistoryCheckbox.isSelected = false
-        return submission
+        return InputSubmission(
+            text,
+            planOnly.isSelected,
+            dryRun.isSelected,
+            addHistory.isSelected
+        ).also {
+            withoutAutoAttach { inputArea.text = "" }
+            addHistory.isSelected = false
+        }
     }
 
     fun setText(text: String) {
-        inputArea.text = text
+        withoutAutoAttach { inputArea.text = text }
     }
 
     fun prefill(text: String, append: Boolean) {
-        if (append && inputArea.text.isNotBlank()) {
-            inputArea.text = inputArea.text.trimEnd() + " " + text
-        } else if (text.isNotBlank()) {
-            inputArea.text = text
+        withoutAutoAttach {
+            inputArea.text =
+                if (append && inputArea.text.isNotBlank()) inputArea.text.trimEnd() + " " + text else text
         }
         inputArea.caretPosition = inputArea.text.length
         inputArea.requestFocusInWindow()
     }
 
     fun setPlanOnly(enabled: Boolean) {
-        planOnlyCheckbox.isSelected = enabled
+        planOnly.isSelected = enabled
     }
 
     fun applyModeDecision(decision: ModeUiDecision) {
-        sendButton.text = decision.sendButtonText
-        dryRunCheckbox.isVisible = decision.dryRunVisible
-        copyJsonButton.isVisible = decision.copyJsonVisible
-        addHistoryCheckbox.isVisible = decision.addHistoryVisible
+        sendButton.text = decision.sendButtonText; dryRun.isVisible = decision.dryRunVisible; copyJsonButton.isVisible =
+            decision.copyJsonVisible; addHistory.isVisible = decision.addHistoryVisible
     }
 
     fun applyApproveState(approveVisible: Boolean) {
-        autoApproveCheckbox.isSelected = isAutoApproveOn()
-        approveButton.isVisible = approveVisible
-        if (approveVisible) {
-            sendButton.isEnabled = false
-            sendButton.toolTipText = "Press Approve to continue, or start a new chat (+ New)"
-        } else {
-            sendButton.toolTipText = "Send message (Ctrl+Enter)"
-        }
+        approveButton.isVisible = approveVisible; sendButton.isEnabled = !approveVisible
     }
 
     fun updateIndicators(trace: String?, errors: String?) {
-        val state = AttachmentIndicators.describe(trace, errors, hasImages)
-        traceIndicator.isVisible = state.traceVisible
-        clearTraceButton.isVisible = state.traceVisible
-        state.traceText?.let { traceIndicator.text = it }
-        errorsIndicator.isVisible = state.errorsVisible
-        clearErrorsButton.isVisible = state.errorsVisible
-        state.errorsText?.let { errorsIndicator.text = it }
-        attachmentsRequireBar = state.barVisible
-        refreshBar()
+        attachedText = trace
+        val state = AttachmentIndicators.describe(trace, errors, hasImages); textChip.isVisible =
+            state.traceVisible; clearTextButton.isVisible = state.traceVisible; state.traceText?.let {
+            textChip.text = it
+        }; errorsChip.isVisible = state.errorsVisible; clearErrorsButton.isVisible =
+            state.errorsVisible; state.errorsText?.let { errorsChip.text = it }; refreshBar()
     }
 
     fun showImages(images: List<AttachedImage>) {
-        hasImages = images.isNotEmpty()
-        attachmentsPanel.removeAll()
-        images.forEachIndexed { index, image -> attachmentsPanel.add(createThumbnail(image, index)) }
-        attachmentsPanel.add(oneShotChip)
-        attachmentsPanel.add(clearOneShotButton)
-        refreshAttachments()
+        hasImages = images.isNotEmpty(); imageChip.text = "\uD83D\uDDBC Images: ${images.size}"; imageChip.isVisible =
+            hasImages; refreshBar()
     }
 
     fun showOneShot(label: String?) {
-        oneShotArmed = label != null
-        oneShotChip.text = if (oneShotArmed) "\u26A1 $label (1\u00D7)" else ""
-        oneShotChip.isVisible = oneShotArmed
-        clearOneShotButton.isVisible = oneShotArmed
-        refreshAttachments()
-    }
-
-    private fun refreshAttachments() {
-        attachmentsPanel.isVisible = hasImages || oneShotArmed
-        attachmentsPanel.revalidate()
-        attachmentsPanel.repaint()
-        refreshBar()
+        hasOneShot = label != null; oneShotChip.text =
+            label?.let { "\u26A1 $it (1\u00D7)" }.orEmpty(); oneShotChip.isVisible =
+            hasOneShot; refreshBar()
     }
 
     private fun refreshBar() {
-        traceBar.isVisible = attachmentsRequireBar || oneShotArmed
-        traceBar.revalidate()
-        traceBar.repaint()
-    }
-
-    private fun createThumbnail(image: AttachedImage, index: Int): JComponent {
-        val clearListener = object : MouseAdapter() {
-            override fun mouseClicked(e: MouseEvent) = onClearImages()
-        }
-        val previewIcon = runCatching {
-            val bytes = java.util.Base64.getDecoder().decode(image.base64Data)
-            val buffered = javax.imageio.ImageIO.read(java.io.ByteArrayInputStream(bytes))
-                ?: return@runCatching null
-            val size = ThumbnailScale.fit(buffered.width, buffered.height)
-            ImageIcon(buffered.getScaledInstance(size.width, size.height, Image.SCALE_SMOOTH))
-        }.getOrNull()
-
-        return JPanel(FlowLayout(FlowLayout.LEFT, 3, 0)).apply {
-            background = JBColor.background()
-            border = JBUI.Borders.compound(
-                JBUI.Borders.customLine(JBColor.border(), 1),
-                JBUI.Borders.empty(2, 4)
-            )
-            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-            toolTipText = "Attached image ${index + 1} \u2014 click to remove"
-            val previewLabel = if (previewIcon != null) JBLabel(previewIcon) else JBLabel("\uD83D\uDDBC")
-            val indexLabel = JBLabel("#${index + 1}").apply {
-                foreground = JBColor.GRAY
-                font = font.deriveFont(10f)
-            }
-            add(previewLabel)
-            add(indexLabel)
-            addMouseListener(clearListener)
-            previewLabel.addMouseListener(clearListener)
-            indexLabel.addMouseListener(clearListener)
-        }
+        attachmentBar.isVisible =
+            textChip.isVisible || errorsChip.isVisible || hasImages || hasOneShot; attachmentBar.revalidate(); attachmentBar.repaint()
     }
 
     fun setControlsEnabled(enabled: Boolean) {
-        listOf<JComponent>(
-            inputArea, sendButton, approveButton, dryRunCheckbox, planOnlyCheckbox,
-            addHistoryCheckbox, copyJsonButton, attachTraceButton, clearTraceButton,
-            attachErrorsButton, clearErrorsButton, voiceButton
+        listOf(
+            inputArea,
+            sendButton,
+            approveButton,
+            copyJsonButton,
+            attachButton,
+            errorsButton,
+            voiceButton,
+            planOnly,
+            dryRun,
+            addHistory,
+            autoApprove,
+            iterations
         ).forEach { it.isEnabled = enabled }
+    }
+
+    /**
+     * Every paste path in the IDE ends either in the component's TransferHandler or, when the
+     * platform writes into the Swing document directly, in the document itself. Both are covered:
+     * a huge text must never reach the wrapped text area, which would block the EDT on layout.
+     */
+    private fun installPasteInterception() {
+        inputArea.transferHandler?.let { inputArea.transferHandler = InterceptingTransferHandler(it) }
+        (inputArea.document as? AbstractDocument)?.documentFilter = InterceptingDocumentFilter()
+    }
+
+    private fun withoutAutoAttach(block: () -> Unit) {
+        suppressAutoAttach = true
+        try {
+            block()
+        } finally {
+            suppressAutoAttach = false
+        }
+    }
+
+    private fun captureLargeText(text: String?, defer: Boolean): Boolean {
+        if (suppressAutoAttach || text == null || !TextClipboardAttachments.shouldAutoAttach(text)) return false
+        if (defer) SwingUtilities.invokeLater { onAttachText(text) } else onAttachText(text)
+        return true
+    }
+
+    private fun captureTransfer(transferable: Transferable): Boolean {
+        if (transferable.isDataFlavorSupported(DataFlavor.imageFlavor)) {
+            ImageAttachments.fromClipboard()?.let {
+                onImagePasted(it)
+                return true
+            }
+        }
+        return captureLargeText(TextClipboardAttachments.readText(transferable), false)
+    }
+
+    private inner class InterceptingTransferHandler(private val delegate: TransferHandler) : TransferHandler() {
+        override fun canImport(support: TransferSupport): Boolean = delegate.canImport(support)
+
+        override fun canImport(comp: JComponent, transferFlavors: Array<out DataFlavor>): Boolean =
+            delegate.canImport(comp, transferFlavors)
+
+        override fun importData(support: TransferSupport): Boolean =
+            captureTransfer(support.transferable) || delegate.importData(support)
+
+        override fun importData(comp: JComponent, t: Transferable): Boolean =
+            captureTransfer(t) || delegate.importData(comp, t)
+
+        override fun getSourceActions(c: JComponent): Int = delegate.getSourceActions(c)
+
+        override fun exportToClipboard(comp: JComponent, clip: Clipboard, action: Int) =
+            delegate.exportToClipboard(comp, clip, action)
+
+        override fun exportAsDrag(comp: JComponent, e: InputEvent, action: Int) =
+            delegate.exportAsDrag(comp, e, action)
+    }
+
+    private inner class InterceptingDocumentFilter : DocumentFilter() {
+        override fun insertString(fb: FilterBypass, offset: Int, string: String?, attr: AttributeSet?) {
+            if (captureLargeText(string, true)) return
+            super.insertString(fb, offset, string, attr)
+        }
+
+        override fun replace(fb: FilterBypass, offset: Int, length: Int, text: String?, attrs: AttributeSet?) {
+            if (captureLargeText(text, true)) return
+            super.replace(fb, offset, length, text, attrs)
+        }
     }
 }

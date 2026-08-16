@@ -83,6 +83,7 @@ internal class TurnSubmissionCoordinator(
         )
 
         prepared.warnings.forEach { warning -> appendToChat(warning) }
+        pending.trace?.let(persistTextAttachment)
 
         when (mode) {
             InteractionMode.API -> dispatchApi(
@@ -136,6 +137,7 @@ internal class TurnSubmissionCoordinator(
             )
         }
 
+        pending.trace?.let(persistTextAttachment)
         attachments.clearAfterSend()
         approveClaudeCode(pending.trace, pending.errors)
     }
@@ -144,4 +146,12 @@ internal class TurnSubmissionCoordinator(
         documentSaver.saveAllDocuments()
         redoClipboardJson.invoke()
     }
+
+    /**
+     * Сохраняет тело текстового вложения в момент, когда ход действительно уходит.
+     *
+     * Хук, а не параметр конструктора: композиция ставит его после создания, поэтому
+     * юнит-тесты координатора остаются без файловой системы.
+     */
+    var persistTextAttachment: (String) -> Unit = {}
 }

@@ -194,4 +194,7 @@ class ChatPanelCallbacksAdapter(
         SwingUtilities.invokeLater { inputPanel.applyApproveState(false) }
         return view
     }
+    override fun addAttachmentBubble(relativePath: String, caption: String) {
+        SwingUtilities.invokeLater { conversationPanel.addAttachmentBubble(relativePath, caption) }
+    }
 }

@@ -5,6 +5,7 @@ import com.maxvibes.domain.model.chat.MessageRole
 import com.maxvibes.domain.model.code.ElementPath
 import com.maxvibes.domain.model.modification.Modification
 import com.maxvibes.domain.model.modification.ModificationResult
+import com.maxvibes.plugin.service.AttachmentNote
 
 /** Rendering boundary used by [SessionTranscriptRenderer]. */
 interface SessionTranscriptView {
@@ -12,6 +13,9 @@ interface SessionTranscriptView {
     fun addUser(text: String)
     fun addAssistant(message: DisplayMessage, modifications: List<ModificationResult>)
     fun addSystem(text: String)
+
+    /** Дефолт деградирует до обычного системного сообщения — для двойников без UI. */
+    fun addAttachment(relativePath: String, caption: String) = addSystem(caption)
 }
 
 /** Thin adapter that keeps [ConversationPanel] free from transcript orchestration logic. */
@@ -45,6 +49,9 @@ class ConversationPanelTranscriptView(
     override fun addSystem(text: String) {
         panel.addSystemBubble(text)
     }
+    override fun addAttachment(relativePath: String, caption: String) {
+        panel.addAttachmentBubble(relativePath, caption)
+    }
 }
 
 /**
@@ -73,7 +80,15 @@ class SessionTranscriptRenderer(
         conversationRenderer.render(session.messages).forEach { message ->
             when (message.role) {
                 MessageRole.USER -> view.addUser(message.content)
-                MessageRole.SYSTEM -> view.addSystem(message.content)
+                MessageRole.SYSTEM -> {
+                    val attachmentPath = AttachmentNote.parsePath(message.content)
+                    if (attachmentPath != null) {
+                        view.addAttachment(attachmentPath, AttachmentNote.caption(message.content))
+                    } else {
+                        view.addSystem(message.content)
+                    }
+                }
+
                 MessageRole.ASSISTANT -> {
                     val modifications = restoreModifications(message.appliedModificationPaths)
                     view.addAssistant(message, modifications)

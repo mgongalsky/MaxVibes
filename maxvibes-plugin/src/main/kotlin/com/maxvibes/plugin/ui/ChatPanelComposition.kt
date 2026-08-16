@@ -90,7 +90,8 @@ class ChatPanelComposition(
             onClearErrors = { messageController.clearErrors() },
             onImagePasted = { image -> messageController.attachImage(image) },
             onClearImages = { messageController.clearImages() },
-            onClearOneShot = { messageController.clearOneShot() }
+            onClearOneShot = { messageController.clearOneShot() },
+            onAttachText = { messageController.attachTrace(it) }
         )
     )
 

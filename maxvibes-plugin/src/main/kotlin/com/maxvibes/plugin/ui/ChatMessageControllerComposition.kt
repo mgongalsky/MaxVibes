@@ -26,6 +26,8 @@ import com.maxvibes.application.port.output.TerminalUsageLogPort
 import com.maxvibes.application.port.output.TerminalUsageEntry
 import com.maxvibes.plugin.service.TerminalUsageLogWriter
 import com.maxvibes.domain.model.command.CommandRequest
+import com.maxvibes.plugin.service.TextAttachmentWriter
+import com.maxvibes.plugin.service.AttachmentNote
 
 /** Composition root behind [ChatMessageController]. */
 internal class ChatMessageControllerComposition(
@@ -274,7 +276,9 @@ internal class ChatMessageControllerComposition(
             },
             approveClaudeCode = { trace, errors -> claudeCodeDispatcher.approve(trace, errors) },
             redoClipboardJson = clipboardDispatcher::redoLastRequest
-        )
+        ).apply {
+            persistTextAttachment = { text -> saveTextAttachment(text) }
+        }
     }
 
     fun runClipboardBg(
@@ -511,5 +515,23 @@ internal class ChatMessageControllerComposition(
             )
         }
         commandCoordinator.presentCommands(commands, sessionId, mode)
+    }
+
+    /**
+     * Кладёт вложение на диск и оставляет в сессии ссылку на него.
+     *
+     * Запись идёт SYSTEM-сообщением, а не полем ChatMessage: такие записи уже
+     * персистятся и уже проигрываются при загрузке сессии, поэтому восстановление
+     * работает во всех четырёх режимах без правок доменной модели и XML-DTO.
+     */
+    private fun saveTextAttachment(text: String) {
+        val basePath = project.basePath ?: return
+        val saved = TextAttachmentWriter(basePath).save(text) ?: return
+        chatTreeService.addMessage(
+            chatTreeService.getActiveSession().id,
+            MessageRole.SYSTEM,
+            AttachmentNote.format(saved)
+        )
+        callbacks.addAttachmentBubble(saved.relativePath, saved.caption)
     }
 }

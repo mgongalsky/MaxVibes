@@ -1,11 +1,5 @@
 package com.maxvibes.plugin.ui
 
-/**
- * Visibility and captions of the attachment bar.
- *
- * A null [traceText] or [errorsText] means the corresponding label keeps its previous
- * caption, matching the original behaviour of only writing text while an item is attached.
- */
 data class AttachmentIndicatorsState(
     val traceVisible: Boolean,
     val traceText: String?,
@@ -15,21 +9,31 @@ data class AttachmentIndicatorsState(
 )
 
 object AttachmentIndicators {
-
     fun describe(trace: String?, errors: String?, hasImages: Boolean): AttachmentIndicatorsState {
         val hasTrace = !trace.isNullOrBlank()
         val hasErrors = !errors.isNullOrBlank()
         return AttachmentIndicatorsState(
             traceVisible = hasTrace,
-            traceText = if (hasTrace) "\uD83D\uDCCE Trace: ${trace!!.lines().size}L" else null,
+            traceText = if (hasTrace) describeTrace(trace!!) else null,
             errorsVisible = hasErrors,
-            errorsText = if (hasErrors) "\uD83D\uDC1E Errors: ${countErrors(errors!!)}" else null,
+            errorsText = if (hasErrors) "\uD83D\uDC1E Errors: ${countOccurrences(errors!!, "File:")}" else null,
             barVisible = hasTrace || hasErrors || hasImages
         )
     }
 
-    /** Counts the `File:` block markers the IDE-errors formatter puts before each file. */
-    private fun countErrors(errors: String): Int = errors.split(ERROR_BLOCK_MARKER).size - 1
+    private fun describeTrace(trace: String): String {
+        val chars = trace.length
+        val size = if (chars >= 1_000) "%.1fk".format(chars / 1_000.0) else chars.toString()
+        return "\uD83D\uDCCE Text: $size chars \u00B7 ${TextClipboardAttachments.countLines(trace)}L"
+    }
 
-    private const val ERROR_BLOCK_MARKER = "File:"
+    private fun countOccurrences(text: String, token: String): Int {
+        var count = 0
+        var index = text.indexOf(token)
+        while (index >= 0) {
+            count++
+            index = text.indexOf(token, index + token.length)
+        }
+        return count
+    }
 }
