@@ -35,7 +35,7 @@ data class CodingAgentCapabilities(
                     "gpt-5.4-mini"
                 ),
                 reasoningLevels = listOf("minimal", "low", "medium", "high"),
-                supportsSubscriptionUsage = false
+                supportsSubscriptionUsage = true
             )
         }
     }

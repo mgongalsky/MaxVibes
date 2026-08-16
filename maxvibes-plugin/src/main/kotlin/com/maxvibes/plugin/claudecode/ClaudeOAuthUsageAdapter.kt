@@ -96,9 +96,12 @@ class ClaudeOAuthUsageAdapter : SubscriptionUsagePort {
             )
             return null
         }
-        val five = window(root, "five_hour")
-        val seven = window(root, "seven_day")
-        if (five == null && seven == null) {
+        val windows = listOfNotNull(
+            window(root, "five_hour", windowMinutes = 300),
+            window(root, "seven_day", windowMinutes = 10_080),
+            window(root, "seven_day_opus", windowMinutes = 10_080, name = "Opus")
+        )
+        if (windows.isEmpty()) {
             // Schema drifted from expectations - surface a preview so field names
             // can be adjusted from the log without guessing.
             MaxVibesLogger.info(
@@ -107,11 +110,7 @@ class ClaudeOAuthUsageAdapter : SubscriptionUsagePort {
             )
             return null
         }
-        return SubscriptionUsage(
-            fiveHour = five,
-            sevenDay = seven,
-            sevenDayOpus = window(root, "seven_day_opus")
-        )
+        return SubscriptionUsage(windows)
     }
 
     /** Token from the CLI credentials file; null (with a quiet log) when unusable. */
@@ -133,13 +132,24 @@ class ClaudeOAuthUsageAdapter : SubscriptionUsagePort {
     }
 
     /** Extracts one window; tolerant to naming and nesting variations. */
-    private fun window(root: JsonObject, key: String): UsageWindow? {
+    private fun window(
+        root: JsonObject,
+        key: String,
+        windowMinutes: Int,
+        name: String? = null
+    ): UsageWindow? {
         val obj = locate(root, key) ?: return null
         val rawUtilization = (obj["utilization"] as? JsonPrimitive)?.doubleOrNull
         val pct = rawUtilization?.let { if (it > 0.0 && it < 1.0) (it * 100).toInt() else it.toInt() }
         val resets = parseResets(obj["resets_at"] ?: obj["resetsAt"])
         if (pct == null && resets == null) return null
-        return UsageWindow(utilizationPct = pct, resetsAtEpochSec = resets)
+        return UsageWindow(
+            id = key,
+            windowMinutes = windowMinutes,
+            utilizationPct = pct,
+            resetsAtEpochSec = resets,
+            name = name
+        )
     }
 
     /** Finds an object under [key] at top level or nested one level deep. */

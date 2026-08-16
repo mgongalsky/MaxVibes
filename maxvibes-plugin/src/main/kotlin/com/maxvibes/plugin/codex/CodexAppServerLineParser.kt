@@ -11,6 +11,8 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlin.math.roundToInt
 
 /** Tolerant parser for one Codex App Server JSONL message. */
 internal class CodexAppServerLineParser {
@@ -82,6 +84,11 @@ internal class CodexAppServerLineParser {
         data class Notice(val text: String) : Line
         data class Unknown(val method: String?) : Line
         data object Ignored : Line
+
+        /** Subscription limits; arrives independently of turns, never empty. */
+        data class RateLimits(
+            val windows: List<CodexRateLimitWindow>
+        ) : Line
     }
 
     private val json = Json {
@@ -115,6 +122,8 @@ internal class CodexAppServerLineParser {
             "item/completed" -> parseItemCompleted(params)
             "thread/tokenUsage/updated",
             "turn/tokenUsage/updated" -> parseTokenUsage(params)
+
+            "account/rateLimits/updated" -> parseRateLimits(params)
 
             "turn/completed" -> parseTurnCompleted(params)
             "error" -> Line.Notice(
@@ -208,6 +217,31 @@ internal class CodexAppServerLineParser {
         return Line.TokenUsage(input, output)
     }
 
+    /**
+     * `account/rateLimits/updated`. Two schemas carry these numbers: camelCase over the
+     * App Server and snake_case in the CLI's own rollout files - both are accepted, since
+     * they have already diverged once. Percents are read as doubles because the rollout
+     * schema writes them fractionally (`27.0`), which an integer parse would drop to null.
+     */
+    private fun parseRateLimits(params: JsonObject): Line {
+        val root = params.obj("rateLimits") ?: params.obj("rate_limits") ?: params
+
+        fun num(obj: JsonObject, vararg keys: String): Double? =
+            keys.firstNotNullOfOrNull { (obj[it] as? JsonPrimitive)?.doubleOrNull }
+
+        fun window(key: String): CodexRateLimitWindow? {
+            val obj = root.obj(key) ?: return null
+            val pct = num(obj, "usedPercent", "used_percent")?.roundToInt()
+            val minutes = num(obj, "windowDurationMins", "window_minutes", "windowMinutes")?.toInt()
+            val resets = num(obj, "resetsAt", "resets_at")?.toLong()
+            if (pct == null && resets == null) return null
+            return CodexRateLimitWindow(key, pct, minutes, resets)
+        }
+
+        val windows = listOfNotNull(window("primary"), window("secondary"))
+        return if (windows.isEmpty()) Line.Ignored else Line.RateLimits(windows)
+    }
+
     private fun parseTurnCompleted(params: JsonObject): Line {
         val turn = params.obj("turn")
         val error = turn?.obj("error") ?: params.obj("error")
@@ -256,3 +290,15 @@ internal class CodexAppServerLineParser {
         return 0
     }
 }
+
+/**
+ * One rate-limit window from `account/rateLimits/updated`. [id] is the window's slot
+ * name (`primary` / `secondary`) - Codex does not name windows by duration, so
+ * [windowMinutes] is the only reliable way to tell a weekly window from a session one.
+ */
+internal data class CodexRateLimitWindow(
+    val id: String,
+    val usedPercent: Int?,
+    val windowMinutes: Int?,
+    val resetsAtEpochSec: Long?
+)

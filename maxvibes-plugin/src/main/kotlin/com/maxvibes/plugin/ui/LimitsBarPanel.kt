@@ -4,6 +4,7 @@ import com.intellij.ui.JBColor
 import com.intellij.util.ui.JBUI
 import com.maxvibes.application.port.output.AgentStreamEvent
 import com.maxvibes.application.port.output.SubscriptionUsage
+import com.maxvibes.application.port.output.UsageWindow
 import java.awt.Color
 import java.awt.Dimension
 import java.awt.Font
@@ -21,54 +22,79 @@ import javax.swing.SwingUtilities
 import javax.swing.UIManager
 
 /**
- * Subscription usage block (Set 9): one row per rate-limit window (5h session /
- * 7d week), Claude-style severity colors.
+ * Subscription usage block: one row per rate-limit window the agent actually
+ * reports, Claude-style severity colors.
+ *
+ * Rows are created on demand and keyed by [UsageWindow.id], because the set of
+ * windows is agent-specific: Claude reports a 5h session plus weekly windows,
+ * Codex a single weekly one. Labels are derived from the window length rather
+ * than a fixed vocabulary, so an unseen window still renders sensibly.
  *
  * Two complementary data sources, merged per row:
- *  - OAuth usage polling ([onUsage], every ~60s): authoritative percents and
- *    reset times, present even between turns;
- *  - CLI rate_limit_events ([onRateLimit], during turns): status escalation
- *    (allowed_warning / rejected) and occasional percents - observed on 2.1.138
- *    to omit `utilization` entirely at times, hence merge-not-overwrite: a
- *    percent once seen is never erased by an event without one (drawn as ~NN%
+ *  - usage snapshots ([onUsage]): authoritative percents and reset times,
+ *    present even between turns;
+ *  - stream rate-limit events ([onRateLimit], during turns): status escalation
+ *    (allowed_warning / rejected) and occasional percents - Claude 2.1.138 was
+ *    observed to omit `utilization` entirely at times, hence merge-not-overwrite:
+ *    a percent once seen is never erased by an event without one (drawn as ~NN%
  *    until the next authoritative value).
  * A window with no data from either source renders gray with an em dash -
  * unknown must never look like zero. Hidden until the first data of any kind;
- * in-memory only (v1).
+ * in-memory only.
  */
-class LimitsBarPanel : JPanel(GridLayout(2, 1, 0, JBUI.scale(3))) {
+class LimitsBarPanel : JPanel(GridLayout(0, 1, 0, JBUI.scale(3))) {
 
-    private val fiveHour = UsageRow("Session (5h)")
-    private val week = UsageRow("Week (7d)")
+    private val rows = LinkedHashMap<String, UsageRow>()
 
     init {
         isOpaque = false
         border = JBUI.Borders.empty(6, 2, 2, 2)
         isVisible = false
-        add(fiveHour)
-        add(week)
     }
 
-    /** CLI rate_limit_event entry point - safe to call from the transport reader thread. */
+    /** Stream rate-limit event entry point - safe to call from the transport reader thread. */
     fun onRateLimit(e: AgentStreamEvent.RateLimitUpdate) {
         SwingUtilities.invokeLater {
-            val row = when (e.kind) {
-                "five_hour" -> fiveHour
-                "seven_day" -> week
-                else -> return@invokeLater
-            }
-            row.mergeEvent(e.utilizationPct, e.status, e.resetsAtEpochSec)
+            merge(
+                UsageWindow(
+                    id = e.kind,
+                    windowMinutes = e.windowMinutes ?: NAMED_WINDOW_MINUTES[e.kind],
+                    utilizationPct = e.utilizationPct,
+                    resetsAtEpochSec = e.resetsAtEpochSec,
+                    status = e.status
+                )
+            )
             reveal()
         }
     }
 
-    /** OAuth usage snapshot entry point - safe to call from any thread. */
+    /** Usage snapshot entry point - safe to call from any thread. */
     fun onUsage(usage: SubscriptionUsage) {
         SwingUtilities.invokeLater {
-            usage.fiveHour?.let { fiveHour.mergeUsage(it.utilizationPct, it.resetsAtEpochSec) }
-            usage.sevenDay?.let { week.mergeUsage(it.utilizationPct, it.resetsAtEpochSec) }
-            if (usage.fiveHour != null || usage.sevenDay != null) reveal()
+            usage.windows.forEach { merge(it) }
+            if (usage.windows.isNotEmpty()) reveal()
         }
+    }
+
+    /** Drops every row: one agent's windows must never linger in another agent's bar. */
+    fun reset() {
+        SwingUtilities.invokeLater {
+            rows.clear()
+            removeAll()
+            isVisible = false
+            revalidate()
+            repaint()
+        }
+    }
+
+    private fun merge(window: UsageWindow) {
+        val row = rows.getOrPut(window.id) {
+            UsageRow(labelFor(window)).also {
+                add(it)
+                revalidate()
+            }
+        }
+        row.merge(window.utilizationPct, window.resetsAtEpochSec, window.status)
     }
 
     private fun reveal() {
@@ -78,6 +104,26 @@ class LimitsBarPanel : JPanel(GridLayout(2, 1, 0, JBUI.scale(3))) {
             parent?.repaint()
         }
     }
+
+    private companion object {
+        /** Claude names its windows instead of measuring them; these are the known lengths. */
+        private val NAMED_WINDOW_MINUTES = mapOf(
+            "five_hour" to 300,
+            "seven_day" to 10_080,
+            "seven_day_opus" to 10_080
+        )
+    }
+}
+
+private fun labelFor(window: UsageWindow): String {
+    val minutes = window.windowMinutes
+    val base = when {
+        minutes == null -> "Limit"
+        minutes >= 1440 -> if (minutes / 1440 == 7) "Week (7d)" else "Limit (${minutes / 1440}d)"
+        minutes >= 60 -> "Session (${minutes / 60}h)"
+        else -> "Window (${minutes}m)"
+    }
+    return if (window.name.isNullOrBlank()) base else "$base ${window.name}"
 }
 
 /** One usage window: label + rounded severity-colored bar + right-aligned details. */
@@ -86,10 +132,10 @@ private class UsageRow(private val label: String) : JComponent() {
     /** False until the first data (event or usage snapshot) for this window. */
     private var hasData = false
 
-    /** Last KNOWN percent - sticky across CLI events that omit `utilization`. */
+    /** Last KNOWN percent - sticky across stream events that omit `utilization`. */
     private var pct: Int? = null
 
-    /** True when the latest CLI event omitted the percent while an older one is shown. */
+    /** True when the latest stream event omitted the percent while an older one is shown. */
     private var pctStale = false
 
     private var status: String = "allowed"
@@ -101,29 +147,21 @@ private class UsageRow(private val label: String) : JComponent() {
         toolTipText = "$label: no usage data yet"
     }
 
-    /** CLI event merge: status always refreshes; percent and reset time stick until replaced. */
-    fun mergeEvent(newPct: Int?, newStatus: String, newResetsAt: Long?) {
+    /**
+     * Percent and reset time stick until replaced. [newStatus] is non-null only for
+     * stream events, and a status-carrying update without a percent means the old
+     * percent is now merely the last known one.
+     */
+    fun merge(newPct: Int?, newResetsAt: Long?, newStatus: String?) {
+        if (newPct == null && newResetsAt == null && newStatus == null) return
         hasData = true
         if (newPct != null) {
             pct = newPct
             pctStale = false
-        } else if (pct != null) {
+        } else if (newStatus != null && pct != null) {
             pctStale = true
         }
-        status = newStatus
-        if (newResetsAt != null) resetsAtEpochSec = newResetsAt
-        refreshTooltip()
-        repaint()
-    }
-
-    /** OAuth snapshot merge: authoritative percent/reset; status untouched (CLI owns it). */
-    fun mergeUsage(newPct: Int?, newResetsAt: Long?) {
-        if (newPct == null && newResetsAt == null) return
-        hasData = true
-        if (newPct != null) {
-            pct = newPct
-            pctStale = false
-        }
+        if (newStatus != null) status = newStatus
         if (newResetsAt != null) resetsAtEpochSec = newResetsAt
         refreshTooltip()
         repaint()

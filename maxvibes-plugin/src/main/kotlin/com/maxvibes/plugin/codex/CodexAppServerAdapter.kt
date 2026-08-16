@@ -624,6 +624,21 @@ class CodexAppServerAdapter(
                     outputTokens = line.outputTokens
                 }
 
+            // Лимиты приходят и вне хода, поэтому активный ход тут не трогаем.
+            // Codex не сообщает статус окна — цвет строки считается по проценту.
+            is CodexAppServerLineParser.Line.RateLimits ->
+                line.windows.forEach { window ->
+                    emitEvent(
+                        AgentStreamEvent.RateLimitUpdate(
+                            kind = window.id,
+                            status = "allowed",
+                            utilizationPct = window.usedPercent,
+                            resetsAtEpochSec = window.resetsAtEpochSec,
+                            windowMinutes = window.windowMinutes
+                        )
+                    )
+                }
+
             is CodexAppServerLineParser.Line.TurnCompleted -> {
                 val turn = activeTurn ?: return
                 turn.touch()

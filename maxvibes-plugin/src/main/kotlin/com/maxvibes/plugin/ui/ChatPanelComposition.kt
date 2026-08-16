@@ -353,16 +353,22 @@ class ChatPanelComposition(
         render()
     }
     private var usagePoller: SubscriptionUsagePoller? = null
+    private var lastUsageProvider: CodingAgentProvider? = null
 
     /**
      * [SubscriptionUsagePoller.stop] is terminal, so an unsupported agent drops the instance
-     * entirely and a supported one always gets a freshly started poller.
+     * entirely and a supported one always gets a freshly started poller. Polling is a Claude
+     * detail - Codex pushes its limits into the event stream and needs no poller at all.
      */
     private fun refreshUsagePolling() {
         val provider = AgentCliSettingsAdapter(settings).provider
         val supported = CodingAgentCapabilities.of(provider).supportsSubscriptionUsage
         view.setUsageSupported(supported)
-        if (!supported) {
+        if (provider != lastUsageProvider) {
+            lastUsageProvider = provider
+            view.resetUsage()
+        }
+        if (!supported || provider != CodingAgentProvider.CLAUDE_CODE) {
             stopUsagePolling()
             return
         }

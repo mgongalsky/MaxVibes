@@ -17,17 +17,20 @@ data class SessionStats(
 sealed interface AgentStreamEvent {
 
     /**
-     * Subscription rate-limit telemetry from the CLI's rate_limit_event (one event
-     * per window: "five_hour" / "seven_day"). Forwarded for the limits indicator;
-     * the live feed must NOT render these as notices - they fire on every turn.
-     * [utilizationPct] is null when the CLI omits the field; [status] passes through
+     * Subscription rate-limit telemetry pushed by the agent during a turn (one event
+     * per window). Forwarded for the limits indicator; the live feed must NOT render
+     * these as notices - they fire on every turn. [kind] is the agent's own window
+     * identifier and doubles as the merge key; [windowMinutes] is the window length
+     * when the agent reports it (Codex does; Claude only names its windows).
+     * [utilizationPct] is null when the agent omits the field; [status] passes through
      * verbatim ("allowed" observed; "allowed_warning" / "rejected" per CLI strings).
      */
     data class RateLimitUpdate(
         val kind: String,
         val status: String,
         val utilizationPct: Int?,
-        val resetsAtEpochSec: Long?
+        val resetsAtEpochSec: Long?,
+        val windowMinutes: Int? = null
     ) : AgentStreamEvent
 
     data class SessionStarted(val sessionId: String, val model: String) : AgentStreamEvent

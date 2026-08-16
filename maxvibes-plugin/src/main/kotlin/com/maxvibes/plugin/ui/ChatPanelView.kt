@@ -200,6 +200,11 @@ class ChatPanelView(
         limitsBar.onUsage(usage)
     }
 
+    /** Drops the bar's windows: after a provider switch the old agent's percents would look real. */
+    fun resetUsage() {
+        limitsBar.reset()
+    }
+
     fun onRateLimit(event: AgentStreamEvent.RateLimitUpdate) {
         if (!usageSupported) return
         limitsBar.onRateLimit(event)
