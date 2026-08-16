@@ -22,6 +22,10 @@ import com.maxvibes.application.port.output.PsiFailureReport
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.domain.model.modification.ModificationError
 import java.io.File
+import com.maxvibes.application.port.output.TerminalUsageLogPort
+import com.maxvibes.application.port.output.TerminalUsageEntry
+import com.maxvibes.plugin.service.TerminalUsageLogWriter
+import com.maxvibes.domain.model.command.CommandRequest
 
 /** Composition root behind [ChatMessageController]. */
 internal class ChatMessageControllerComposition(
@@ -75,6 +79,9 @@ internal class ChatMessageControllerComposition(
     private val documentSaver: DocumentSaver = IntellijDocumentSaver()
     private val psiFailureReports: PsiFailureReportPort by lazy {
         PsiFailureReportWriter(project.basePath ?: System.getProperty("user.home"))
+    }
+    private val terminalUsageLog: TerminalUsageLogPort by lazy {
+        TerminalUsageLogWriter(project.basePath ?: System.getProperty("user.home"))
     }
 
     private val ideErrorsAttachmentLoader: IdeErrorsAttachmentLoader by lazy {
@@ -177,9 +184,7 @@ internal class ChatMessageControllerComposition(
             chatTreeService = chatTreeService,
             callbacks = callbacks,
             presentQuestions = questionCoordinator::presentQuestions,
-            presentCommands = { commands, sessionId, mode ->
-                commandCoordinator.presentCommands(commands, sessionId, mode)
-            },
+            presentCommands = ::presentCommandsLogged,
             executeAsync = { title, session, action -> runClaudeCodeBg(title, session, action) },
             turnAutopilot = { turnAutopilot },
             maxFormatRetries = { ApprovalPolicySettings.getInstance(project).loadMaxFormatRetries() }
@@ -192,9 +197,7 @@ internal class ChatMessageControllerComposition(
             resolveSpecificPrompt = { name -> service.specificPromptService.resolvePromptContent(name) },
             chatTreeService = chatTreeService,
             callbacks = callbacks,
-            presentCommands = { commands, sessionId, mode ->
-                commandCoordinator.presentCommands(commands, sessionId, mode)
-            },
+            presentCommands = ::presentCommandsLogged,
             executeAsync = { title, session, action -> runClipboardBg(title, session, action) }
         )
     }
@@ -207,9 +210,7 @@ internal class ChatMessageControllerComposition(
                 @Suppress("DEPRECATION")
                 service.ensureCheapLLMService()
             },
-            presentCommands = { commands, sessionId, mode ->
-                commandCoordinator.presentCommands(commands, sessionId, mode)
-            },
+            presentCommands = ::presentCommandsLogged,
             executeAsync = { title, session, planOnly, cheap, request ->
                 runApiBg(title, session, planOnly, cheap, request)
             }
@@ -304,7 +305,9 @@ internal class ChatMessageControllerComposition(
                     completed?.modifications?.any { !it.success } == true
             // Отчёт пишется до handleResult: тот дёргает автопилот, а он может тут же
             // начать следующий ход поверх состояния этого.
-            if (brokenStep) {
+            // Проверка на null избыточна по смыслу, но нужна редактору: умное
+            // приведение через булеву переменную видит не всякий анализатор.
+            if (brokenStep && completed != null) {
                 reportBrokenStep(session, completed)
             }
             // Батч чеков должен существовать до handleResult: тот дёргает автопилот,
@@ -315,11 +318,11 @@ internal class ChatMessageControllerComposition(
             claudeCodeDispatcher.handleResult(result, session)
             if (blockedByCommands) {
                 callbacks.appendToChat(
-                    "\u26A0\uFE0F ${checks.size} check(s) skipped — response mixed them with terminal commands"
+                    "\u26A0\uFE0F ${checks.size} check(s) skipped \u2014 response mixed them with terminal commands"
                 )
             } else if (brokenStep && checks.isNotEmpty()) {
                 callbacks.appendToChat(
-                    "\u26A0\uFE0F ${checks.size} check(s) skipped — the modifications of this step never reached the code"
+                    "\u26A0\uFE0F ${checks.size} check(s) skipped \u2014 the modifications of this step never reached the code"
                 )
             }
         }
@@ -483,5 +486,29 @@ internal class ChatMessageControllerComposition(
         val sessionId = chatTreeService.getActiveSession().id
         approvalService.setAllowAll(sessionId, enabled)
         if (enabled) turnAutopilot.resumeParked(sessionId)
+    }
+
+    /**
+     * Единственная точка, через которую все три режима предлагают команды.
+     * Журнал ведётся здесь, а не в диспетчерах: врезка в один из них потеряла
+     * бы два остальных, а врезка в координатор заставила бы его писать файлы
+     * ещё и в собственных юнит-тестах.
+     */
+    private fun presentCommandsLogged(
+        commands: List<CommandRequest>,
+        sessionId: String,
+        mode: InteractionMode
+    ) {
+        commands.forEach { request ->
+            terminalUsageLog.record(
+                TerminalUsageEntry(
+                    sessionId = sessionId,
+                    provider = mode.name,
+                    command = request.command,
+                    reason = request.reason
+                )
+            )
+        }
+        commandCoordinator.presentCommands(commands, sessionId, mode)
     }
 }
