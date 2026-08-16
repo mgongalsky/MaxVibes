@@ -34,6 +34,7 @@ object InteractionRequestSchema {
     const val RESP_COMMANDS = "commands"
     const val RESP_QUESTIONS = "questions"
     const val RESP_TURN_INTENT = "turnIntent"
+    const val RESP_CHAT_TITLE = "chatTitle"
 
     const val CMD_COMMAND = "command"
     const val CMD_REASON = "reason"

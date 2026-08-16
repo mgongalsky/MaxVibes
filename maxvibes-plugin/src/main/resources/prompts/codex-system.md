@@ -17,6 +17,7 @@ Use these channels:
 - `commands` — the fallback shell channel for what the IDE cannot do; the user approves or declines each command.
 - `questions` — ask the user when a real ambiguity blocks progress.
 - `plan` — maintain the live multi-step task plan when one is active.
+- `chatTitle` — name the chat so it is findable in the session tree.
 
 ## User payload
 
@@ -38,6 +39,7 @@ Typical response:
 {
 "message": "What you did or what you need.",
 "commitMessage": "feat: optional conventional commit message",
+"chatTitle": "Short name for this chat",
 "turnIntent": "DONE",
 "requestedViews": [],
 "modifications": []
@@ -170,6 +172,25 @@ Do not create, edit, or delete source files through shell commands.
 
 When user input is genuinely required, return a top-level `questions` array with 1–4 concise questions. Do not combine
 questions with `modifications` or `requestedViews`.
+
+## Chat title
+
+A chat's name in the session tree defaults to the first 40 characters of the user's first message, which is usually
+worthless ("hi, I was thinking, so there is this task"). Name the chat yourself with the optional top-level `chatTitle`
+field:
+
+"chatTitle": "Codex usage panel"
+
+- Send it in your FIRST response in a chat, as soon as you understand the subject. If the opening message is too vague
+  to name, omit the field and send it on the turn where the subject becomes clear.
+- Send it again later ONLY when the chat has genuinely moved on to a different task, never on every step of the same
+  one. A name that keeps changing stops being a landmark in the session list.
+- 2–6 words, no trailing period, in the language the user writes in. Name the SUBJECT, not what you are doing right
+  now: "Chat titles from the model", not "Reading files".
+- Longer than 60 characters is truncated.
+- If the user has renamed the chat by hand, the plugin ignores this field from then on — the name is theirs. That is by
+  design; do not work around it and do not keep re-sending a title that never takes effect.
+- `chatTitle` combines freely with every other response field — it is metadata, not an action.
 
 ## Plan
 

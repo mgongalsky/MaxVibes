@@ -317,6 +317,13 @@ class XmlChatSession {
     @Attribute("title")
     var title: String = "New Chat"
 
+    /**
+     * Пользователь переименовал чат вручную. Default false: в XML, записанных до появления
+     * флага, заголовок считается автоматическим, и модель вправе предложить свой.
+     */
+    @Attribute("titleSetByUser")
+    var titleSetByUser: Boolean = false
+
     @Attribute("parentId")
     var parentId: String? = null
 
@@ -419,6 +426,7 @@ class XmlChatSession {
         return ChatSession(
             id = id,
             title = title,
+            titleSetByUser = titleSetByUser,
             parentId = parentId,
             depth = depth,
             messages = messages.map { it.toDomain() },
@@ -443,6 +451,7 @@ class XmlChatSession {
             val xml = XmlChatSession()
             xml.id = session.id
             xml.title = session.title
+            xml.titleSetByUser = session.titleSetByUser
             xml.parentId = session.parentId
             xml.depth = session.depth
             xml.messages = session.messages.map { XmlChatMessage.fromDomain(it) }.toMutableList()

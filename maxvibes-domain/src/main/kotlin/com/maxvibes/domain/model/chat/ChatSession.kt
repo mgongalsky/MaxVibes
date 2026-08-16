@@ -8,6 +8,11 @@ import java.util.UUID
 data class ChatSession(
     val id: String = UUID.randomUUID().toString(),
     val title: String = "New Chat",
+    /**
+     * Пользователь переименовал чат вручную. После этого заголовок принадлежит ему:
+     * ни автозаголовок из первого сообщения, ни предложение модели его не перебивают.
+     */
+    val titleSetByUser: Boolean = false,
     val parentId: String? = null,
     val depth: Int = 0,
     val messages: List<ChatMessage> = emptyList(),
@@ -56,6 +61,27 @@ data class ChatSession(
     fun withTitle(newTitle: String): ChatSession =
         copy(title = newTitle.trim().ifBlank { "Untitled" }, updatedAt = Instant.now().toEpochMilli())
 
+    /**
+     * Ручное переименование пользователем: помимо заголовка фиксирует [titleSetByUser],
+     * после чего [withGeneratedTitle] становится no-op навсегда.
+     */
+    fun renamedByUser(newTitle: String): ChatSession =
+        withTitle(newTitle).copy(titleSetByUser = true)
+
+    /**
+     * Заголовок, предложенный моделью. Возвращает `this` без изменений, если пользователь
+     * уже переименовал чат вручную, если предложение пустое или совпадает с текущим.
+     *
+     * Проверка флага живёт здесь, а не у вызывающего кода: точек применения будет больше
+     * одной, и забытая проверка молча отбирает у пользователя его же название.
+     */
+    fun withGeneratedTitle(newTitle: String): ChatSession {
+        if (titleSetByUser) return this
+        val cleaned = newTitle.trim().lineSequence().first().trim().take(MAX_GENERATED_TITLE)
+        if (cleaned.isBlank() || cleaned == title) return this
+        return copy(title = cleaned, updatedAt = Instant.now().toEpochMilli())
+    }
+
     /** Returns a new session with [depth] updated (no timestamp change — tree restructure only). */
     fun withDepth(newDepth: Int): ChatSession = copy(depth = newDepth)
 
@@ -85,4 +111,9 @@ data class ChatSession(
 
     fun withPlan(plan: TaskPlan?): ChatSession =
         copy(plan = plan, updatedAt = Instant.now().toEpochMilli())
+
+    companion object {
+        /** Длиннее заголовок не влезает ни в хлебную крошку, ни в узел дерева сессий. */
+        const val MAX_GENERATED_TITLE = 60
+    }
 }

@@ -258,6 +258,17 @@ class JsonInteractionProtocolCodecTest {
     }
 
     @Test
+    fun `decode chatTitle is read when present and stays null when absent`() {
+        val withTitle = codec.decode("""{"message": "done", "chatTitle": "Автозаголовки чатов"}""")
+        assertNotNull(withTitle)
+        assertEquals("Автозаголовки чатов", withTitle!!.chatTitle)
+
+        val withoutTitle = codec.decode("""{"message": "done"}""")
+        assertNotNull(withoutTitle)
+        assertNull(withoutTitle!!.chatTitle)
+    }
+
+    @Test
     fun `decode invalid JSON returns null`() {
         // No recognized indicator keys → findEmbeddedJson returns null
         // lenientJson parse still fails on this garbage

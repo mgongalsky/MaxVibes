@@ -270,6 +270,7 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
             modifications = modifications,
             malformedModifications = malformedModifications,
             commitMessage = obj[InteractionRequestSchema.RESP_COMMIT_MESSAGE]?.jsonPrimitive?.contentOrNull,
+            chatTitle = obj[InteractionRequestSchema.RESP_CHAT_TITLE]?.jsonPrimitive?.contentOrNull,
             commands = obj[InteractionRequestSchema.RESP_COMMANDS]?.jsonArray
                 ?.mapNotNull { parseCommand(it.jsonObject) } ?: emptyList(),
             checks = obj[InteractionRequestSchema.RESP_CHECKS]?.jsonArray

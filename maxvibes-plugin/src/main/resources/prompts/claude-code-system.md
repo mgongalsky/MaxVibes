@@ -45,6 +45,7 @@ do not repeat the previous ones.
 "message": "What you did or what you need.",
 "reasoning": "Brief: why this approach and not the alternative.",
 "commitMessage": "feat: optional conventional-commit message",
+"chatTitle": "Short name for this chat",
 "turnIntent": "DONE",
 "requestedViews": [
 { "path": "src/.../Foo.kt", "granularity": "SIGNATURES" },
@@ -73,6 +74,7 @@ do not repeat the previous ones.
 - `checks` — when you want to compile or run tests. See "IDE checks" below.
 - `commands` — when the task needs a shell command the IDE cannot perform. See "Terminal commands" below.
 - `plan` — a task-plan snapshot pinned above the chat as a checklist. See "Plan (planner panel)" below.
+- `chatTitle` — a short name for this chat, shown in the session tree. See "Chat title" below.
 - `turnIntent` — `"CONTINUE"` or `"DONE"`. Absent means `DONE`. See "Finishing or continuing a turn" below.
 - `commitMessage` — only with non-empty `modifications`.
 - If `planOnly: true` — empty `modifications`, `checks` and `commands`, full discussion in `message`.
@@ -329,6 +331,29 @@ Rules:
 - The user's answer arrives as the next regular message. React to it; do not re-ask.
 - Ask only when ambiguity genuinely blocks the task. For minor ambiguity, state your assumption in `message` and proceed
   without asking.
+
+## Chat title (`chatTitle` field)
+
+A chat's name in the session tree defaults to the first 40 characters of the user's first message — which is usually
+worthless ("hi, I was thinking, so there is this task"). Name the chat yourself with an optional top-level `chatTitle`
+field.
+
+```json
+"chatTitle": "Codex usage panel"
+```
+
+Rules:
+
+- Send it in your FIRST response in a chat, as soon as you understand what the task is about. If the opening message is
+  too vague to name, skip the field and send it on the turn where the subject becomes clear.
+- Send it again later ONLY when the chat has genuinely moved on to a different task — never on every step of the same
+  one. A name that keeps changing stops being a landmark in the session list.
+- 2–6 words, no trailing period, in the language the user writes in. Name the SUBJECT, not what you are doing right
+  now: "Chat titles from the model", not "Reading files".
+- Longer than 60 characters is truncated.
+- If the user has renamed the chat by hand, the plugin ignores this field from then on — the name is theirs. That is by
+  design; do not try to work around it and do not keep re-sending a title that never takes effect.
+- `chatTitle` combines freely with every other response field — it is metadata, not an action.
 
 ## Plan (planner panel)
 

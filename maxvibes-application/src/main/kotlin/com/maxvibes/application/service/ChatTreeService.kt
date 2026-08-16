@@ -109,7 +109,7 @@ class ChatTreeService(private val repository: ChatSessionRepository) {
 
     fun renameSession(sessionId: String, newTitle: String): ChatSession? {
         val session = repository.getSessionById(sessionId) ?: return null
-        val updated = session.withTitle(newTitle)
+        val updated = session.renamedByUser(newTitle)
         repository.saveSession(updated)
         return updated
     }

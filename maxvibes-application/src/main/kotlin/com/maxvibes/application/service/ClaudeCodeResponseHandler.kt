@@ -74,6 +74,19 @@ internal class CodingAgentResponseHandler(
                         )
                     }
 
+                is CodingAgentResponseProcessor.Intent.SetChatTitle ->
+                    chatSessionRepository.getSessionById(sessionId)?.let { current ->
+                        val renamed = current.withGeneratedTitle(intent.title)
+                        // Домен отказался менять заголовок — чат переименован человеком либо
+                        // предложение совпало с текущим. Лишняя запись сдвинула бы updatedAt
+                        // и подняла бы чат в списке без единого изменения.
+                        if (renamed !== current) {
+                            chatSessionRepository.saveSession(renamed)
+                            log("Chat title set by model: ${renamed.title}")
+                            sessionLog?.event("chat title updated", mapOf("title" to renamed.title))
+                        }
+                    }
+
                 is CodingAgentResponseProcessor.Intent.AppendAssistantHistory ->
                     state.dialogHistory.add(
                         ChatMessageDTO(

@@ -93,6 +93,15 @@ data class InteractionResponse(
     /** Сгенерированный commit message — плагин автоматически вставит его в поле коммита в IDE. */
     val commitMessage: String? = null,
 
+    /**
+     * Название чата, предложенное моделью.
+     *
+     * Null — поле отсутствовало, заголовок сессии не меняется. Непустое значение
+     * применяется только пока пользователь не переименовал чат вручную; решение
+     * принимает домен ([com.maxvibes.domain.model.chat.ChatSession.withGeneratedTitle]).
+     */
+    val chatTitle: String? = null,
+
     /** Shell-команды, запрошенные LLM (last resort). Выполняются после подтверждения пользователем. */
     val commands: List<InteractionCommand> = emptyList(),
 

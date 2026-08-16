@@ -26,6 +26,9 @@ object CodingAgentResponseProcessor {
     sealed interface Intent {
         data class SavePlan(val plan: TaskPlan?) : Intent
 
+        /** Заголовок чата, предложенный моделью. Домен решает, применять ли его. */
+        data class SetChatTitle(val title: String) : Intent
+
         data class AppendAssistantHistory(val message: String) : Intent
 
         data class PersistRequestedViews(val views: List<CodeViewRequest>) : Intent
@@ -85,6 +88,9 @@ object CodingAgentResponseProcessor {
             intents += Intent.SavePlan(
                 snapshot.takeIf { it.steps.isNotEmpty() }
             )
+        }
+        response.chatTitle?.takeIf { it.isNotBlank() }?.let { title ->
+            intents += Intent.SetChatTitle(title)
         }
         if (message.isNotBlank()) {
             intents += Intent.AppendAssistantHistory(message)
