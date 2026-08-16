@@ -18,6 +18,7 @@ import com.maxvibes.domain.model.check.CheckStatus
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
+import com.intellij.openapi.application.ModalityState
 
 /**
  * Сборка проекта средствами IDE — то же самое, что Build Project в меню.
@@ -63,7 +64,10 @@ class JvmBuildCheckRunner(private val project: Project) : CheckRunnerPort {
 
     private suspend fun compile(scope: String?): Outcome =
         suspendCancellableCoroutine { continuation ->
-            ApplicationManager.getApplication().invokeLater {
+            // Модальность задаётся явно: по умолчанию invokeLater наследует её от
+            // фоновой задачи, из которой пришёл автозапуск чека, и тогда runnable
+            // ждёт чужой модальности, которой на EDT уже нет — сборка не стартует.
+            ApplicationManager.getApplication().invokeLater({
                 val manager = CompilerManager.getInstance(project)
                 val callback = CompileStatusNotification { aborted, _, _, context ->
                     continuation.resume(
@@ -81,7 +85,7 @@ class JvmBuildCheckRunner(private val project: Project) : CheckRunnerPort {
                 } else {
                     manager.make(module, callback)
                 }
-            }
+            }, ModalityState.NON_MODAL)
         }
 
     /**

@@ -9,6 +9,10 @@ import com.maxvibes.domain.model.command.CommandExecution
 import com.maxvibes.plugin.service.MaxVibesLogger
 import com.maxvibes.application.service.ClaudeCodeStepResult
 import com.maxvibes.domain.model.check.CheckExecution
+import com.maxvibes.domain.model.check.CheckRequest
+import com.maxvibes.domain.model.check.CheckStatus
+import com.maxvibes.domain.model.command.CommandRequest
+import com.maxvibes.domain.model.command.CommandStatus
 
 /**
  * Owns interaction-specific background execution policy on top of
@@ -123,6 +127,7 @@ internal class InteractionExecutionCoordinator(
     }
 
     fun runCommand(
+        request: CommandRequest,
         action: suspend () -> CommandExecution,
         onResult: (CommandExecution) -> Unit
     ) {
@@ -130,12 +135,32 @@ internal class InteractionExecutionCoordinator(
             title = "MaxVibes: Running command...",
             cancellable = false,
             publishIndicator = false,
-            action = action,
+            // Без перехвата исключение не даёт вызвать onSuccess, и пузырь
+            // команды остаётся в Running навсегда, а батч никогда не завершается.
+            action = {
+                try {
+                    action()
+                } catch (e: ProcessCanceledException) {
+                    throw e
+                } catch (e: Throwable) {
+                    MaxVibesLogger.error(
+                        "InteractionExecution",
+                        "command background action crashed",
+                        e as? Exception ?: RuntimeException(e)
+                    )
+                    CommandExecution(
+                        request = request,
+                        status = CommandStatus.ERROR,
+                        output = "Internal error: ${e.javaClass.simpleName}: ${e.message ?: "no message"}"
+                    )
+                }
+            },
             onSuccess = onResult
         )
     }
 
     fun runCheck(
+        request: CheckRequest,
         action: suspend () -> CheckExecution,
         onResult: (CheckExecution) -> Unit
     ) {
@@ -143,7 +168,26 @@ internal class InteractionExecutionCoordinator(
             title = "MaxVibes: Running check...",
             cancellable = false,
             publishIndicator = false,
-            action = action,
+            // Без перехвата исключение не даёт вызвать onSuccess, и пузырь
+            // проверки остаётся в Running навсегда, а батч никогда не завершается.
+            action = {
+                try {
+                    action()
+                } catch (e: ProcessCanceledException) {
+                    throw e
+                } catch (e: Throwable) {
+                    MaxVibesLogger.error(
+                        "InteractionExecution",
+                        "check background action crashed",
+                        e as? Exception ?: RuntimeException(e)
+                    )
+                    CheckExecution(
+                        request = request,
+                        status = CheckStatus.ERROR,
+                        rawOutput = "Internal error: ${e.javaClass.simpleName}: ${e.message ?: "no message"}"
+                    )
+                }
+            },
             onSuccess = onResult
         )
     }

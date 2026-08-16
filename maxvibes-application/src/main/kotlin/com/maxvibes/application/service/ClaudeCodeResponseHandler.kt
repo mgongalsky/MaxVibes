@@ -27,7 +27,7 @@ internal class CodingAgentResponseHandler(
         log(
             "Processing response: hasViews=${response.codeViewRequests.isNotEmpty()}, " +
                     "hasMods=${response.modifications.isNotEmpty()}, hasQuestions=${response.questions.isNotEmpty()}, " +
-                    "commands=${response.commands.size}, msg=${response.message.take(60)}"
+                    "commands=${response.commands.size}, checks=${response.checks.size}, msg=${response.message.take(60)}"
         )
         sessionLog?.event(
             "response",
@@ -36,6 +36,7 @@ internal class CodingAgentResponseHandler(
                 "hasMods" to response.modifications.isNotEmpty(),
                 "questions" to response.questions.size,
                 "commands" to response.commands.size,
+                "checks" to response.checks.size,
                 "msgLen" to response.message.length,
                 "thinkingLen" to (turn.thinkingText?.length ?: 0),
                 "turnIntent" to (response.turnIntent?.name ?: "none")
@@ -98,17 +99,20 @@ internal class CodingAgentResponseHandler(
                         modifications = intent.modifications,
                         commands = intent.commands,
                         commitMessage = intent.commitMessage,
-                        turnIntent = intent.turnIntent
+                        turnIntent = intent.turnIntent,
+                        checks = intent.checks
                     )
                     log(
-                        "Holding ${intent.modifications.size} modification(s) and " +
-                                "${intent.commands.size} command(s) for user approval"
+                        "Holding ${intent.modifications.size} modification(s), " +
+                                "${intent.commands.size} command(s) and " +
+                                "${intent.checks.size} check(s) for user approval"
                     )
                     sessionLog?.event(
                         "modifications held for approval",
                         mapOf(
                             "mods" to intent.modifications.size,
                             "commands" to intent.commands.size,
+                            "checks" to intent.checks.size,
                             "turnIntent" to (intent.turnIntent?.name ?: "none")
                         )
                     )

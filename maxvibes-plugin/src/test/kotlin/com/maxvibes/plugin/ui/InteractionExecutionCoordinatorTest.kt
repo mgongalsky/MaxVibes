@@ -15,6 +15,12 @@ import org.junit.jupiter.api.Test
 import com.intellij.openapi.progress.ProcessCanceledException
 import org.junit.jupiter.api.assertThrows
 import com.maxvibes.application.service.ClaudeCodeStepResult
+import com.maxvibes.domain.model.command.CommandRequest
+import com.maxvibes.domain.model.check.CheckExecution
+import com.maxvibes.domain.model.check.CheckKind
+import com.maxvibes.domain.model.check.CheckRequest
+import com.maxvibes.domain.model.check.CheckStatus
+import com.maxvibes.domain.model.command.CommandStatus
 
 class InteractionExecutionCoordinatorTest {
     @Test
@@ -109,6 +115,7 @@ class InteractionExecutionCoordinatorTest {
         val results = mutableListOf<CommandExecution>()
 
         fixture.coordinator.runCommand(
+            request = CommandRequest("git status"),
             action = { execution },
             onResult = results::add
         )
@@ -124,11 +131,50 @@ class InteractionExecutionCoordinatorTest {
         val fixture = fixture(runner)
 
         fixture.coordinator.runCommand(
+            request = CommandRequest("git status"),
             action = { mockk() },
             onResult = {}
         )
 
         assertEquals("MaxVibes: Running command...", runner.title)
+    }
+
+    @Test
+    fun `check crash is converted to an ERROR execution instead of hanging the bubble`() {
+        val runner = ImmediateRunner()
+        val fixture = fixture(runner)
+        val request = CheckRequest(CheckKind.BUILD)
+        val results = mutableListOf<CheckExecution>()
+
+        fixture.coordinator.runCheck(
+            request = request,
+            action = { error("compiler exploded") },
+            onResult = results::add
+        )
+
+        val execution = results.single()
+        assertEquals(CheckStatus.ERROR, execution.status)
+        assertEquals(request, execution.request)
+        assertTrue(execution.rawOutput.startsWith("Internal error: IllegalStateException"))
+    }
+
+    @Test
+    fun `command crash is converted to an ERROR execution instead of hanging the bubble`() {
+        val runner = ImmediateRunner()
+        val fixture = fixture(runner)
+        val request = CommandRequest("git status")
+        val results = mutableListOf<CommandExecution>()
+
+        fixture.coordinator.runCommand(
+            request = request,
+            action = { error("shell exploded") },
+            onResult = results::add
+        )
+
+        val execution = results.single()
+        assertEquals(CommandStatus.ERROR, execution.status)
+        assertEquals(request, execution.request)
+        assertTrue(execution.output.startsWith("Internal error: IllegalStateException"))
     }
 
     @Test

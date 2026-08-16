@@ -7,6 +7,7 @@ import com.maxvibes.domain.model.modification.AppliedModInfo
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.domain.model.planning.PlanDiagram
 import com.maxvibes.plugin.ui.ChatPanelCallbacks
+import com.maxvibes.plugin.ui.CheckBlockView
 import com.maxvibes.plugin.ui.CommandBatchBarView
 import com.maxvibes.plugin.ui.CommandBlockView
 import com.maxvibes.plugin.ui.PostApplyErrorsView
@@ -73,6 +74,38 @@ class FakeChatPanelCallbacks : ChatPanelCallbacks {
         }
     }
 
+    /** Rendered check block with its callbacks — tests drive [onRun]/[onDecline] directly. */
+    class RecordedCheckBubble(
+        val title: String,
+        val reason: String?,
+        val onRun: () -> Unit,
+        val onDecline: (String?) -> Unit
+    ) : CheckBlockView {
+        val stateChanges = mutableListOf<String>()
+        var declineComment: String? = null
+        var resultHeadline: String? = null
+        var resultSuccess: Boolean? = null
+
+        override fun setQueued() {
+            stateChanges.add("queued")
+        }
+
+        override fun setRunning() {
+            stateChanges.add("running")
+        }
+
+        override fun setResult(headline: String, details: String, success: Boolean) {
+            stateChanges.add("result")
+            resultHeadline = headline
+            resultSuccess = success
+        }
+
+        override fun setDeclined(comment: String?) {
+            stateChanges.add("declined")
+            declineComment = comment
+        }
+    }
+
     /** Rendered Run all / Decline all bar with its callbacks. */
     class RecordedBatchBar(
         val count: Int,
@@ -104,6 +137,7 @@ class FakeChatPanelCallbacks : ChatPanelCallbacks {
     }
 
     val commandBubbles = mutableListOf<RecordedCommandBubble>()
+    val checkBubbles = mutableListOf<RecordedCheckBubble>()
     val batchBars = mutableListOf<RecordedBatchBar>()
     val questionBubbles = mutableListOf<RecordedQuestionBubble>()
 
@@ -216,6 +250,17 @@ class FakeChatPanelCallbacks : ChatPanelCallbacks {
     ): CommandBlockView {
         val bubble = RecordedCommandBubble(command, reason, warnings, onRun, onDecline)
         commandBubbles.add(bubble)
+        return bubble
+    }
+
+    override fun addCheckBubble(
+        title: String,
+        reason: String?,
+        onRun: () -> Unit,
+        onDecline: (String?) -> Unit
+    ): CheckBlockView {
+        val bubble = RecordedCheckBubble(title, reason, onRun, onDecline)
+        checkBubbles.add(bubble)
         return bubble
     }
 

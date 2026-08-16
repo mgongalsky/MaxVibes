@@ -122,6 +122,7 @@ internal class ChatMessageControllerComposition(
             activeSessionId = { chatTreeService.getActiveSession().id },
             executeAsync = { request, onDone ->
                 interactionExecutionCoordinator.runCommand(
+                    request = request,
                     action = { service.executeCommandUseCase.execute(request) },
                     onResult = onDone
                 )
@@ -143,6 +144,7 @@ internal class ChatMessageControllerComposition(
             activeSessionId = { chatTreeService.getActiveSession().id },
             executeAsync = { request, onDone ->
                 interactionExecutionCoordinator.runCheck(
+                    request = request,
                     action = { service.runCheckUseCase.run(request) },
                     onResult = onDone
                 )
@@ -277,13 +279,20 @@ internal class ChatMessageControllerComposition(
         session = session,
         action = action,
         onResult = { result ->
-            if (result is ClaudeCodeStepResult.Completed &&
-                result.checks.isNotEmpty() &&
-                result.commands.isEmpty()
-            ) {
-                checkCoordinator.presentChecks(result.checks, session.id, InteractionMode.CLAUDE_CODE)
+            val completed = result as? ClaudeCodeStepResult.Completed
+            val checks = completed?.checks.orEmpty()
+            val blockedByCommands = checks.isNotEmpty() && completed?.commands?.isNotEmpty() == true
+            // Батч чеков должен существовать до handleResult: тот дёргает автопилот,
+            // а автопилот запускает уже готовый батч без участия человека.
+            if (checks.isNotEmpty() && !blockedByCommands) {
+                checkCoordinator.presentChecks(checks, session.id, InteractionMode.CLAUDE_CODE)
             }
             claudeCodeDispatcher.handleResult(result, session)
+            if (blockedByCommands) {
+                callbacks.appendToChat(
+                    "\u26A0\uFE0F ${checks.size} check(s) skipped — response mixed them with terminal commands"
+                )
+            }
         }
     )
 

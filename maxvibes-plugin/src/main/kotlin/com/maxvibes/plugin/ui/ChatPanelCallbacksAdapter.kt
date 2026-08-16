@@ -1,8 +1,5 @@
 package com.maxvibes.plugin.ui
 
-import com.intellij.ui.JBColor
-import com.intellij.ui.components.JBLabel
-import com.intellij.util.ui.JBUI
 import com.maxvibes.domain.model.chat.ChatSession
 import com.maxvibes.domain.model.code.RequestedViewInfo
 import com.maxvibes.domain.model.interaction.AttachedImage
@@ -10,11 +7,6 @@ import com.maxvibes.domain.model.interaction.InteractionModification
 import com.maxvibes.domain.model.modification.AppliedModInfo
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.domain.model.planning.PlanDiagram
-import java.awt.Color
-import java.awt.Component
-import java.awt.Container
-import java.util.ArrayDeque
-import javax.swing.JPanel
 import javax.swing.SwingUtilities
 
 internal fun normalizeSystemMessage(text: String): String? {
@@ -88,8 +80,14 @@ class ChatPanelCallbacksAdapter(
         onRun: () -> Unit,
         onDecline: (String?) -> Unit
     ): CheckBlockView {
-        val block = conversationPanel.addCommandBubble(title, reason, emptyList(), onRun, onDecline)
-        restyleLatestBubbleAsIdeCheck(title)
+        val block = conversationPanel.addCommandBubble(
+            command = title,
+            reason = reason,
+            warnings = emptyList(),
+            onRun = onRun,
+            onDecline = onDecline,
+            isIdeCheck = true
+        )
         return object : CheckBlockView {
             override fun setQueued() = block.setQueued()
             override fun setRunning() = block.setRunning()
@@ -98,43 +96,6 @@ class ChatPanelCallbacksAdapter(
 
             override fun setDeclined(comment: String?) = block.setDeclined(comment)
         }
-    }
-
-    private fun restyleLatestBubbleAsIdeCheck(title: String) {
-        SwingUtilities.invokeLater {
-            val messages = conversationPanel.scrollPane.viewport.view as? Container ?: return@invokeLater
-            val bubble = messages.components.filterIsInstance<JPanel>().lastOrNull() ?: return@invokeLater
-            val bg = JBColor(Color(0xEEF7FA), Color(0x17282F))
-            val accent = JBColor(Color(0x247C96), Color(0x62C5DF))
-            recolorTree(bubble, bg)
-            findLabels(bubble).firstOrNull { it.text.contains("Terminal command") }?.apply {
-                text = "✓ IDE check · $title"
-                foreground = accent
-            }
-            bubble.border = JBUI.Borders.compound(
-                JBUI.Borders.customLine(accent, 0, 3, 0, 0),
-                JBUI.Borders.empty(6, 10, 6, 8)
-            )
-            bubble.revalidate()
-            bubble.repaint()
-        }
-    }
-
-    private fun recolorTree(component: Component, color: Color) {
-        if (component is JPanel || component is javax.swing.JTextArea) component.background = color
-        if (component is Container) component.components.forEach { recolorTree(it, color) }
-    }
-
-    private fun findLabels(root: Container): List<JBLabel> {
-        val labels = mutableListOf<JBLabel>()
-        val pending = ArrayDeque<Component>()
-        root.components.forEach(pending::addLast)
-        while (pending.isNotEmpty()) {
-            val component = pending.removeFirst()
-            if (component is JBLabel) labels += component
-            if (component is Container) component.components.forEach(pending::addLast)
-        }
-        return labels
     }
 
     override fun addQuestionBubble(

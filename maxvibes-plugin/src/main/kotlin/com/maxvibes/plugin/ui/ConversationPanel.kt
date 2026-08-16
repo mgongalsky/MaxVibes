@@ -419,6 +419,10 @@ class ConversationPanel(
      * warnings, and Run/Decline controls. Returns a [CommandBlockView] handle the
      * controller uses to drive the block through running → result / declined.
      *
+     * [isIdeCheck] switches the block to the IDE-check look: an indigo palette close to
+     * the purple "Proposed changes" bubble, so a build/test check reads as part of the
+     * review flow rather than as a raw terminal command.
+     *
      * Decline opens an input dialog for an optional comment (forwarded to the LLM);
      * Cancel in that dialog keeps the block active.
      */
@@ -427,10 +431,16 @@ class ConversationPanel(
         reason: String?,
         warnings: List<String>,
         onRun: () -> Unit,
-        onDecline: (String?) -> Unit
+        onDecline: (String?) -> Unit,
+        isIdeCheck: Boolean = false
     ): CommandBlockView {
-        val bg = JBColor(Color(0xFDF3E3), Color(0x2B2214))
-        val accent = JBColor(Color(0xD68910), Color(0xF5B041))
+        val bg = if (isIdeCheck) JBColor(Color(0xECEFF9), Color(0x1B2033))
+        else JBColor(Color(0xFDF3E3), Color(0x2B2214))
+        val accent = if (isIdeCheck) JBColor(Color(0x3F51B5), Color(0x8C9EFF))
+        else JBColor(Color(0xD68910), Color(0xF5B041))
+        val reasonColor = if (isIdeCheck) JBColor(Color(0x3B4478), Color(0xAEB8E8))
+        else JBColor(Color(0x6E5B3C), Color(0xC9A96A))
+        val header = if (isIdeCheck) "\uD83D\uDD0D IDE check" else "\u26A1 Terminal command"
 
         val body = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
@@ -447,7 +457,7 @@ class ConversationPanel(
             body.add(JBTextArea(reason).apply {
                 isEditable = false; lineWrap = true; wrapStyleWord = true
                 font = JBFont.label().deriveFont(Font.ITALIC)
-                foreground = JBColor(Color(0x6E5B3C), Color(0xC9A96A))
+                foreground = reasonColor
                 background = bg; border = JBUI.Borders.empty(0, 0, 4, 0)
                 alignmentX = Component.LEFT_ALIGNMENT
             })
@@ -486,7 +496,7 @@ class ConversationPanel(
         }
 
         addComp(bubble(bg, accent).also { p ->
-            p.add(roleLabel("\u26A1 Terminal command", accent), BorderLayout.NORTH)
+            p.add(roleLabel(header, accent), BorderLayout.NORTH)
             p.add(body, BorderLayout.CENTER)
             p.add(JPanel().apply {
                 layout = BoxLayout(this, BoxLayout.Y_AXIS); background = bg

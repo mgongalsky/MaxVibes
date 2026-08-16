@@ -26,6 +26,8 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import com.maxvibes.domain.model.check.CheckKind
+import com.maxvibes.domain.model.interaction.InteractionCheck
 
 class ClaudeCodeResponseHandlerTest {
     private val sessionId = "session-1"
@@ -274,6 +276,41 @@ class ClaudeCodeResponseHandlerTest {
             ClipboardSessionStatus.AWAITING_APPROVE,
             sessionManager.statusFor(sessionId)
         )
+    }
+
+    @Test
+    fun `checks are held together with modifications`() {
+        val modification = InteractionModification(
+            type = "CREATE_FILE",
+            path = "file:src/New.kt",
+            content = "class New"
+        )
+
+        val result = handler.handle(
+            sessionId = sessionId,
+            turn = turn(
+                InteractionResponse(
+                    message = "Proposal",
+                    modifications = listOf(modification),
+                    checks = listOf(
+                        InteractionCheck(
+                            kind = "BUILD",
+                            scope = null,
+                            reason = "verify it compiles",
+                            timeoutSec = 600
+                        )
+                    )
+                )
+            ),
+            state = state()
+        )
+
+        assertIs<ClaudeCodeStepResult.AwaitingModApprove>(result)
+        val pending = assertNotNull(pendingStore.take(sessionId))
+        assertEquals(listOf(modification), pending.modifications)
+        val check = pending.checks.single()
+        assertEquals(CheckKind.BUILD, check.kind)
+        assertEquals("verify it compiles", check.reason)
     }
 
     @Test
