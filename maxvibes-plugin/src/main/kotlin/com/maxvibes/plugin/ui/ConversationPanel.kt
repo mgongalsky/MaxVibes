@@ -41,16 +41,25 @@ sealed class MessageSegment {
     data class Code(val lang: String, val code: String) : MessageSegment()
 }
 
-/**
- * Mutable view handle for a command block: the controller drives it through
- * pending → running → result / declined. [setQueued] marks a command that is
- * waiting for its turn in a Run all sequence.
- */
+/** Handle to a command or IDE-check block, driven by its coordinator as the run progresses. */
 interface CommandBlockView {
+
     fun setRunning()
+
     fun setQueued()
+
     fun setResult(headline: String, output: String, ok: Boolean)
+
     fun setDeclined(comment: String?)
+
+    /**
+     * Живая подпись выполняющегося шага. Реализация по умолчанию пустая: блоки,
+     * которым нечего рассказывать о ходе работы, не обязаны об этом знать.
+     */
+    fun setProgress(text: String) {}
+
+    /** Показывает кнопку Cancel рядом со статусом; null убирает её. */
+    fun setCancelAction(onCancel: (() -> Unit)?) {}
 }
 
 /**
@@ -428,6 +437,10 @@ class ConversationPanel(
      * the purple "Proposed changes" bubble, so a build/test check reads as part of the
      * review flow rather than as a raw terminal command.
      *
+     * Пока блок работает, вместо Run/Decline показывается живая строка с текущим
+     * шагом и кнопка Cancel: без неё зависший прогон невозможно отличить от долгого
+     * и нечем прервать.
+     *
      * Decline opens an input dialog for an optional comment (forwarded to the LLM);
      * Cancel in that dialog keeps the block active.
      */
@@ -446,6 +459,7 @@ class ConversationPanel(
         val reasonColor = if (isIdeCheck) JBColor(Color(0x3B4478), Color(0xAEB8E8))
         else JBColor(Color(0x6E5B3C), Color(0xC9A96A))
         val header = if (isIdeCheck) "\uD83D\uDD0D IDE check" else "\u26A1 Terminal command"
+        val runningColor = JBColor(Color(0x7D6608), Color(0xF7DC6F))
 
         val body = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
@@ -500,12 +514,38 @@ class ConversationPanel(
             }
         }
 
+        fun statusLabel(text: String, color: Color) = JBLabel(text).apply {
+            font = font.deriveFont(Font.BOLD, 11f); foreground = color
+            alignmentX = Component.LEFT_ALIGNMENT
+            border = JBUI.Borders.empty(3, 0, 2, 0)
+        }
+
+        var cancelAction: (() -> Unit)? = null
+        val cancelButton = JButton("\u2716 Cancel").apply {
+            font = font.deriveFont(11f)
+            isFocusPainted = false
+            isVisible = false
+            toolTipText = "Abort this run"
+            addActionListener {
+                isEnabled = false
+                cancelAction?.invoke()
+            }
+        }
+        val liveLabel = statusLabel("", runningColor)
+        val liveRow = JPanel(FlowLayout(FlowLayout.LEFT, 6, 0)).apply {
+            background = bg
+            alignmentX = Component.LEFT_ALIGNMENT
+            isVisible = false
+            add(liveLabel)
+            add(cancelButton)
+        }
+
         addComp(bubble(bg, accent).also { p ->
             p.add(roleLabel(header, accent), BorderLayout.NORTH)
             p.add(body, BorderLayout.CENTER)
             p.add(JPanel().apply {
                 layout = BoxLayout(this, BoxLayout.Y_AXIS); background = bg
-                add(controls); add(statusRow)
+                add(controls); add(liveRow); add(statusRow)
             }, BorderLayout.SOUTH)
         })
 
@@ -513,29 +553,47 @@ class ConversationPanel(
             messagesPanel.revalidate(); messagesPanel.repaint()
         }
 
-        fun statusLabel(text: String, color: Color) = JBLabel(text).apply {
-            font = font.deriveFont(Font.BOLD, 11f); foreground = color
-            alignmentX = Component.LEFT_ALIGNMENT
-            border = JBUI.Borders.empty(3, 0, 2, 0)
+        fun stopLiveRow() {
+            cancelAction = null
+            cancelButton.isVisible = false
+            liveRow.isVisible = false
         }
 
         return object : CommandBlockView {
             override fun setRunning() = SwingUtilities.invokeLater {
                 controls.isVisible = false
                 statusRow.removeAll()
-                statusRow.add(statusLabel("\u23F3 Running\u2026", JBColor(Color(0x7D6608), Color(0xF7DC6F))))
+                liveLabel.text = "\u23F3 Running\u2026"
+                liveRow.isVisible = true
+                refresh()
+            }
+
+            override fun setProgress(text: String) = SwingUtilities.invokeLater {
+                if (!liveRow.isVisible) return@invokeLater
+                // Имя теста легко бывает длиннее пузыря, а растянутый пузырь ломает
+                // ширину всей ленты чата.
+                liveLabel.text = if (text.length <= 90) text else text.take(87) + "\u2026"
+                refresh()
+            }
+
+            override fun setCancelAction(onCancel: (() -> Unit)?) = SwingUtilities.invokeLater {
+                cancelAction = onCancel
+                cancelButton.isEnabled = true
+                cancelButton.isVisible = onCancel != null
                 refresh()
             }
 
             override fun setQueued() = SwingUtilities.invokeLater {
                 controls.isVisible = false
+                stopLiveRow()
                 statusRow.removeAll()
-                statusRow.add(statusLabel("\u23F8 Queued\u2026", JBColor(Color(0x7D6608), Color(0xF7DC6F))))
+                statusRow.add(statusLabel("\u23F8 Queued\u2026", runningColor))
                 refresh()
             }
 
             override fun setResult(headline: String, output: String, ok: Boolean) = SwingUtilities.invokeLater {
                 controls.isVisible = false
+                stopLiveRow()
                 statusRow.removeAll()
                 val color = if (ok) JBColor(Color(0x1E8449), Color(0x58D68D))
                 else JBColor(Color(0xC0392B), Color(0xEC7063))
@@ -551,6 +609,7 @@ class ConversationPanel(
 
             override fun setDeclined(comment: String?) = SwingUtilities.invokeLater {
                 controls.isVisible = false
+                stopLiveRow()
                 statusRow.removeAll()
                 val text = "\u2716 Declined" + (comment?.let { " \u2014 $it" } ?: "")
                 statusRow.add(statusLabel(text, JBColor(Color(0x922B21), Color(0xD98880))))

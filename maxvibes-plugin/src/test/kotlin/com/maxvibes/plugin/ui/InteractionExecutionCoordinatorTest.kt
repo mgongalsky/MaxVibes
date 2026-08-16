@@ -59,11 +59,11 @@ class InteractionExecutionCoordinatorTest {
         val fixture = fixture(runner)
         val results = mutableListOf<ClaudeCodeStepResult>()
 
-        fixture.coordinator.runClaudeCode("Turn", ChatSession(), action = {
+        fixture.coordinator.runClaudeCode("Codex: running", ChatSession(), action = {
             throw IllegalStateException("broken")
         }, onResult = results::add)
 
-        assertEquals("Claude Code: running", fixture.callbacks.statusUpdates.first())
+        assertEquals("Codex: running", fixture.callbacks.statusUpdates.first())
         assertTrue(results.single() is ClaudeCodeStepResult.Error)
     }
 
@@ -270,7 +270,7 @@ class InteractionExecutionCoordinatorTest {
         val session = ChatSession()
 
         fixture.coordinator.runClaudeCode(
-            title = "Turn",
+            title = "Codex: running",
             session = session,
             action = { mockk() },
             onResult = {}
@@ -280,7 +280,7 @@ class InteractionExecutionCoordinatorTest {
         assertTrue(fixture.clipboardResets.isEmpty())
         assertEquals(listOf("⚠️ Cancelled"), fixture.chatMessages)
         assertEquals(true, fixture.callbacks.inputEnabled)
-        assertEquals("Claude Code: running", fixture.callbacks.statusUpdates.single())
+        assertEquals("Codex: running", fixture.callbacks.statusUpdates.single())
     }
 
     @Test

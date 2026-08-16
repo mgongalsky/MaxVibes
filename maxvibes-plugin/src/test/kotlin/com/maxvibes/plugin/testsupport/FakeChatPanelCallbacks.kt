@@ -14,6 +14,7 @@ import com.maxvibes.plugin.ui.PostApplyErrorsView
 import com.maxvibes.plugin.ui.QuestionBlockView
 import com.maxvibes.domain.model.interaction.InteractionModification
 import com.maxvibes.plugin.ui.ModificationProposalView
+import com.maxvibes.domain.model.check.CheckProgress
 
 /**
  * Recording fake for [ChatPanelCallbacks].
@@ -82,6 +83,8 @@ class FakeChatPanelCallbacks : ChatPanelCallbacks {
         val onDecline: (String?) -> Unit
     ) : CheckBlockView {
         val stateChanges = mutableListOf<String>()
+        val progressUpdates = mutableListOf<CheckProgress>()
+        var cancelAction: (() -> Unit)? = null
         var declineComment: String? = null
         var resultHeadline: String? = null
         var resultSuccess: Boolean? = null
@@ -90,8 +93,13 @@ class FakeChatPanelCallbacks : ChatPanelCallbacks {
             stateChanges.add("queued")
         }
 
-        override fun setRunning() {
+        override fun setRunning(onCancel: () -> Unit) {
             stateChanges.add("running")
+            cancelAction = onCancel
+        }
+
+        override fun setProgress(progress: CheckProgress) {
+            progressUpdates.add(progress)
         }
 
         override fun setResult(headline: String, details: String, success: Boolean) {

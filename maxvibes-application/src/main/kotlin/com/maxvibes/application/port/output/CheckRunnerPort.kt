@@ -1,26 +1,30 @@
 package com.maxvibes.application.port.output
 
+import com.maxvibes.domain.model.check.CheckCancellation
 import com.maxvibes.domain.model.check.CheckExecution
 import com.maxvibes.domain.model.check.CheckKind
+import com.maxvibes.domain.model.check.CheckProgressSink
 import com.maxvibes.domain.model.check.CheckRequest
 
 /**
- * Порт выполнения проверок средствами IDE — сборки и прогона тестов.
+ * Запуск проверок средствами конкретной IDE.
  *
- * Реализация зависит от языка: для JVM это компиляция и запуск тестовой
- * run configuration средствами IntelliJ, для Python — свой инструмент.
- * Протокол, разрешения и UI при этом одни на всех.
+ * Значения по умолчанию объявлены здесь, а не в реализациях: вызывающая сторона
+ * может по-прежнему писать `run(request)`, но каждая реализация обязана принять
+ * оба параметра — иначе компилятор промолчит про раннер, который забыл про
+ * прогресс и отмену.
  */
 interface CheckRunnerPort {
 
-    /**
-     * Умеет ли раннер выполнить такую проверку в текущей IDE.
-     *
-     * Отдельно от [run], потому что ответ нужен до показа проверки
-     * пользователю: неподдержанный вид должен честно деградировать, а не
-     * выясняться через упавший запуск.
-     */
     fun supports(kind: CheckKind): Boolean
 
-    suspend fun run(request: CheckRequest): CheckExecution
+    /**
+     * @param progress канал живых событий: пользователь должен видеть, что проверка не зависла.
+     * @param cancellation раннер регистрирует здесь способ прервать себя.
+     */
+    suspend fun run(
+        request: CheckRequest,
+        progress: CheckProgressSink = CheckProgressSink.NOOP,
+        cancellation: CheckCancellation = CheckCancellation()
+    ): CheckExecution
 }

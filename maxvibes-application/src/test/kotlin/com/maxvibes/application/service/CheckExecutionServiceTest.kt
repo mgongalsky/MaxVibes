@@ -11,6 +11,8 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import com.maxvibes.domain.model.check.CheckCancellation
+import com.maxvibes.domain.model.check.CheckProgressSink
 
 class CheckExecutionServiceTest {
 
@@ -19,7 +21,12 @@ class CheckExecutionServiceTest {
         private val result: (CheckRequest) -> CheckExecution = { CheckExecution(it, CheckStatus.PASSED) }
     ) : CheckRunnerPort {
         override fun supports(kind: CheckKind) = kind in supported
-        override suspend fun run(request: CheckRequest) = result(request)
+
+        override suspend fun run(
+            request: CheckRequest,
+            progress: CheckProgressSink,
+            cancellation: CheckCancellation
+        ) = result(request)
     }
 
     private fun service(runner: CheckRunnerPort = FakeRunner()) = CheckExecutionService(runner)
@@ -154,5 +161,18 @@ class CheckExecutionServiceTest {
             "=== CHECK TESTS — DECLINED ===\nUser comment: not now, fix the build first",
             formatted
         )
+    }
+
+    @Test
+    fun `a failure after cancellation is reported as CANCELLED, not as an error`() = runBlocking {
+        val cancellation = CheckCancellation()
+        val service = service(FakeRunner {
+            cancellation.cancel()
+            throw IllegalStateException("process destroyed")
+        })
+
+        val execution = service.run(CheckRequest(CheckKind.BUILD), CheckProgressSink.NOOP, cancellation)
+
+        assertEquals(CheckStatus.CANCELLED, execution.status)
     }
 }

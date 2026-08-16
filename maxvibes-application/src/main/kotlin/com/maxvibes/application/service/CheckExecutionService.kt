@@ -7,6 +7,8 @@ import com.maxvibes.domain.model.check.CheckIssue
 import com.maxvibes.domain.model.check.CheckRequest
 import com.maxvibes.domain.model.check.CheckStatus
 import com.maxvibes.domain.model.check.IssueSeverity
+import com.maxvibes.domain.model.check.CheckCancellation
+import com.maxvibes.domain.model.check.CheckProgressSink
 
 /**
  * Выполнение проверок, запрошенных агентом, и превращение результата в текст для него.
@@ -18,7 +20,11 @@ class CheckExecutionService(
     private val runner: CheckRunnerPort
 ) : RunCheckUseCase {
 
-    override suspend fun run(request: CheckRequest): CheckExecution {
+    override suspend fun run(
+        request: CheckRequest,
+        progress: CheckProgressSink,
+        cancellation: CheckCancellation
+    ): CheckExecution {
         if (!runner.supports(request.kind)) {
             return CheckExecution(
                 request = request,
@@ -28,13 +34,17 @@ class CheckExecutionService(
         }
         val startedAt = System.currentTimeMillis()
         return try {
-            runner.run(request)
+            runner.run(request, progress, cancellation)
         } catch (e: Exception) {
+            // Убитый процесс тестов почти всегда прилетает сюда исключением;
+            // без этой ветки пользователь увидел бы "Failed to start" в ответ
+            // на собственное нажатие Cancel.
+            val cancelled = cancellation.isCancelled
             CheckExecution(
                 request = request,
-                status = CheckStatus.ERROR,
+                status = if (cancelled) CheckStatus.CANCELLED else CheckStatus.ERROR,
                 durationMs = System.currentTimeMillis() - startedAt,
-                rawOutput = e.message ?: e::class.simpleName.orEmpty()
+                rawOutput = if (cancelled) "Cancelled by user." else e.message ?: e::class.simpleName.orEmpty()
             )
         }
     }

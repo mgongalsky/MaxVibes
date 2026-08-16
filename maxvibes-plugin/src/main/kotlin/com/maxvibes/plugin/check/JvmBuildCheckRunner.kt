@@ -1,6 +1,7 @@
 package com.maxvibes.plugin.check
 
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.compiler.CompileContext
 import com.intellij.openapi.compiler.CompileStatusNotification
 import com.intellij.openapi.compiler.CompilerManager
@@ -10,15 +11,18 @@ import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.module.ModuleManager
 import com.intellij.openapi.project.Project
 import com.maxvibes.application.port.output.CheckRunnerPort
+import com.maxvibes.domain.model.check.CheckCancellation
 import com.maxvibes.domain.model.check.CheckExecution
 import com.maxvibes.domain.model.check.CheckIssue
 import com.maxvibes.domain.model.check.CheckKind
+import com.maxvibes.domain.model.check.CheckProgress
+import com.maxvibes.domain.model.check.CheckProgressSink
 import com.maxvibes.domain.model.check.CheckRequest
 import com.maxvibes.domain.model.check.CheckStatus
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
-import com.intellij.openapi.application.ModalityState
 
 /**
  * Сборка проекта средствами IDE — то же самое, что Build Project в меню.
@@ -34,9 +38,14 @@ class JvmBuildCheckRunner(private val project: Project) : CheckRunnerPort {
 
     override fun supports(kind: CheckKind): Boolean = kind == CheckKind.BUILD
 
-    override suspend fun run(request: CheckRequest): CheckExecution {
+    override suspend fun run(
+        request: CheckRequest,
+        progress: CheckProgressSink,
+        cancellation: CheckCancellation
+    ): CheckExecution {
         val startedAt = System.currentTimeMillis()
-        val outcome = withTimeoutOrNull(request.timeoutSec * 1000L) { compile(request.scope) }
+        progress.publish(CheckProgress("Compiling " + (request.scope ?: "whole project")))
+        val outcome = withTimeoutOrNull(request.timeoutSec * 1000L) { compile(request.scope, cancellation) }
         val durationMs = System.currentTimeMillis() - startedAt
 
         if (outcome == null) {
@@ -49,6 +58,7 @@ class JvmBuildCheckRunner(private val project: Project) : CheckRunnerPort {
         }
 
         val status = when {
+            cancellation.isCancelled -> CheckStatus.CANCELLED
             outcome.failure != null -> CheckStatus.ERROR
             outcome.issues.isNotEmpty() -> CheckStatus.FAILED
             else -> CheckStatus.PASSED
@@ -62,15 +72,28 @@ class JvmBuildCheckRunner(private val project: Project) : CheckRunnerPort {
         )
     }
 
-    private suspend fun compile(scope: String?): Outcome =
+    private suspend fun compile(scope: String?, cancellation: CheckCancellation): Outcome =
         suspendCancellableCoroutine { continuation ->
+            val settled = AtomicBoolean(false)
+            fun finish(outcome: Outcome) {
+                if (!settled.compareAndSet(false, true)) return
+                if (continuation.isActive) continuation.resume(outcome)
+            }
+
+            // Прервать компиляцию нечем: CompilerManager.make не отдаёт хендла.
+            // Поэтому Cancel отпускает ожидание с честной оговоркой — это лучше
+            // и кнопки, которая ничего не делает, и вечно висящей задачи.
+            cancellation.onCancel {
+                finish(Outcome(failure = "Cancelled by user; the IDE build keeps running."))
+            }
+
             // Модальность задаётся явно: по умолчанию invokeLater наследует её от
             // фоновой задачи, из которой пришёл автозапуск чека, и тогда runnable
             // ждёт чужой модальности, которой на EDT уже нет — сборка не стартует.
             ApplicationManager.getApplication().invokeLater({
                 val manager = CompilerManager.getInstance(project)
                 val callback = CompileStatusNotification { aborted, _, _, context ->
-                    continuation.resume(
+                    finish(
                         if (aborted) Outcome(failure = "Build was aborted.")
                         else Outcome(issues = collectErrors(context))
                     )
@@ -81,7 +104,7 @@ class JvmBuildCheckRunner(private val project: Project) : CheckRunnerPort {
                 }
                 val module = ModuleManager.getInstance(project).findModuleByName(scope)
                 if (module == null) {
-                    continuation.resume(Outcome(failure = "Unknown module: $scope"))
+                    finish(Outcome(failure = "Unknown module: $scope"))
                 } else {
                     manager.make(module, callback)
                 }

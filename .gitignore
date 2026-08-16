@@ -57,3 +57,7 @@ bin/
 .maxvibes/logs/
 .maxvibes/reports/
 .maxvibes/plugin.log
+
+### Claude Code ###
+.claude/*
+!.claude/skills/

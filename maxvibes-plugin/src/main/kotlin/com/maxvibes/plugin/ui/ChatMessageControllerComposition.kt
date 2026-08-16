@@ -164,10 +164,10 @@ internal class ChatMessageControllerComposition(
                 chatTreeService.addMessage(sessionId, MessageRole.SYSTEM, text)
             },
             activeSessionId = { chatTreeService.getActiveSession().id },
-            executeAsync = { request, onDone ->
+            executeAsync = { request, progress, cancellation, onDone ->
                 interactionExecutionCoordinator.runCheck(
                     request = request,
-                    action = { service.runCheckUseCase.run(request) },
+                    action = { service.runCheckUseCase.run(request, progress, cancellation) },
                     onResult = onDone
                 )
             },

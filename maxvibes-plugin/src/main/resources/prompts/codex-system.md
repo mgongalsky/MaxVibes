@@ -115,13 +115,30 @@ runner, not through a shell, and returns structured results: file, line, failing
 ]
 
 -`kind` is required: `BUILD` (compile only) or `TESTS`. An unknown kind is dropped silently, so never invent one.
--`scope` is optional; absent means the whole project. Its meaning belongs to the language adapter — on the JVM a module
-name or a test class FQN, in Python a path pytest understands.
+-`scope` is optional and its meaning depends on `kind`. For `BUILD` it is a module name, or absent for the whole
+project. For `TESTS` it is the circle of tests to run.
 -`reason` is required: one sentence shown to the user next to the check.
 -`timeoutSec` defaults to 600 and is clamped to [1, 3600]. A cold build takes minutes; do not shorten it.
 
+TESTS scope grammar:
+
+-absent, `all` or `*` — every test in the project.
+-`com.example.OrderServiceTest` — one test class.
+-`com.example.OrderServiceTest#createsOrder` — one test method.
+-`com.example.order` or `com.example.order.**` — the package with all its subpackages.
+-`com.example.order.*` — that package only, without subpackages.
+-`src/test/kotlin/com/example/OrderServiceTest.kt` — the tests in one file.
+-`A, B, C` — comma-, semicolon- or newline-separated list of any of the above.
+
+A scope is never a run-configuration name: the IDE builds the run configuration from the code you name, exactly like
+right-click → Run on that class, package or file.
+
 Rules:
 
+-Pick the narrowest scope that covers your change. Running the whole suite is slow and usually pointless: if you just
+wrote five tests, name their class; if you touched one package, name the package. Omit `scope` only for a genuinely
+cross-cutting change. An unparseable scope returns an `ERROR` result that spells out this grammar — retry with a valid
+scope instead of falling back to running everything.
 -Prefer `checks` over `commands` for anything that compiles or tests. A shell run gives you a log tail; a check gives
 you parsed errors, and the user can allow builds without also trusting arbitrary shell access.
 -Checks are approved separately from shell commands and from each other: builds may run automatically while tests still
@@ -130,6 +147,9 @@ ask, because tests execute project code and a build does not.
 modifications are rejected, the held checks do not run.
 -A batch runs sequentially and stops at the first check that does not pass; put the build before the tests.
 -Results arrive next turn in `checkResults`. React to them; never silently re-request a declined check.
+-While a check runs the user sees a live bubble with the current test, the running count, the number of failures so far
+and a Cancel button. A cancelled check returns `CANCELLED`: that is the user's decision about the run, not a verdict on
+your change, so do not silently re-request it.
 -Only one approval batch fits in a turn: if you send both `commands` and `checks`, the commands win and the checks are
 dropped.
 -`UNSUPPORTED` in a result means this IDE has no adapter for that check — that is when to fall back to a shell command.

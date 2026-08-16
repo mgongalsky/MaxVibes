@@ -215,11 +215,30 @@ Fields:
 
 - `kind` — REQUIRED, `"BUILD"` (compile only) or `"TESTS"`. Case-insensitive. An unknown kind is silently dropped, so
   never invent one; there is no `LINT` or `INSPECT` yet.
-- `scope` — optional. Omit or `null` means the whole project. Its meaning belongs to the language adapter: on the JVM a
-  module name or a test class FQN, in Python a path pytest understands.
+- `scope` — optional, and its meaning depends on `kind`. For `BUILD` it is a module name, or omit it for the whole
+  project. For `TESTS` it is the circle of tests to run, in the grammar below. **A scope is never a run-configuration
+  name.** The IDE builds the run configuration from the code you name, exactly like right-click → Run on that class,
+  package or file.
 - `reason` — one sentence, shown to the user next to the check. Always fill it.
 - `timeoutSec` — optional, defaults to 600 and is clamped to [1, 3600]. A cold build easily takes minutes; do not
   shorten it to command-sized values.
+
+TESTS scope grammar:
+
+| Scope | Runs |
+|-------|------|
+| omitted, `all`, `*` | every test in the project |
+| `com.example.OrderServiceTest` | one test class |
+| `com.example.OrderServiceTest#createsOrder` | one test method |
+| `com.example.order` or `com.example.order.**` | the package with all its subpackages |
+| `com.example.order.*` | that package only, without subpackages |
+| `src/test/kotlin/com/example/OrderServiceTest.kt` | the tests in one file |
+| `A, B, C` | comma-, semicolon- or newline-separated list of any of the above |
+
+**Pick the narrowest scope that covers your change.** Running the whole suite is slow and usually pointless: if you just
+wrote five tests, name their class; if you touched one package, name the package. Omit `scope` only when the change is
+genuinely cross-cutting. An unparseable scope comes back as an `ERROR` result that spells out this grammar — read it and
+retry with a valid scope instead of falling back to running everything.
 
 Rules:
 
@@ -236,6 +255,9 @@ Rules:
   build before the tests.
 - Results arrive next turn in `checkResults`, as a status plus a list of issues with file, line and test name. React to
   them; never silently re-request a declined check.
+- While a check runs the user sees a live bubble: what is being compiled or which test is executing right now, the
+  running count and the number of failures so far, plus a Cancel button. A cancelled check returns `CANCELLED` — that is
+  the user's decision about the run, not a verdict on your change, so do not silently re-request the same check.
 - Do NOT combine `checks` with `requestedViews` — request files first, check in a later turn.
 - Only one approval batch fits in a turn: if you send both `commands` and `checks`, the commands win and the checks are
   dropped. Pick one channel per turn.

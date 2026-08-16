@@ -8,6 +8,7 @@ import com.maxvibes.domain.model.modification.AppliedModInfo
 import com.maxvibes.domain.model.modification.ModificationResult
 import com.maxvibes.domain.model.planning.PlanDiagram
 import javax.swing.SwingUtilities
+import com.maxvibes.domain.model.check.CheckProgress
 
 internal fun normalizeSystemMessage(text: String): String? {
     val value = text.trim()
@@ -90,7 +91,24 @@ class ChatPanelCallbacksAdapter(
         )
         return object : CheckBlockView {
             override fun setQueued() = block.setQueued()
-            override fun setRunning() = block.setRunning()
+
+            override fun setRunning(onCancel: () -> Unit) {
+                block.setRunning()
+                block.setCancelAction(onCancel)
+            }
+
+            override fun setProgress(progress: CheckProgress) {
+                val counters = buildString {
+                    progress.completed?.let { done ->
+                        append(done)
+                        progress.total?.let { append('/').append(it) }
+                        append(" \u00B7 ")
+                    }
+                    if (progress.failed > 0) append("${progress.failed} failed \u00B7 ")
+                }
+                block.setProgress("\u23F3 $counters${progress.label}")
+            }
+
             override fun setResult(headline: String, details: String, success: Boolean) =
                 block.setResult(headline, details, success)
 
