@@ -1,5 +1,6 @@
 package com.maxvibes.plugin.settings
 
+import com.intellij.ui.JBIntSpinner
 import com.intellij.ui.components.JBLabel
 import com.intellij.util.ui.FormBuilder
 import com.intellij.util.ui.JBUI
@@ -16,14 +17,29 @@ import javax.swing.JPanel
  * Approval policy page: one choice per kind of action the agent can take.
  *
  * Deliberately logic-free — every choice goes straight into [ApprovalPolicyEditor],
- * which owns the draft/saved distinction and is covered by unit tests.
+ * which owns the draft/saved distinction and is covered by unit tests. The retry
+ * count is a plain widget value for the same reason: [AutonomySettingsConfigurable]
+ * decides when to read and store it.
  */
 class AutonomySettingsPanel(private val editor: ApprovalPolicyEditor) {
 
     private val combos: Map<AgentActionKind, JComboBox<ApprovalMode>> =
         AgentActionKind.values().associateWith { kind -> modeCombo(kind) }
 
+    private val formatRetriesSpinner = JBIntSpinner(
+        ApprovalPolicySettings.DEFAULT_MAX_FORMAT_RETRIES,
+        ApprovalPolicySettings.MIN_FORMAT_RETRIES,
+        ApprovalPolicySettings.MAX_FORMAT_RETRIES
+    )
+
     val panel: JPanel = buildPanel()
+
+    /** How many times in a row the agent may be asked to resend unparsable modifications. */
+    var formatRetries: Int
+        get() = formatRetriesSpinner.number
+        set(value) {
+            formatRetriesSpinner.number = value
+        }
 
     /** Pulls the editor state into the widgets. Called from `Configurable.reset`. */
     fun refresh() {
@@ -67,6 +83,15 @@ class AutonomySettingsPanel(private val editor: ApprovalPolicyEditor) {
             builder = builder.addLabeledComponent(JBLabel(kindLabel(kind)), combo)
         }
         return builder
+            .addSeparator()
+            .addComponent(JBLabel("<html><b>Malformed modifications</b></html>"))
+            .addLabeledComponent(JBLabel("Format-error retries:"), formatRetriesSpinner)
+            .addComponent(
+                JBLabel(
+                    "<html>How many times in a row the agent is asked to resend modifications<br>" +
+                            "the plugin could not parse. Every retry spends one autonomy step; 0 disables them.</html>"
+                )
+            )
             .addComponentFillVertically(JPanel(), 0)
             .panel
             .apply { border = JBUI.Borders.empty(8) }

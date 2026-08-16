@@ -267,4 +267,7 @@ class ChatPanelView(
     }
     fun setAutoApproveToggle(isOn: () -> Boolean, onToggle: (Boolean) -> Unit) =
         inputPanel.setAutoApproveToggle(isOn, onToggle)
+
+    fun setAutonomyLimit(current: () -> Int, onChange: (Int) -> Unit) =
+        inputPanel.setAutonomyLimit(current, onChange)
 }

@@ -61,6 +61,22 @@ object CodingAgentResponseProcessor {
         }
         val holdMods = hasMods && !ctx.planOnly
 
+        // Непонятые записи modifications нельзя терять молча: предупреждение вклеивается
+        // в сообщение, поэтому доходит и до чата, и до истории — то есть до агента
+        // следующим ходом, без отдельного поля в каждом из пяти результатов шага.
+        val malformedNotice = response.malformedModifications.takeIf { it.isNotEmpty() }?.let { entries ->
+            buildString {
+                append("⚠️ Не разобрано и НЕ применено записей в modifications: ")
+                append(entries.size)
+                append(". Обязательные поля каждой записи — type и path.")
+                entries.forEach { append("\n• ").append(it) }
+            }
+        }
+        val message = listOfNotNull(
+            malformedNotice,
+            response.message.takeIf { it.isNotBlank() }
+        ).joinToString("\n\n")
+
         val intents = mutableListOf<Intent>()
 
         response.plan?.let { snapshot ->
@@ -68,8 +84,8 @@ object CodingAgentResponseProcessor {
                 snapshot.takeIf { it.steps.isNotEmpty() }
             )
         }
-        if (response.message.isNotBlank()) {
-            intents += Intent.AppendAssistantHistory(response.message)
+        if (message.isNotBlank()) {
+            intents += Intent.AppendAssistantHistory(message)
         }
         if (hasViews && !holdMods) {
             intents += Intent.PersistRequestedViews(response.codeViewRequests)
@@ -94,7 +110,7 @@ object CodingAgentResponseProcessor {
             )
             return Outcome(
                 ClaudeCodeStepResult.AwaitingModApprove(
-                    assistantMessage = response.message,
+                    assistantMessage = message,
                     proposedModifications = response.modifications,
                     heldCommands = commands.size,
                     skippedViews = if (hasViews) response.codeViewRequests.size else 0,
@@ -120,7 +136,7 @@ object CodingAgentResponseProcessor {
             }
             return Outcome(
                 ClaudeCodeStepResult.WaitingForApprove(
-                    assistantMessage = response.message,
+                    assistantMessage = message,
                     requestedViews = requestedViewInfos,
                     inputTokens = ctx.inputTokens,
                     outputTokens = ctx.outputTokens,
@@ -138,7 +154,7 @@ object CodingAgentResponseProcessor {
         if (hasQuestions) {
             return Outcome(
                 ClaudeCodeStepResult.AwaitingQuestions(
-                    assistantMessage = response.message,
+                    assistantMessage = message,
                     questions = response.questions,
                     inputTokens = ctx.inputTokens,
                     outputTokens = ctx.outputTokens,
@@ -153,7 +169,7 @@ object CodingAgentResponseProcessor {
         }
 
         val messageText = buildString {
-            if (response.message.isNotBlank()) append(response.message)
+            if (message.isNotBlank()) append(message)
             if (isEmpty()) append("Done.")
         }
 
@@ -172,7 +188,8 @@ object CodingAgentResponseProcessor {
                 costUsd = ctx.costUsd,
                 numTurns = ctx.numTurns,
                 diagram = response.diagram,
-                turnIntent = response.turnIntent
+                turnIntent = response.turnIntent,
+                malformedModifications = response.malformedModifications
             ),
             intents
         )

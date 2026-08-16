@@ -35,6 +35,10 @@ import com.maxvibes.application.service.turn.TurnSignalMapper
  * continues the turn through this dispatcher, so the two reference each other and
  * the provider breaks the construction cycle. When it yields null the dispatcher
  * behaves exactly as it did before autonomy existed.
+ *
+ * [maxFormatRetries] limits how many times in a row the agent may be asked to redo
+ * a step whose modifications never reached the code — whether they could not be
+ * parsed or failed to apply.
  */
 class ClaudeCodeDispatcher(
     private val claudeCodeService: () -> CodingAgentInteractionService,
@@ -44,9 +48,24 @@ class ClaudeCodeDispatcher(
     private val presentQuestions: (questions: List<InteractionQuestion>) -> Unit,
     private val presentCommands: (commands: List<CommandRequest>, sessionId: String, mode: InteractionMode) -> Unit,
     private val executeAsync: (title: String, session: ChatSession, action: suspend () -> ClaudeCodeStepResult) -> Unit,
-    private val turnAutopilot: () -> TurnAutopilot? = { null }
+    private val turnAutopilot: () -> TurnAutopilot? = { null },
+    private val maxFormatRetries: () -> Int = { 2 }
 ) {
     private var modificationProposalView: ModificationProposalView? = null
+
+    /**
+     * Готовый текст следующего хода для шага, который сорвался: правки либо не
+     * разобрались, либо не применились. Текст собирается сразу, потому что причина
+     * видна только там, где есть весь результат шага.
+     */
+    private val pendingFix = mutableMapOf<String, String>()
+
+    /**
+     * Сколько раз ПОДРЯД шаг агента срывался. Счётчик общий для ошибок разбора и
+     * ошибок применения: лимит из настроек — это бюджет на «агент не может выдать
+     * рабочую правку», а не на каждый вид поломки отдельно.
+     */
+    private val fixRetries = mutableMapOf<String, Int>()
 
     fun dispatchMessage(
         userInput: String,
@@ -69,12 +88,14 @@ class ClaudeCodeDispatcher(
             if (!trace.isNullOrBlank()) append(10.toChar()).append("[trace: ${trace.lines().size} lines]")
             if (!errs.isNullOrBlank()) append(10.toChar()).append("[attached ide errors]")
             if (isPlanOnly) append(10.toChar()).append("[plan-only]")
-            if (images.isNotEmpty()) append(10.toChar()).append("[🖼 ${images.size} image(s)]")
+            if (images.isNotEmpty()) append(10.toChar()).append("[\uD83D\uDDBC ${images.size} image(s)]")
         }
         session = chatTreeService.addMessage(session.id, MessageRole.USER, fullMsg)
         callbacks.addUserMessageBubble(userInput, images)
 
         turnAutopilot()?.startTurn(session.id)
+        pendingFix.remove(session.id)
+        fixRetries.remove(session.id)
 
         callbacks.setInputEnabled(false)
         callbacks.setStatus("Claude Code: sending...")
@@ -137,7 +158,7 @@ class ClaudeCodeDispatcher(
         )
         modificationProposalView?.setApplying()
         callbacks.setInputEnabled(false)
-        callbacks.setStatus("🤖 Continuing automatically...")
+        callbacks.setStatus("\uD83E\uDD16 Continuing automatically...")
         executeAsync("Claude Code: continuing...", session) {
             claudeCodeService().approve(
                 sessionId = session.id,
@@ -148,7 +169,9 @@ class ClaudeCodeDispatcher(
     }
 
     /**
-     * Sends the agent one more turn because it said it was not finished.
+     * Sends the agent one more turn because it said it was not finished — or
+     * because its last step never reached the code: the modifications were either
+     * unparsable or failed to apply.
      *
      * Deliberately NOT routed through [dispatchMessage]: that one calls
      * [TurnAutopilot.startTurn], which restores the autonomy budget. A
@@ -159,13 +182,52 @@ class ClaudeCodeDispatcher(
         val session = chatTreeService.getActiveSession()
         if (session.id != sessionId) return
 
+        val correction = pendingFix.remove(sessionId)
+        if (correction != null) {
+            val limit = maxFormatRetries()
+            val attempt = (fixRetries[sessionId] ?: 0) + 1
+            if (attempt > limit) {
+                fixRetries.remove(sessionId)
+                turnAutopilot()?.forget(sessionId)
+                MaxVibesLogger.info(
+                    "ClaudeCodeDispatcher",
+                    "fix-retry-exhausted",
+                    mapOf("sessionId" to sessionId, "limit" to limit)
+                )
+                callbacks.appendToChat(
+                    "\u26A0\uFE0F Агент $attempt раз(а) подряд не смог довести правки до кода — " +
+                            "автоповторы остановлены (лимит $limit)"
+                )
+                callbacks.setInputEnabled(true)
+                callbacks.updateModeIndicator()
+                callbacks.setStatus("\u26A0\uFE0F Правки так и не дошли до кода")
+                return
+            }
+
+            fixRetries[sessionId] = attempt
+            MaxVibesLogger.info(
+                "ClaudeCodeDispatcher",
+                "fix-retry",
+                mapOf("sessionId" to sessionId, "attempt" to attempt, "limit" to limit)
+            )
+            callbacks.setInputEnabled(false)
+            callbacks.setStatus("\uD83E\uDD16 Просим агента переделать сорвавшиеся правки...")
+            executeAsync("Claude Code: fixing modifications...", session) {
+                claudeCodeService().handleUserInput(
+                    sessionId = session.id,
+                    userInput = correction
+                )
+            }
+            return
+        }
+
         MaxVibesLogger.info(
             "ClaudeCodeDispatcher",
             "auto-next-turn",
             mapOf("sessionId" to sessionId)
         )
         callbacks.setInputEnabled(false)
-        callbacks.setStatus("🤖 Continuing on its own...")
+        callbacks.setStatus("\uD83E\uDD16 Continuing on its own...")
         executeAsync("Claude Code: continuing...", session) {
             claudeCodeService().handleUserInput(
                 sessionId = session.id,
@@ -222,10 +284,10 @@ class ClaudeCodeDispatcher(
                     emptyList()
                 )
                 result.diagram?.let { callbacks.showDiagramButton(it) }
-                if (result.skippedCommands > 0) callbacks.appendToChat("⚠️ ${result.skippedCommands} command(s) skipped — response mixed them with requestedViews")
+                if (result.skippedCommands > 0) callbacks.appendToChat("\u26A0\uFE0F ${result.skippedCommands} command(s) skipped — response mixed them with requestedViews")
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
-                callbacks.setStatus("🤖 Awaiting approval — click Approve to gather files and continue")
+                callbacks.setStatus("\uD83E\uDD16 Awaiting approval — click Approve to gather files and continue")
             }
 
             is ClaudeCodeStepResult.AwaitingModApprove -> {
@@ -264,7 +326,7 @@ class ClaudeCodeDispatcher(
                     },
                     onReject = { rejectPendingModifications(session) }
                 )
-                if (result.skippedViews > 0) callbacks.appendToChat("⚠️ ${result.skippedViews} file request(s) skipped — response mixed them with modifications")
+                if (result.skippedViews > 0) callbacks.appendToChat("\u26A0\uFE0F ${result.skippedViews} file request(s) skipped — response mixed them with modifications")
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
                 callbacks.setStatus("Review proposed changes, then Apply or Reject")
@@ -281,7 +343,7 @@ class ClaudeCodeDispatcher(
                 )
                 val questionsBlock = result.questions.joinToString("\n\n") { question ->
                     buildString {
-                        append("❓ ").append(question.question)
+                        append("\u2753 ").append(question.question)
                         question.options.forEachIndexed { index, option ->
                             append('\n').append(index + 1).append(". ").append(option)
                         }
@@ -307,13 +369,14 @@ class ClaudeCodeDispatcher(
                 presentQuestions(result.questions)
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
-                callbacks.setStatus("❓ ${result.questions.size} question(s) — pick an option or type your answer")
+                callbacks.setStatus("\u2753 ${result.questions.size} question(s) — pick an option or type your answer")
             }
 
             is ClaudeCodeStepResult.Completed -> {
                 if (result.modifications.isNotEmpty()) modificationProposalView?.setApplied()
                 modificationProposalView = null
                 val failures = result.modifications.filterIsInstance<ModificationResult.Failure>()
+                val lostToFormat = result.malformedModifications.isNotEmpty()
                 callbacks.registerElementPaths(result.modifications)
                 chatTreeService.addChatTokens(session.id, result.inputTokens, result.outputTokens)
                 val text = result.message.trim().ifBlank { "Done." }
@@ -350,33 +413,39 @@ class ClaudeCodeDispatcher(
                 )
                 result.diagram?.let { callbacks.showDiagramButton(it) }
                 result.commitMessage?.let { callbacks.setCommitMessage(it) }
-                if (result.commands.isNotEmpty() && failures.isEmpty()) {
+                if (result.commands.isNotEmpty() && failures.isEmpty() && !lostToFormat) {
                     presentCommands(result.commands, session.id, InteractionMode.CLAUDE_CODE)
                     callbacks.updateModeIndicator()
                     callbacks.updateBreadcrumb()
                     notifyTurn(result, session)
                     return
                 }
-                if (result.commands.isNotEmpty()) callbacks.appendToChat("⚠️ ${result.commands.size} command(s) skipped — fix failed modifications first")
+                if (result.commands.isNotEmpty()) callbacks.appendToChat(
+                    if (lostToFormat) {
+                        "\u26A0\uFE0F ${result.commands.size} command(s) skipped — the modifications of this step were lost to a format error"
+                    } else {
+                        "\u26A0\uFE0F ${result.commands.size} command(s) skipped — fix failed modifications first"
+                    }
+                )
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
-                callbacks.setStatus(if (failures.isNotEmpty()) "⚠️ ${failures.size} modification(s) failed" else if (result.success) "Ready" else "Errors")
+                callbacks.setStatus(if (failures.isNotEmpty()) "\u26A0\uFE0F ${failures.size} modification(s) failed" else if (result.success) "Ready" else "Errors")
                 callbacks.updateBreadcrumb()
             }
 
             is ClaudeCodeStepResult.Error -> {
-                callbacks.appendToChat("❌ ${result.message}")
+                callbacks.appendToChat("\u274C ${result.message}")
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
                 callbacks.setStatus("Claude Code error")
             }
 
             is ClaudeCodeStepResult.TransportError -> {
-                callbacks.appendToChat("❌ Transport: ${result.detail}")
+                callbacks.appendToChat("\u274C Transport: ${result.detail}")
                 callbacks.appendToChat("Check Claude Code settings (binary path, args) and retry.")
                 callbacks.setInputEnabled(true)
                 callbacks.updateModeIndicator()
-                callbacks.setStatus("⚠️ Claude Code transport error")
+                callbacks.setStatus("\u26A0\uFE0F Claude Code transport error")
             }
         }
 
@@ -384,8 +453,47 @@ class ClaudeCodeDispatcher(
     }
 
     private fun notifyTurn(result: ClaudeCodeStepResult, session: ChatSession) {
+        // Незаконченный шаг — правки на подтверждении, запрос файлов, вопросы — ничего
+        // не говорит о том, дошли ли правки до кода, поэтому серию срывов не трогает.
+        // Иначе удержание правок обнуляло бы счётчик, и лимит повторов был бы
+        // недостижим для ошибок применения: они всегда идут через подтверждение.
+        val completed = result as? ClaudeCodeStepResult.Completed
+        if (completed != null) {
+            val malformed = completed.malformedModifications
+            val failed = completed.modifications
+                .filterIsInstance<ModificationResult.Failure>()
+                .map { "${it.modification.targetPath.value}: ${it.error.message}" }
+            if (malformed.isEmpty() && failed.isEmpty()) {
+                pendingFix.remove(session.id)
+                fixRetries.remove(session.id)
+            } else {
+                pendingFix[session.id] = fixPrompt(malformed, failed)
+            }
+        }
         val autopilot = turnAutopilot() ?: return
         autopilot.onStep(session.id, TurnSignalMapper.from(result))
+    }
+
+    /**
+     * Сообщение агенту о сорвавшемся шаге. Уходит как реплика пользователя, а не
+     * как запись в его собственной истории: только так это читается моделью как
+     * требование исправиться, а не как её же старый текст.
+     */
+    private fun fixPrompt(malformed: List<String>, failed: List<String>): String = buildString {
+        append("[STEP FAILED] Your last modifications did not reach the code.")
+        if (malformed.isNotEmpty()) {
+            append("\n\nThe plugin could not parse ").append(malformed.size)
+            append(" entry(ies), so they were NOT applied. Every entry needs a \"type\" ")
+            append("(REPLACE_ELEMENT, CREATE_FILE, ...) and one combined \"path\" like ")
+            append("\"file:src/Main.kt/class[Foo]/function[bar]\".")
+            malformed.forEach { append("\n").append(it) }
+        }
+        if (failed.isNotEmpty()) {
+            append("\n\n").append(failed.size).append(" entry(ies) parsed but failed to apply:")
+            failed.forEach { append("\n").append(it) }
+        }
+        append("\n\nResend the same changes in a shape that applies. ")
+        append("Request the current code first if you are not sure what is in the file now.")
     }
 
     /**
@@ -401,15 +509,16 @@ class ClaudeCodeDispatcher(
         numTurns: Int? = null
     ): String? {
         val parts = mutableListOf<String>()
-        if (inTok > 0) parts += "↑${fmt(inTok)}"
-        if (outTok > 0) parts += "↓${fmt(outTok)}"
+        if (inTok > 0) parts += "\u2191${fmt(inTok)}"
+        if (outTok > 0) parts += "\u2193${fmt(outTok)}"
         if (durationMs >= 1000) parts += "${durationMs / 1000}s"
         numTurns?.takeIf { it > 1 }?.let { parts += "$it turns" }
         costUsd?.takeIf { it > 0.0 }?.let { parts += "$${String.format("%.4f", it)}" }
-        return if (parts.isEmpty()) null else parts.joinToString("  ·  ")
+        return if (parts.isEmpty()) null else parts.joinToString("  \u00B7  ")
     }
 
     private fun fmt(n: Int) = if (n >= 1000) "${n / 1000}k" else n.toString()
+
     private fun rejectPendingModifications(session: ChatSession) {
         val rejected = claudeCodeService().rejectPendingModifications(session.id)
         if (rejected) {

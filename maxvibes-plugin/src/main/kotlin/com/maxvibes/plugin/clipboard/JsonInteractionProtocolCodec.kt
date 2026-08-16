@@ -228,13 +228,32 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
         val mergedRequests: List<CodeViewRequest> = (fromViews + fromFiles)
             .distinctBy { it.filePath }
 
+        fun describeMalformed(index: Int, entry: JsonObject): String {
+            val missing = listOf(InteractionRequestSchema.MOD_TYPE, InteractionRequestSchema.MOD_PATH)
+                .filter { key -> (entry[key] as? JsonPrimitive)?.contentOrNull.isNullOrBlank() }
+                .joinToString(", ")
+            return "#${index + 1}: нет обязательных полей: $missing (есть: ${entry.keys.joinToString(", ")})"
+        }
+
+        val modifications = mutableListOf<InteractionModification>()
+        val malformedModifications = mutableListOf<String>()
+        obj[InteractionRequestSchema.RESP_MODIFICATIONS]?.jsonArray?.forEachIndexed { index, element ->
+            val entry = element as? JsonObject
+            if (entry == null) {
+                malformedModifications += "#${index + 1}: запись не является JSON-объектом"
+                return@forEachIndexed
+            }
+            val parsed = parseModification(entry)
+            if (parsed != null) modifications += parsed else malformedModifications += describeMalformed(index, entry)
+        }
+
         return InteractionResponse(
             message = obj[InteractionRequestSchema.RESP_MESSAGE]?.jsonPrimitive?.contentOrNull ?: "",
             reasoning = obj[InteractionRequestSchema.RESP_REASONING]?.jsonPrimitive?.contentOrNull,
             requestedFiles = legacyFiles,
             codeViewRequests = mergedRequests,
-            modifications = obj[InteractionRequestSchema.RESP_MODIFICATIONS]?.jsonArray
-                ?.mapNotNull { parseModification(it.jsonObject) } ?: emptyList(),
+            modifications = modifications,
+            malformedModifications = malformedModifications,
             commitMessage = obj[InteractionRequestSchema.RESP_COMMIT_MESSAGE]?.jsonPrimitive?.contentOrNull,
             commands = obj[InteractionRequestSchema.RESP_COMMANDS]?.jsonArray
                 ?.mapNotNull { parseCommand(it.jsonObject) } ?: emptyList(),
@@ -259,14 +278,18 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
     }
 
     /**
-     * Parses a single `modifications[]` entry.
+     * Парсит одну запись `modifications[]`.
      *
-     * Returns `null` (and silently skips the entry) if mandatory fields
-     * [InteractionRequestSchema.MOD_TYPE] or [InteractionRequestSchema.MOD_PATH] are absent.
+     * Возвращает `null`, если отсутствует или пусто обязательное поле
+     * [InteractionRequestSchema.MOD_TYPE] либо [InteractionRequestSchema.MOD_PATH],
+     * а также если значение не является строковым примитивом. Отбрасывание записи
+     * фиксирует вызывающий код — тихо терять правку нельзя.
      */
     private fun parseModification(obj: JsonObject): InteractionModification? {
-        val type = obj[InteractionRequestSchema.MOD_TYPE]?.jsonPrimitive?.contentOrNull ?: return null
-        val path = obj[InteractionRequestSchema.MOD_PATH]?.jsonPrimitive?.contentOrNull ?: return null
+        val type = (obj[InteractionRequestSchema.MOD_TYPE] as? JsonPrimitive)?.contentOrNull
+            ?.takeIf { it.isNotBlank() } ?: return null
+        val path = (obj[InteractionRequestSchema.MOD_PATH] as? JsonPrimitive)?.contentOrNull
+            ?.takeIf { it.isNotBlank() } ?: return null
         return InteractionModification(
             type = type,
             path = path,

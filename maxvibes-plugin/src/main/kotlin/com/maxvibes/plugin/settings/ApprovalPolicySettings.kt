@@ -10,9 +10,10 @@ import com.maxvibes.application.port.output.ApprovalPolicyPort
 import com.maxvibes.domain.model.approval.AgentActionKind
 import com.maxvibes.domain.model.approval.ApprovalMode
 import com.maxvibes.domain.model.approval.ApprovalPolicy
+import com.maxvibes.domain.model.turn.AutonomyBudget
 
 /**
- * Политика апрувалов, сохранённая для проекта в `maxvibes-approvals.xml`.
+ * Политика апрувалов и лимит автономии, сохранённые для проекта в `maxvibes-approvals.xml`.
  *
  * В файл пишутся имена enum-ов строками, а не сами enum-ы: файл переживает
  * откат плагина на старую версию и правки руками. Незнакомое имя при чтении
@@ -32,6 +33,8 @@ class ApprovalPolicySettings : PersistentStateComponent<ApprovalPolicySettings.S
 
     class State {
         var modes: MutableMap<String, String> = mutableMapOf()
+        var autonomousIterations: Int = DEFAULT_AUTONOMOUS_ITERATIONS
+        var maxFormatRetries: Int = DEFAULT_MAX_FORMAT_RETRIES
     }
 
     private var myState: State = State()
@@ -61,7 +64,46 @@ class ApprovalPolicySettings : PersistentStateComponent<ApprovalPolicySettings.S
             .toMutableMap()
     }
 
+    /**
+     * Сколько итераций LLM ход проходит сам, прежде чем спросить человека.
+     *
+     * Значение зажимается при чтении, а не только при записи: файл правят руками,
+     * и лимит в ноль молча выключил бы автономию целиком, а лимит в тысячу сделал
+     * бы её неотличимой от отсутствия лимита.
+     */
+    fun loadAutonomousIterations(): Int =
+        myState.autonomousIterations.coerceIn(MIN_AUTONOMOUS_ITERATIONS, MAX_AUTONOMOUS_ITERATIONS)
+
+    fun saveAutonomousIterations(iterations: Int) {
+        myState.autonomousIterations =
+            iterations.coerceIn(MIN_AUTONOMOUS_ITERATIONS, MAX_AUTONOMOUS_ITERATIONS)
+    }
+
+    /**
+     * Сколько раз подряд агента просят переслать правки, которые не разобрались.
+     *
+     * Ноль — валидное значение и означает «не переспрашивать»: агент, который
+     * стабильно шлёт мусор в `modifications`, иначе будет молотить бюджет хода
+     * на каждой попытке.
+     */
+    fun loadMaxFormatRetries(): Int =
+        myState.maxFormatRetries.coerceIn(MIN_FORMAT_RETRIES, MAX_FORMAT_RETRIES)
+
+    fun saveMaxFormatRetries(retries: Int) {
+        myState.maxFormatRetries = retries.coerceIn(MIN_FORMAT_RETRIES, MAX_FORMAT_RETRIES)
+    }
+
     companion object {
+        const val MIN_AUTONOMOUS_ITERATIONS: Int = 1
+        const val MAX_AUTONOMOUS_ITERATIONS: Int = 50
+
+        const val MIN_FORMAT_RETRIES: Int = 0
+        const val MAX_FORMAT_RETRIES: Int = 5
+        const val DEFAULT_MAX_FORMAT_RETRIES: Int = 2
+
+        /** Дефолт берётся из домена, чтобы настройка и бюджет хода не разъехались. */
+        val DEFAULT_AUTONOMOUS_ITERATIONS: Int = AutonomyBudget.DEFAULT.maxAutonomousIterations
+
         fun getInstance(project: Project): ApprovalPolicySettings = project.service()
     }
 }

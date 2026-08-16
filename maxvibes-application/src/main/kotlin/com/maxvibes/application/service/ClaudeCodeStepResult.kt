@@ -69,7 +69,14 @@ sealed class ClaudeCodeStepResult {
          * Сказал ли агент, что ещё не закончил. Null — не сказал ничего, и это
          * трактуется как «закончил»: безостановочный ход включается только явно.
          */
-        val turnIntent: TurnIntent? = null
+        val turnIntent: TurnIntent? = null,
+        /**
+         * Записи `modifications`, которые не удалось разобрать: они НЕ применены.
+         *
+         * Непустой список означает, что ход потрачен впустую, поэтому он же служит
+         * основанием продолжить работу и потребовать от агента правильный формат.
+         */
+        val malformedModifications: List<String> = emptyList()
     ) : ClaudeCodeStepResult()
 
     data class Error(val message: String) : ClaudeCodeStepResult()

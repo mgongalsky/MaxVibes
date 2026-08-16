@@ -1,27 +1,30 @@
 package com.maxvibes.domain.model.turn
 
 /**
- * Ограничивает, сколько шагов подряд агент может пройти без участия человека.
+ * Ограничивает, сколько раз подряд ход может уйти модели без участия человека.
  *
- * Предохранитель против самоподдерживающегося цикла: агент, который каждый раз
- * просит ещё файлы, иначе будет крутиться бесконечно. Считаются только
- * автоматические шаги — ручные апрувы участие человека не тратят.
+ * Единица — автономная итерация, то есть один самостоятельный запуск модели, а не
+ * отдельное действие внутри него. Чтение кода, применение уже разрешённых политикой
+ * правок и разрешённые команды сами по себе бюджет не тратят: раньше исследование из
+ * нескольких запросов файлов съедало лимит целиком, хотя работа почти не двигалась.
  */
-data class AutonomyBudget(val maxAutomaticSteps: Int) {
+data class AutonomyBudget(val maxAutonomousIterations: Int) {
 
     init {
-        require(maxAutomaticSteps >= 0) { "maxAutomaticSteps must not be negative, got $maxAutomaticSteps" }
+        require(maxAutonomousIterations >= 0) {
+            "maxAutonomousIterations must not be negative, got $maxAutonomousIterations"
+        }
     }
 
-    fun allows(consumedAutomaticSteps: Int): Boolean = consumedAutomaticSteps < maxAutomaticSteps
+    fun allows(consumedIterations: Int): Boolean = consumedIterations < maxAutonomousIterations
 
-    fun remaining(consumedAutomaticSteps: Int): Int =
-        (maxAutomaticSteps - consumedAutomaticSteps).coerceAtLeast(0)
+    fun remaining(consumedIterations: Int): Int =
+        (maxAutonomousIterations - consumedIterations).coerceAtLeast(0)
 
     companion object {
-        val DEFAULT: AutonomyBudget = AutonomyBudget(maxAutomaticSteps = 12)
+        val DEFAULT: AutonomyBudget = AutonomyBudget(maxAutonomousIterations = 12)
 
         /** Каждый шаг требует человека — поведение до появления оркестратора. */
-        val NONE: AutonomyBudget = AutonomyBudget(maxAutomaticSteps = 0)
+        val NONE: AutonomyBudget = AutonomyBudget(maxAutonomousIterations = 0)
     }
 }

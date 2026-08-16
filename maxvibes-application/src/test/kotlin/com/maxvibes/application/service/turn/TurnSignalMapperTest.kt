@@ -72,10 +72,10 @@ class TurnSignalMapperTest {
     }
 
     @Test
-    fun `a failed modification ends the turn even though commands are pending`() {
+    fun `a failed modification outranks the commands of the same step`() {
         val result = completed(listOf(applied(), rejected()), listOf(CommandRequest("gradlew test")))
 
-        assertEquals(TurnSignal.Completed, TurnSignalMapper.from(result))
+        assertEquals(TurnSignal.Pending(AgentActionKind.CONTINUATION), TurnSignalMapper.from(result))
     }
 
     @Test
@@ -124,7 +124,7 @@ class TurnSignalMapperTest {
     }
 
     @Test
-    fun `a failed modification stops the turn even when the agent wants to continue`() {
+    fun `a failed modification keeps the turn alive even when the agent says it is done`() {
         val path = ElementPath("file:src/main/kotlin/A.kt")
         val modification = Modification.DeleteElement(path)
 
@@ -135,11 +135,11 @@ class TurnSignalMapperTest {
                     ModificationResult.Failure(modification, ModificationError.ElementNotFound(path))
                 ),
                 success = false,
-                turnIntent = TurnIntent.CONTINUE
+                turnIntent = TurnIntent.DONE
             )
         )
 
-        assertEquals(TurnSignal.Completed, signal)
+        assertEquals(TurnSignal.Pending(AgentActionKind.CONTINUATION), signal)
     }
 
     @Test
@@ -184,13 +184,13 @@ class TurnSignalMapperTest {
     }
 
     @Test
-    fun `checks are pointless after a failed apply and end the turn`() {
+    fun `checks are pointless after a failed apply and yield to the correction step`() {
         val result = completed(
             listOf(applied(), rejected()),
             checks = listOf(CheckRequest(CheckKind.BUILD))
         )
 
-        assertEquals(TurnSignal.Completed, TurnSignalMapper.from(result))
+        assertEquals(TurnSignal.Pending(AgentActionKind.CONTINUATION), TurnSignalMapper.from(result))
     }
 
     @Test
@@ -206,5 +206,30 @@ class TurnSignalMapperTest {
         )
 
         assertEquals(TurnSignal.Pending(AgentActionKind.TESTS), signal)
+    }
+
+    @Test
+    fun `modifications lost to a format error outrank the commands of the same step`() {
+        val entry = "#1: нет обязательных полей: type"
+        val alone = TurnSignalMapper.from(
+            ClaudeCodeStepResult.Completed(
+                message = "here you go",
+                modifications = emptyList(),
+                success = true,
+                malformedModifications = listOf(entry)
+            )
+        )
+        val withCommands = TurnSignalMapper.from(
+            ClaudeCodeStepResult.Completed(
+                message = "here you go",
+                modifications = emptyList(),
+                success = true,
+                commands = listOf(CommandRequest("gradlew test")),
+                malformedModifications = listOf(entry)
+            )
+        )
+
+        assertEquals(TurnSignal.Pending(AgentActionKind.CONTINUATION), alone)
+        assertEquals(TurnSignal.Pending(AgentActionKind.CONTINUATION), withCommands)
     }
 }

@@ -43,7 +43,7 @@ class AgentTurnOrchestratorTest {
     }
 
     @Test
-    fun `allowed action keeps the turn with the agent and spends budget`() {
+    fun `an allowed view request continues the turn without spending budget`() {
         val sut = orchestrator(budget = AutonomyBudget(2))
         val turn = sut.begin("s1")
 
@@ -52,7 +52,29 @@ class AgentTurnOrchestratorTest {
         val outcome = transition.outcome as TurnOutcome.Continue
         assertEquals(AgentActionKind.VIEW_REQUEST, outcome.next.action)
         assertTrue(outcome.next.automatic)
-        assertEquals(1, transition.turn.automaticStepCount)
+        assertEquals(0, transition.turn.autonomousIterationCount)
+    }
+
+    @Test
+    fun `only a continuation spends an iteration of the budget`() {
+        val sut = orchestrator(budget = AutonomyBudget(2))
+        var turn = sut.begin("s1")
+
+        listOf(
+            AgentActionKind.VIEW_REQUEST,
+            AgentActionKind.MODIFICATION,
+            AgentActionKind.COMMAND,
+            AgentActionKind.BUILD,
+            AgentActionKind.TESTS
+        ).forEach { action ->
+            turn = sut.advance(turn, TurnSignal.Pending(action)).turn
+        }
+        assertEquals(0, turn.autonomousIterationCount)
+
+        turn = sut.advance(turn, TurnSignal.Pending(AgentActionKind.CONTINUATION)).turn
+
+        assertEquals(1, turn.autonomousIterationCount)
+        assertEquals(6, turn.steps.size)
     }
 
     @Test
@@ -132,7 +154,7 @@ class AgentTurnOrchestratorTest {
 
         val outcome = transition.outcome as TurnOutcome.Continue
         assertTrue(!outcome.next.automatic)
-        assertEquals(0, transition.turn.automaticStepCount)
+        assertEquals(0, transition.turn.autonomousIterationCount)
         assertEquals(1, transition.turn.steps.size)
     }
 
@@ -154,22 +176,22 @@ class AgentTurnOrchestratorTest {
     }
 
     @Test
-    fun `budget runs out after a series of automatic steps`() {
+    fun `budget runs out after a series of autonomous iterations`() {
         val sut = orchestrator(budget = AutonomyBudget(2))
         var turn = sut.begin("s1")
 
         repeat(2) {
-            val transition = sut.advance(turn, TurnSignal.Pending(AgentActionKind.VIEW_REQUEST))
+            val transition = sut.advance(turn, TurnSignal.Pending(AgentActionKind.CONTINUATION))
             assertTrue(transition.outcome is TurnOutcome.Continue)
             turn = transition.turn
         }
 
-        val parked = sut.advance(turn, TurnSignal.Pending(AgentActionKind.VIEW_REQUEST))
+        val parked = sut.advance(turn, TurnSignal.Pending(AgentActionKind.CONTINUATION))
 
         assertEquals(
-            TurnOutcome.AwaitHuman(AwaitReason.BUDGET_EXHAUSTED, AgentActionKind.VIEW_REQUEST),
+            TurnOutcome.AwaitHuman(AwaitReason.BUDGET_EXHAUSTED, AgentActionKind.CONTINUATION),
             parked.outcome
         )
-        assertEquals(2, turn.automaticStepCount)
+        assertEquals(2, turn.autonomousIterationCount)
     }
 }

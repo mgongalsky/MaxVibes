@@ -18,6 +18,7 @@ import com.maxvibes.plugin.voice.VoiceInputCoordinator
 import com.maxvibes.domain.model.chat.CodingAgentProvider
 import com.maxvibes.domain.model.interaction.CodingAgentCapabilities
 import com.maxvibes.plugin.service.MaxVibesLogger
+import com.maxvibes.plugin.settings.ApprovalPolicySettings
 
 /**
  * Composition root behind the thin [ChatPanel] facade.
@@ -269,6 +270,10 @@ class ChatPanelComposition(
         view.setAutoApproveToggle(
             isOn = { messageController.isAllowAllApprovals() },
             onToggle = { messageController.setAllowAllApprovals(it) }
+        )
+        view.setAutonomyLimit(
+            current = { ApprovalPolicySettings.getInstance(project).loadAutonomousIterations() },
+            onChange = { ApprovalPolicySettings.getInstance(project).saveAutonomousIterations(it) }
         )
     }
 

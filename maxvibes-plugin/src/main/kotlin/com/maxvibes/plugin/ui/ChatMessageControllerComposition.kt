@@ -15,6 +15,7 @@ import com.maxvibes.domain.model.interaction.AttachedImage
 import com.maxvibes.domain.model.interaction.InteractionMode
 import com.maxvibes.plugin.service.MaxVibesService
 import com.maxvibes.plugin.settings.ApprovalPolicySettings
+import com.maxvibes.domain.model.turn.AutonomyBudget
 
 /** Composition root behind [ChatMessageController]. */
 internal class ChatMessageControllerComposition(
@@ -107,6 +108,11 @@ internal class ChatMessageControllerComposition(
                     AgentActionKind.MODIFICATION,
                     null -> claudeCodeDispatcher.continueTurnAutomatically(sessionId)
                 }
+            },
+            budget = {
+                AutonomyBudget(
+                    ApprovalPolicySettings.getInstance(project).loadAutonomousIterations()
+                )
             }
         )
     }
@@ -166,7 +172,8 @@ internal class ChatMessageControllerComposition(
                 commandCoordinator.presentCommands(commands, sessionId, mode)
             },
             executeAsync = { title, session, action -> runClaudeCodeBg(title, session, action) },
-            turnAutopilot = { turnAutopilot }
+            turnAutopilot = { turnAutopilot },
+            maxFormatRetries = { ApprovalPolicySettings.getInstance(project).loadMaxFormatRetries() }
         )
     }
 
@@ -282,15 +289,23 @@ internal class ChatMessageControllerComposition(
             val completed = result as? ClaudeCodeStepResult.Completed
             val checks = completed?.checks.orEmpty()
             val blockedByCommands = checks.isNotEmpty() && completed?.commands?.isNotEmpty() == true
+            // Правки этого шага не дошли до кода, значит проверять нечего: собирать
+            // и тестировать пришлось бы то, чего на диске нет.
+            val brokenStep = completed?.malformedModifications?.isNotEmpty() == true ||
+                    completed?.modifications?.any { !it.success } == true
             // Батч чеков должен существовать до handleResult: тот дёргает автопилот,
             // а автопилот запускает уже готовый батч без участия человека.
-            if (checks.isNotEmpty() && !blockedByCommands) {
+            if (checks.isNotEmpty() && !blockedByCommands && !brokenStep) {
                 checkCoordinator.presentChecks(checks, session.id, InteractionMode.CLAUDE_CODE)
             }
             claudeCodeDispatcher.handleResult(result, session)
             if (blockedByCommands) {
                 callbacks.appendToChat(
                     "\u26A0\uFE0F ${checks.size} check(s) skipped — response mixed them with terminal commands"
+                )
+            } else if (brokenStep && checks.isNotEmpty()) {
+                callbacks.appendToChat(
+                    "\u26A0\uFE0F ${checks.size} check(s) skipped — the modifications of this step never reached the code"
                 )
             }
         }

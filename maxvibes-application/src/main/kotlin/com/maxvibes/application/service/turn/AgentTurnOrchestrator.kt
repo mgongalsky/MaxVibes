@@ -22,7 +22,8 @@ import com.maxvibes.domain.model.turn.TurnTransition
  */
 class AgentTurnOrchestrator(
     private val decideApproval: (sessionId: String, kind: AgentActionKind) -> ApprovalDecision,
-    private val defaultBudget: AutonomyBudget = AutonomyBudget.DEFAULT
+    /** Открыт наружу, чтобы автопилот отдавал этот же бюджет и не заводил второй дефолт. */
+    val defaultBudget: AutonomyBudget = AutonomyBudget.DEFAULT
 ) {
 
     fun begin(sessionId: String, budget: AutonomyBudget = defaultBudget): AgentTurn =
@@ -44,6 +45,23 @@ class AgentTurnOrchestrator(
     fun resumeAfterHuman(turn: AgentTurn, action: AgentActionKind): TurnTransition {
         val step = turn.nextStep(action = action, automatic = false)
         return TurnTransition(turn.record(step), TurnOutcome.Continue(step))
+    }
+
+    /**
+     * Человек разблокировал ход, остановленный именно исчерпанным бюджетом.
+     *
+     * Бюджет восстанавливается только если автономное продолжение вообще
+     * разрешено: иначе один ручной Approve молча включал бы автономный режим,
+     * которого пользователь не включал. Разрешение спрашивается у той же точки,
+     * что и всегда, поэтому сессионный тумблер и политика проекта учитываются
+     * оба и не могут разъехаться.
+     */
+    fun resumeAfterBudgetExhaustion(turn: AgentTurn, action: AgentActionKind): TurnTransition {
+        val resumed = resumeAfterHuman(turn, action)
+        if (decideApproval(turn.sessionId, AgentActionKind.CONTINUATION) == ApprovalDecision.Ask) {
+            return resumed
+        }
+        return resumed.copy(turn = resumed.turn.refillBudget())
     }
 
     /**

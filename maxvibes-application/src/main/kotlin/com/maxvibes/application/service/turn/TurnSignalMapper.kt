@@ -26,7 +26,11 @@ object TurnSignalMapper {
     private fun fromCompleted(result: ClaudeCodeStepResult.Completed): TurnSignal {
         val allApplied = result.modifications.all { it.success }
         return when {
-            !allApplied -> TurnSignal.Completed
+            // Раньше команд и проверок: если правки не разобрались или не легли,
+            // собирать и гонять тесты нечего — сначала надо вернуть сами изменения.
+            !allApplied || result.malformedModifications.isNotEmpty() ->
+                TurnSignal.Pending(AgentActionKind.CONTINUATION)
+
             result.commands.isNotEmpty() -> TurnSignal.Pending(AgentActionKind.COMMAND)
             result.checks.isNotEmpty() -> TurnSignal.Pending(
                 // Смешанная пачка спрашивает разрешение по самой строгой проверке:

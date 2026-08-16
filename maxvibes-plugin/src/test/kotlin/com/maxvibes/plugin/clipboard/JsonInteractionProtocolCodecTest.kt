@@ -289,6 +289,28 @@ class JsonInteractionProtocolCodecTest {
         val result = codec.findEmbeddedJson("just plain text with no braces at all")
         assertNull(result, "Expected null when no JSON indicators are present")
     }
+
+    @Test
+    fun `decode reports modifications it could not parse instead of dropping them`() {
+        val raw = """
+            {
+              "message": "ok",
+              "modifications": [
+                { "kind": "REPLACE_ELEMENT", "path": "src/Main.kt", "content": "x" },
+                { "type": "CREATE_FILE", "path": "src/New.kt", "content": "y" },
+                { "type": "REPLACE_FILE", "path": "", "content": "z" }
+              ]
+            }
+        """.trimIndent()
+
+        val response = codec.decode(raw)!!
+
+        assertEquals(1, response.modifications.size)
+        assertEquals("src/New.kt", response.modifications.first().path)
+        assertEquals(2, response.malformedModifications.size)
+        assertTrue(response.malformedModifications[0].contains(InteractionRequestSchema.MOD_TYPE))
+        assertTrue(response.malformedModifications[1].contains(InteractionRequestSchema.MOD_PATH))
+    }
 }
 
 @Test

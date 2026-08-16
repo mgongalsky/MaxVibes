@@ -115,10 +115,10 @@ class TurnAutopilotTest {
             continueTurn = { sessionId, _ -> continued += sessionId }
         )
         sut.startTurn("s1")
-        sut.onStep("s1", TurnSignal.Pending(AgentActionKind.VIEW_REQUEST))
+        sut.onStep("s1", TurnSignal.Pending(AgentActionKind.CONTINUATION))
 
         sut.onStep("s1", TurnSignal.Completed)
-        val outcome = sut.onStep("s1", TurnSignal.Pending(AgentActionKind.VIEW_REQUEST))
+        val outcome = sut.onStep("s1", TurnSignal.Pending(AgentActionKind.CONTINUATION))
 
         assertTrue(outcome is TurnOutcome.Continue, "a forgotten turn must get a fresh budget")
         assertEquals(listOf("s1", "s1"), continued)
@@ -148,8 +148,8 @@ class TurnAutopilotTest {
         sut.startTurn("s1")
         sut.startTurn("s2")
 
-        sut.onStep("s1", TurnSignal.Pending(AgentActionKind.VIEW_REQUEST))
-        sut.onStep("s2", TurnSignal.Pending(AgentActionKind.VIEW_REQUEST))
+        sut.onStep("s1", TurnSignal.Pending(AgentActionKind.CONTINUATION))
+        sut.onStep("s2", TurnSignal.Pending(AgentActionKind.CONTINUATION))
 
         assertEquals(listOf("s1", "s2"), continued)
     }
@@ -180,11 +180,11 @@ class TurnAutopilotTest {
             continueTurn = { sessionId, _ -> continued += sessionId }
         )
         sut.startTurn("s1")
-        sut.onStep("s1", TurnSignal.Pending(AgentActionKind.VIEW_REQUEST))
-        sut.onStep("s1", TurnSignal.Pending(AgentActionKind.VIEW_REQUEST))
+        sut.onStep("s1", TurnSignal.Pending(AgentActionKind.CONTINUATION))
+        sut.onStep("s1", TurnSignal.Pending(AgentActionKind.CONTINUATION))
 
         sut.startTurn("s1")
-        val outcome = sut.onStep("s1", TurnSignal.Pending(AgentActionKind.VIEW_REQUEST))
+        val outcome = sut.onStep("s1", TurnSignal.Pending(AgentActionKind.CONTINUATION))
 
         assertTrue(outcome is TurnOutcome.Continue)
         assertEquals(2, continued.size)
@@ -199,13 +199,13 @@ class TurnAutopilotTest {
             orchestrator(budget = AutonomyBudget(3)),
             continueTurn = { sessionId, _ ->
                 continues++
-                sut.onStep(sessionId, TurnSignal.Pending(AgentActionKind.VIEW_REQUEST))
+                sut.onStep(sessionId, TurnSignal.Pending(AgentActionKind.CONTINUATION))
             },
             onParked = { _, reason, _ -> parkedReason = reason }
         )
         sut.startTurn("s1")
 
-        sut.onStep("s1", TurnSignal.Pending(AgentActionKind.VIEW_REQUEST))
+        sut.onStep("s1", TurnSignal.Pending(AgentActionKind.CONTINUATION))
 
         assertEquals(3, continues)
         assertEquals(AwaitReason.BUDGET_EXHAUSTED, parkedReason)

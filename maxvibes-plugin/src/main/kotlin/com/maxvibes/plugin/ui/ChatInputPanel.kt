@@ -31,6 +31,9 @@ import javax.swing.JComponent
 import javax.swing.JPanel
 import javax.swing.KeyStroke
 import javax.swing.ScrollPaneConstants
+import javax.swing.JSpinner
+import javax.swing.SpinnerNumberModel
+import com.maxvibes.plugin.settings.ApprovalPolicySettings
 
 data class InputSubmission(
     val text: String,
@@ -79,6 +82,18 @@ class ChatInputPanel(
     }
     private val autoApproveCheckbox = JBCheckBox("\uD83D\uDD13 Auto").apply {
         toolTipText = "Approve everything in this session automatically, until switched off"
+    }
+    private val autonomyIterationsSpinner = JSpinner(
+        SpinnerNumberModel(
+            ApprovalPolicySettings.DEFAULT_AUTONOMOUS_ITERATIONS,
+            ApprovalPolicySettings.MIN_AUTONOMOUS_ITERATIONS,
+            ApprovalPolicySettings.MAX_AUTONOMOUS_ITERATIONS,
+            1
+        )
+    ).apply {
+        toolTipText = "Autonomous LLM iterations: how many steps the agent may take on its own " +
+                "before it stops and asks you"
+        preferredSize = Dimension(52, 26)
     }
     private val dryRunCheckbox = JBCheckBox("Dry run").apply {
         toolTipText = "Show plan without applying changes"
@@ -188,6 +203,11 @@ class ChatInputPanel(
             add(planOnlyCheckbox)
             add(dryRunCheckbox)
             add(copyJsonButton)
+            add(JBLabel("Iters").apply {
+                font = font.deriveFont(11f)
+                toolTipText = autonomyIterationsSpinner.toolTipText
+            })
+            add(autonomyIterationsSpinner)
             add(autoApproveCheckbox)
             add(approveButton)
             add(voiceButton)
@@ -249,6 +269,20 @@ class ChatInputPanel(
         onAutoApproveToggle = onToggle
         autoApproveCheckbox.isSelected = isOn()
         autoApproveCheckbox.addActionListener { onAutoApproveToggle(autoApproveCheckbox.isSelected) }
+    }
+
+    /**
+     * Лимит автономных итераций LLM.
+     *
+     * Слушатель вешается здесь, а не в [wireListeners], потому что вызов идёт
+     * ровно один раз при инициализации панели — до него панель не знает, откуда
+     * брать и куда класть значение.
+     */
+    fun setAutonomyLimit(current: () -> Int, onChange: (Int) -> Unit) {
+        autonomyIterationsSpinner.value = current()
+        autonomyIterationsSpinner.addChangeListener {
+            onChange(autonomyIterationsSpinner.value as Int)
+        }
     }
 
     fun setVoiceState(state: VoiceInputState) {
