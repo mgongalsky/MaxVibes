@@ -66,6 +66,9 @@ class ClaudeOAuthUsageAdapter : SubscriptionUsagePort {
                     .timeout(Duration.ofSeconds(15))
                     .header("Authorization", "Bearer $token")
                     .header("anthropic-beta", OAUTH_BETA)
+                    .header("anthropic-version", "2023-06-01")
+                    .header("User-Agent", "claude-code")
+                    .header("x-app", "cli")
                     .header("Accept", "application/json")
                     .GET()
                     .build()
@@ -102,8 +105,6 @@ class ClaudeOAuthUsageAdapter : SubscriptionUsagePort {
             window(root, "seven_day_opus", windowMinutes = 10_080, name = "Opus")
         )
         if (windows.isEmpty()) {
-            // Schema drifted from expectations - surface a preview so field names
-            // can be adjusted from the log without guessing.
             MaxVibesLogger.info(
                 TAG, "usage schema unrecognized",
                 mapOf("preview" to body.take(300))

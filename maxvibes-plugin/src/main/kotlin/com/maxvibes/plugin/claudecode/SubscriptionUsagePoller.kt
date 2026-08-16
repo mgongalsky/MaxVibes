@@ -18,17 +18,26 @@ import kotlinx.coroutines.launch
  * themselves (LimitsBarPanel already does). Owns its own scope; [stop] is
  * terminal. Cheap no-op cycles while the port reports not configured, so the
  * poller survives the credentials file appearing later.
+ *
+ * A failed poll doubles the wait up to [maxIntervalMs]; the first success returns
+ * to [intervalMs]. The usage endpoint answers 429 when polled too eagerly, and a
+ * fixed retry rhythm keeps the caller inside that penalty indefinitely - the bars
+ * then stay empty for hours with nothing to show for it but one warning a minute.
  */
 class SubscriptionUsagePoller(
     private val port: SubscriptionUsagePort,
-    private val intervalMs: Long = 60_000L,
+    private val intervalMs: Long = 300_000L,
     private val initialDelayMs: Long = 2_000L,
+    private val maxIntervalMs: Long = 1_800_000L,
     private val onUsage: (SubscriptionUsage) -> Unit
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     @Volatile
     private var started = false
+
+    @Volatile
+    private var currentIntervalMs = intervalMs
 
     fun start() {
         if (started) return
@@ -37,7 +46,7 @@ class SubscriptionUsagePoller(
             delay(initialDelayMs)
             while (isActive) {
                 pollOnce()
-                delay(intervalMs)
+                delay(currentIntervalMs)
             }
         }
     }
@@ -50,8 +59,16 @@ class SubscriptionUsagePoller(
     private suspend fun pollOnce() {
         try {
             if (!port.isConfigured()) return
-            port.fetchUsage()?.let(onUsage)
+            val usage = port.fetchUsage()
+            if (usage == null) {
+                currentIntervalMs = backedOff(currentIntervalMs, intervalMs, maxIntervalMs)
+                return
+            }
+            currentIntervalMs = intervalMs
+            MaxVibesLogger.debug(TAG, "usage snapshot", mapOf("windows" to usage.windows.size))
+            onUsage(usage)
         } catch (e: Exception) {
+            currentIntervalMs = backedOff(currentIntervalMs, intervalMs, maxIntervalMs)
             MaxVibesLogger.warn(TAG, "usage poll failed", ex = e)
         }
     }
@@ -65,3 +82,7 @@ class SubscriptionUsagePoller(
         private const val TAG = "UsagePoller"
     }
 }
+
+/** Doubles [current] within [base]..[max]; top-level so the ramp is testable without real delays. */
+internal fun backedOff(current: Long, base: Long, max: Long): Long =
+    (current.coerceAtLeast(base) * 2).coerceAtMost(max)

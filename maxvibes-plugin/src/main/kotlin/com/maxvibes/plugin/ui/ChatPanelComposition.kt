@@ -19,6 +19,7 @@ import com.maxvibes.domain.model.chat.CodingAgentProvider
 import com.maxvibes.domain.model.interaction.CodingAgentCapabilities
 import com.maxvibes.plugin.service.MaxVibesLogger
 import com.maxvibes.plugin.settings.ApprovalPolicySettings
+import com.maxvibes.plugin.claudecode.ClaudeUsageSnapshotCache
 
 /**
  * Composition root behind the thin [ChatPanel] facade.
@@ -355,11 +356,6 @@ class ChatPanelComposition(
     private var usagePoller: SubscriptionUsagePoller? = null
     private var lastUsageProvider: CodingAgentProvider? = null
 
-    /**
-     * [SubscriptionUsagePoller.stop] is terminal, so an unsupported agent drops the instance
-     * entirely and a supported one always gets a freshly started poller. Polling is a Claude
-     * detail - Codex pushes its limits into the event stream and needs no poller at all.
-     */
     private fun refreshUsagePolling() {
         val provider = AgentCliSettingsAdapter(settings).provider
         val supported = CodingAgentCapabilities.of(provider).supportsSubscriptionUsage
@@ -373,9 +369,21 @@ class ChatPanelComposition(
             return
         }
         if (usagePoller == null) {
+            val cache = ClaudeUsageSnapshotCache()
+            cache.load()?.let { cached ->
+                MaxVibesLogger.debug(
+                    "ChatPanelComposition",
+                    "restored Claude usage snapshot",
+                    mapOf("windows" to cached.windows.size)
+                )
+                view.onUsage(cached)
+            }
             usagePoller = SubscriptionUsagePoller(
                 port = ClaudeOAuthUsageAdapter(),
-                onUsage = view::onUsage
+                onUsage = { usage ->
+                    cache.save(usage)
+                    view.onUsage(usage)
+                }
             ).also { it.start() }
         }
     }
