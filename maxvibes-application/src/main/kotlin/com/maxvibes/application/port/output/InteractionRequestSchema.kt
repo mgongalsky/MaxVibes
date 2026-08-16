@@ -69,6 +69,9 @@ object InteractionRequestSchema {
     const val PLAN_STEP_ID = "id"
     const val PLAN_STEP_STATUS = "status"
 
+    /** Fallback for a step's `title`: Codex-family models routinely emit `description` instead. */
+    const val PLAN_STEP_DESCRIPTION = "description"
+
     const val RESP_DIAGRAM = "diagram"
     const val DIAG_TITLE = "title"
     const val DIAG_NODES = "nodes"

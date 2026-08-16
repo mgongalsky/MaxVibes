@@ -357,7 +357,8 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
      * Tolerant by design (a malformed plan must never fail the whole response):
      * - unknown/broken step `status` → [PlanStepStatus.PENDING];
      * - missing step `id` → 1-based ordinal;
-     * - steps without a `title` are skipped; a blank plan title becomes "Plan";
+     * - a step's text comes from `title`, falling back to `description`; a step with
+     *   neither is skipped, and a blank plan title becomes "Plan";
      * - any parsing error yields `null` (plan unchanged) instead of throwing.
      *
      * Returns `null` when the field is absent. A present plan with an empty `steps`
@@ -368,7 +369,9 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
         val steps = planObj[InteractionRequestSchema.PLAN_STEPS]?.jsonArray
             ?.mapIndexedNotNull { index, element ->
                 val stepObj = element as? JsonObject ?: return@mapIndexedNotNull null
-                val title = stepObj[InteractionRequestSchema.PLAN_TITLE]?.jsonPrimitive?.contentOrNull
+                val title = (stepObj[InteractionRequestSchema.PLAN_TITLE]
+                    ?: stepObj[InteractionRequestSchema.PLAN_STEP_DESCRIPTION])
+                    ?.jsonPrimitive?.contentOrNull
                     ?.takeIf { it.isNotBlank() } ?: return@mapIndexedNotNull null
                 val id = stepObj[InteractionRequestSchema.PLAN_STEP_ID]?.jsonPrimitive?.contentOrNull
                     ?.takeIf { it.isNotBlank() } ?: (index + 1).toString()

@@ -10,13 +10,23 @@ import com.maxvibes.domain.model.planning.TaskPlan
 import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Cursor
+import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
+import java.awt.Graphics
+import java.awt.Graphics2D
+import java.awt.RenderingHints
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.BoxLayout
 import javax.swing.JButton
+import javax.swing.JComponent
 import javax.swing.JPanel
+
+private val accentColor = JBColor(Color(0x2196F3), Color(0x64B5F6))
+private val doneColor = JBColor(Color(0x777777), Color(0x999999))
+private val completeColor = JBColor(Color(0x1E8449), Color(0x58D68D))
+private val trackColor = JBColor(Color(0xDEDEDE), Color(0x2B2D30))
 
 /**
  * Pinned planner panel: a collapsible checklist of the session's [TaskPlan].
@@ -26,7 +36,9 @@ import javax.swing.JPanel
  *
  * Rendering rules:
  *  - header: collapse arrow, plan title (clickable when the plan has a docPath —
- *    opens PLAN.md), progress `N/M ✓` on the right (green when complete);
+ *    opens PLAN.md), then a progress bar and `N/M ✓` on the right (green when
+ *    complete). Both live in the header, so they stay visible after a completed
+ *    plan auto-collapses;
  *  - body: one row per step — checkbox + title. Checking PENDING/IN_PROGRESS
  *    marks the step DONE; unchecking DONE/SKIPPED returns it to PENDING.
  *    A step title with a docPath is clickable and opens its STEP_N.md;
@@ -41,10 +53,6 @@ class PlanPanel(
     private val onToggleStep: (stepId: String, newStatus: PlanStepStatus) -> Unit,
     private val onOpenDoc: (docPath: String) -> Unit
 ) : JPanel(BorderLayout()) {
-
-    private val accentColor = JBColor(Color(0x2196F3), Color(0x64B5F6))
-    private val doneColor = JBColor(Color(0x777777), Color(0x999999))
-    private val completeColor = JBColor(Color(0x1E8449), Color(0x58D68D))
 
     private var collapsed = false
     private var autoCollapsedOnComplete = false
@@ -66,6 +74,8 @@ class PlanPanel(
     private val titleLabel = JBLabel("").apply {
         font = font.deriveFont(Font.BOLD, 12f)
     }
+
+    private val progressBar = PlanProgressBar()
 
     private val progressLabel = JBLabel("").apply {
         font = font.deriveFont(Font.BOLD, 11f)
@@ -95,7 +105,11 @@ class PlanPanel(
                 add(JBLabel("\uD83D\uDCCB"))
                 add(titleLabel)
             }, BorderLayout.WEST)
-            add(progressLabel, BorderLayout.EAST)
+            add(JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
+                background = JBColor.background()
+                add(progressBar)
+                add(progressLabel)
+            }, BorderLayout.EAST)
         }
         add(headerRow, BorderLayout.NORTH)
         add(stepsPanel, BorderLayout.CENTER)
@@ -138,6 +152,7 @@ class PlanPanel(
         }
         progressLabel.text = "${plan.doneCount}/${plan.steps.size} \u2713"
         progressLabel.foreground = if (plan.isComplete) completeColor else JBColor.GRAY
+        progressBar.setProgress(plan.doneCount, plan.steps.size, plan.isComplete)
 
         // Auto-collapse once when the plan reaches completion; re-arm when it reopens.
         if (plan.isComplete && !autoCollapsedOnComplete) {
@@ -191,6 +206,65 @@ class PlanPanel(
             background = JBColor.background()
             add(checkbox)
             add(label)
+        }
+    }
+}
+
+/**
+ * Compact completion bar for the plan header, drawn like the subscription-limits
+ * bar: rounded track, severity-free accent fill, subtle top highlight.
+ *
+ * Fed from the same counts as the `N/M ✓` label, so the two can never disagree.
+ * A complete plan fills the whole track even when some steps were SKIPPED rather
+ * than DONE — a green half-empty bar would read as a contradiction.
+ */
+private class PlanProgressBar : JComponent() {
+
+    private var done = 0
+    private var total = 0
+    private var complete = false
+
+    init {
+        preferredSize = Dimension(JBUI.scale(72), JBUI.scale(14))
+        minimumSize = Dimension(JBUI.scale(40), JBUI.scale(12))
+    }
+
+    fun setProgress(done: Int, total: Int, complete: Boolean) {
+        this.done = done
+        this.total = total
+        this.complete = complete
+        toolTipText = if (total > 0) "$done of $total steps done" else null
+        repaint()
+    }
+
+    override fun paintComponent(g: Graphics) {
+        if (total <= 0) return
+        val g2 = g.create() as Graphics2D
+        try {
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+
+            val barH = JBUI.scale(9)
+            val barY = (height - barH) / 2
+            val barW = width
+            val arc = barH
+            g2.color = trackColor
+            g2.fillRoundRect(0, barY, barW, barH, arc, arc)
+            g2.color = JBColor.border()
+            g2.drawRoundRect(0, barY, barW - 1, barH - 1, arc, arc)
+
+            val fillW = when {
+                complete -> barW
+                done <= 0 -> 0
+                else -> (barW * done / total).coerceIn(barH, barW)
+            }
+            if (fillW > 0) {
+                g2.color = if (complete) completeColor else accentColor
+                g2.fillRoundRect(0, barY, fillW, barH, arc, arc)
+                g2.color = Color(255, 255, 255, 30)
+                g2.fillRoundRect(0, barY, fillW, barH / 2, arc, arc)
+            }
+        } finally {
+            g2.dispose()
         }
     }
 }
