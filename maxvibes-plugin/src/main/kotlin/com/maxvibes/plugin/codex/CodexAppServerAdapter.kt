@@ -41,6 +41,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.serialization.json.contentOrNull
+import com.maxvibes.domain.model.stream.StreamTranscriptDigest
 
 /** Persistent Codex App Server transport over stdio JSONL. */
 class CodexAppServerAdapter(
@@ -148,6 +149,9 @@ class CodexAppServerAdapter(
     private val pending = ConcurrentHashMap<Long, CompletableDeferred<CodexAppServerLineParser.Line.Response>>()
     private val sendMutex = Mutex()
     private val parser = CodexAppServerLineParser()
+
+    /** Свёртка дельт: в транскрипт уходит итог по потоку, а не строка на фрагмент. */
+    private val transcriptDigest = StreamTranscriptDigest()
     private val stderrBuffer = StringBuilder()
 
     private fun currentConfig(): SpawnConfig = SpawnConfig(
@@ -537,26 +541,22 @@ class CodexAppServerAdapter(
         // Дельта приходит на каждые несколько символов, и вокруг неё едет полный
         // JSON-RPC конверт — в транскрипте это давало мегабайты шума на короткий
         // ответ. Тип строки известен только после разбора, поэтому запись идёт
-        // отсюда, а не из цикла чтения: всё, кроме дельт, сохраняется целиком.
-        val transcript = when (line) {
-            is CodexAppServerLineParser.Line.NarrationDelta -> {
-                val preview = line.text.take(PREVIEW_MAX).replace("\n", "\\n")
-                "STREAM_DELTA type=text item=" + line.itemId +
-                        " chars=" + line.text.length + " \"" + preview + "\""
+        // отсюда, а не из цикла чтения: дельты сворачиваются в счётчики и уходят
+        // одной строкой на поток перед ближайшей содержательной строкой.
+        when (line) {
+            is CodexAppServerLineParser.Line.NarrationDelta ->
+                transcriptDigest.delta(kind = "text", id = line.itemId, chars = line.text.length)
+
+            is CodexAppServerLineParser.Line.ReasoningDelta ->
+                transcriptDigest.delta(kind = "reasoning", id = line.itemId, chars = line.text.length)
+
+            CodexAppServerLineParser.Line.Ignored -> transcriptDigest.skipped(rawLine.length)
+
+            else -> {
+                transcriptDigest.flush().forEach { sessionLog?.inbound(it) }
+                sessionLog?.inbound(rawLine)
             }
-
-            is CodexAppServerLineParser.Line.ReasoningDelta -> {
-                val preview = line.text.take(PREVIEW_MAX).replace("\n", "\\n")
-                "STREAM_DELTA type=reasoning item=" + line.itemId +
-                        " chars=" + line.text.length + " \"" + preview + "\""
-            }
-
-            CodexAppServerLineParser.Line.Ignored ->
-                "STREAM_IGNORED chars=" + rawLine.length
-
-            else -> rawLine
         }
-        sessionLog?.inbound(transcript)
 
         when (line) {
             is CodexAppServerLineParser.Line.Response ->

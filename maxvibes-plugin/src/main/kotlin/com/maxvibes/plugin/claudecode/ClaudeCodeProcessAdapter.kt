@@ -35,6 +35,7 @@ import java.io.BufferedWriter
 import java.io.File
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
+import com.maxvibes.domain.model.stream.StreamTranscriptDigest
 
 /**
  * Plugin-layer implementation of [ClaudeCodePort] over the stream-json NDJSON protocol.
@@ -152,6 +153,9 @@ class ClaudeCodeProcessAdapter(
     private val stderrBuffer = StringBuilder()
     private val sendMutex = Mutex()
     private val parser = StreamJsonEventParser()
+
+    /** Свёртка дельт: в транскрипт уходит итог по потоку, а не строка на фрагмент. */
+    private val transcriptDigest = StreamTranscriptDigest()
 
     @Volatile
     var lastStderrSnapshot: String = ""
@@ -518,22 +522,24 @@ class ClaudeCodeProcessAdapter(
         val parsed = parser.parse(line)
 
         // Транскрипт пишется после разбора: только здесь видно, что строка —
-        // частичная дельта на несколько символов, а не полезное событие. Полный
-        // конверт вокруг каждой дельты раздувал файл до неработоспособного размера.
-        val transcript = when (parsed) {
-            is StreamJsonEventParser.Line.Delta -> {
-                val kind = if (parsed.thinking) "thinking" else "text"
-                val preview = parsed.text.take(LOG_LINE_PREVIEW_MAX).replace("\n", "\\n")
-                "STREAM_DELTA type=" + kind + " msg=" + parsed.messageId +
-                        " chars=" + parsed.text.length + " \"" + preview + "\""
+        // частичная дельта на несколько символов, а не полезное событие. Дельты
+        // копятся в счётчики и уходят одной строкой на поток перед ближайшим
+        // содержательным событием, иначе файл растёт по числу фрагментов, а не
+        // по объёму ответа.
+        when (parsed) {
+            is StreamJsonEventParser.Line.Delta -> transcriptDigest.delta(
+                kind = if (parsed.thinking) "thinking" else "text",
+                id = parsed.messageId,
+                chars = parsed.text.length
+            )
+
+            StreamJsonEventParser.Line.Ignored -> transcriptDigest.skipped(line.length)
+
+            else -> {
+                transcriptDigest.flush().forEach { sessionLog?.inbound(it) }
+                sessionLog?.inbound(line)
             }
-
-            StreamJsonEventParser.Line.Ignored ->
-                "STREAM_IGNORED chars=" + line.length
-
-            else -> line
         }
-        sessionLog?.inbound(transcript)
 
         val turn = activeTurn
         turn?.let { it.linesRead++; it.touch() }
