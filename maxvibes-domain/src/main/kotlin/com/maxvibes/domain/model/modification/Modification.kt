@@ -141,7 +141,11 @@ sealed class ModificationError(val message: String) {
     class IOError(cause: String) :
         ModificationError("IO error: $cause")
 
-    class BatchRolledBack(failedOperation: Int, reason: String) :
+    /**
+     * Поля публичны намеренно: в откаченном батче ВСЕ результаты — Failure с этой
+     * ошибкой, и без номера операции нельзя сказать, какая правка сломалась.
+     */
+    class BatchRolledBack(val failedOperation: Int, val reason: String) :
         ModificationError(
             "Modification batch was rolled back after operation ${failedOperation + 1} failed: $reason"
         )

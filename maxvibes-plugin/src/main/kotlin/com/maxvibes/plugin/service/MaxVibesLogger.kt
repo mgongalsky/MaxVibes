@@ -14,6 +14,12 @@ import com.maxvibes.application.port.output.LoggerPort
 object MaxVibesLogger : LoggerPort {
 
     val sessionId: String = "s-" + UUID.randomUUID().toString().take(8)
+
+    /**
+     * Путь к файлу текущего лога — транскрипт диалога, на который ссылаются отчёты о сбоях.
+     * Именно геттер: [configure] переключает лог в папку проекта уже после старта объекта.
+     */
+    val logFilePath: String get() = logFile.absolutePath
     private val LOG = Logger.getInstance(MaxVibesLogger::class.java)
     private val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS")
     private val queue = LinkedBlockingQueue<String>()

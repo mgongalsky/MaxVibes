@@ -16,6 +16,12 @@ import com.maxvibes.domain.model.interaction.InteractionMode
 import com.maxvibes.plugin.service.MaxVibesService
 import com.maxvibes.plugin.settings.ApprovalPolicySettings
 import com.maxvibes.domain.model.turn.AutonomyBudget
+import com.maxvibes.application.port.output.PsiFailureReportPort
+import com.maxvibes.plugin.service.PsiFailureReportWriter
+import com.maxvibes.application.port.output.PsiFailureReport
+import com.maxvibes.domain.model.modification.ModificationResult
+import com.maxvibes.domain.model.modification.ModificationError
+import java.io.File
 
 /** Composition root behind [ChatMessageController]. */
 internal class ChatMessageControllerComposition(
@@ -67,6 +73,9 @@ internal class ChatMessageControllerComposition(
     }
 
     private val documentSaver: DocumentSaver = IntellijDocumentSaver()
+    private val psiFailureReports: PsiFailureReportPort by lazy {
+        PsiFailureReportWriter(project.basePath ?: System.getProperty("user.home"))
+    }
 
     private val ideErrorsAttachmentLoader: IdeErrorsAttachmentLoader by lazy {
         IdeErrorsAttachmentLoader(
@@ -293,6 +302,11 @@ internal class ChatMessageControllerComposition(
             // и тестировать пришлось бы то, чего на диске нет.
             val brokenStep = completed?.malformedModifications?.isNotEmpty() == true ||
                     completed?.modifications?.any { !it.success } == true
+            // Отчёт пишется до handleResult: тот дёргает автопилот, а он может тут же
+            // начать следующий ход поверх состояния этого.
+            if (brokenStep) {
+                reportBrokenStep(session, completed)
+            }
             // Батч чеков должен существовать до handleResult: тот дёргает автопилот,
             // а автопилот запускает уже готовый батч без участия человека.
             if (checks.isNotEmpty() && !blockedByCommands && !brokenStep) {
@@ -310,6 +324,105 @@ internal class ChatMessageControllerComposition(
             }
         }
     )
+
+    private fun reportBrokenStep(session: ChatSession, completed: ClaudeCodeStepResult.Completed) {
+        val failures = completed.modifications.filterIsInstance<ModificationResult.Failure>()
+        val malformed = completed.malformedModifications
+        if (failures.isEmpty() && malformed.isEmpty()) return
+
+        // Файл кладётся в отчёт целиком: через неделю проект будет другим, и без
+        // снимка нельзя понять, был ли путь к элементу опечаткой или устарел.
+        fun fileSnapshot(relative: String): String {
+            val file = File(project.basePath ?: "", relative)
+            if (!file.isFile) return "файла нет на диске: ${file.absolutePath}"
+            val text = runCatching { file.readText() }
+                .getOrElse { return "файл не прочитан: ${it.javaClass.simpleName}: ${it.message}" }
+            val lines = text.lines()
+            // Обрезка по строкам, а не по символам: обрезанный посреди строки файл
+            // читается как испорченный, и читатель начинает искать не ту проблему.
+            return if (lines.size <= 1500) text
+            else lines.take(1500).joinToString("\n") + "\n… обрезано, всего строк: ${lines.size}"
+        }
+
+        val sections = mutableListOf<PsiFailureReport.Section>()
+        sections += PsiFailureReport.Section("Сообщение шага", completed.message)
+        completed.llmReasoning?.takeIf { it.isNotBlank() }?.let {
+            sections += PsiFailureReport.Section("Reasoning шага", it)
+        }
+        // На ходе применения сообщение шага — это наша же строка статуса, а намерение
+        // модели осталось ходом раньше. Историю пополняет handleResult, который ещё не
+        // отработал, поэтому последняя реплика агента — это и есть ход-предложение.
+        chatTreeService.getSessionById(session.id)?.messages
+            ?.lastOrNull { it.role == MessageRole.ASSISTANT }
+            ?.let { previous ->
+                sections += PsiFailureReport.Section("Предыдущее сообщение агента", previous.content)
+                previous.reasoning?.takeIf { it.isNotBlank() }?.let {
+                    sections += PsiFailureReport.Section("Reasoning предыдущего сообщения", it)
+                }
+            }
+        if (malformed.isNotEmpty()) {
+            sections += PsiFailureReport.Section(
+                "Неразобранные записи modifications (${malformed.size})",
+                malformed.joinToString("\n\n---\n\n")
+            )
+        }
+
+        // В откаченном батче Failure получают ВСЕ операции, поэтому без номера
+        // упавшей они неотличимы друг от друга.
+        val rollback = failures.firstNotNullOfOrNull { it.error as? ModificationError.BatchRolledBack }
+        if (rollback != null) {
+            sections += PsiFailureReport.Section(
+                "Откат батча",
+                buildString {
+                    appendLine("упала операция: ${rollback.failedOperation + 1} из ${completed.modifications.size}")
+                    appendLine("причина: ${rollback.reason}")
+                    appendLine("остальные операции откачены и на диск не легли")
+                }
+            )
+        }
+        completed.modifications.forEachIndexed { index, result ->
+            val failure = result as? ModificationResult.Failure ?: return@forEachIndexed
+            val culprit = if (rollback?.failedOperation == index) " ← сорвалась именно она" else ""
+            sections += PsiFailureReport.Section(
+                "Операция ${index + 1}: ${failure.modification::class.simpleName} " +
+                        "${failure.modification.targetPath.value}$culprit",
+                buildString {
+                    appendLine("error: ${failure.error::class.simpleName}")
+                    appendLine("message: ${failure.error.message}")
+                    appendLine()
+                    appendLine("modification: ${failure.modification}")
+                }
+            )
+        }
+        // Батч мог лечь на диск частично: без списка применённого нельзя понять,
+        // в каком состоянии остался файл, на котором операция сорвалась.
+        val applied = completed.modifications.filterIsInstance<ModificationResult.Success>()
+        sections += PsiFailureReport.Section(
+            "Применено успешно (${applied.size})",
+            if (applied.isEmpty()) "ничего"
+            else applied.joinToString("\n") { "${it.modification::class.simpleName} ${it.affectedPath.value}" }
+        )
+        failures.map { it.modification.targetPath.filePath }.distinct().forEach { relative ->
+            sections += PsiFailureReport.Section("Файл на момент сбоя: $relative", fileSnapshot(relative))
+        }
+
+        // Ни одного отказа применения при непустых malformed означает, что до PSI
+        // дело не дошло вовсе: запись отбросил разбор ответа.
+        val kind =
+            if (failures.isEmpty()) PsiFailureReport.Kind.PARSE else PsiFailureReport.Kind.APPLY
+        val path = psiFailureReports.report(
+            PsiFailureReport(
+                kind = kind,
+                sessionId = session.id.toString(),
+                provider = InteractionMode.CLAUDE_CODE.name,
+                summary = "отказов применения: ${failures.size}, неразобранных записей: ${malformed.size}",
+                sections = sections
+            )
+        )
+        if (path != null) {
+            callbacks.showPsiFailureReport(path)
+        }
+    }
 
     private fun runApiBg(
         progressTitle: String,

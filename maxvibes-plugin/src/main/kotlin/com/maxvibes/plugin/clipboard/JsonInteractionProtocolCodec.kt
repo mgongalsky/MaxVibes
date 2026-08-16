@@ -228,11 +228,26 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
         val mergedRequests: List<CodeViewRequest> = (fromViews + fromFiles)
             .distinctBy { it.filePath }
 
+        // Формат записи: первая строка — описание для человека и для агента,
+        // дальше сама отвергнутая запись. Потребители берут только первую строку,
+        // поэтому запись с целым файлом в content не раздувает ни чат, ни промпт
+        // на переделку хода, но целиком доезжает до отчёта о сбое.
+        //
+        // Отсутствующее и пустое поле разделены намеренно: в первом случае модель
+        // забыла ключ, во втором — знала о нём, но не смогла построить значение.
+        // По отчётам это два разных дефекта, и сливать их в «нет поля» нельзя.
         fun describeMalformed(index: Int, entry: JsonObject): String {
-            val missing = listOf(InteractionRequestSchema.MOD_TYPE, InteractionRequestSchema.MOD_PATH)
-                .filter { key -> (entry[key] as? JsonPrimitive)?.contentOrNull.isNullOrBlank() }
-                .joinToString(", ")
-            return "#${index + 1}: нет обязательных полей: $missing (есть: ${entry.keys.joinToString(", ")})"
+            val problems = listOf(InteractionRequestSchema.MOD_TYPE, InteractionRequestSchema.MOD_PATH)
+                .mapNotNull { key ->
+                    when {
+                        !entry.containsKey(key) -> "$key отсутствует"
+                        (entry[key] as? JsonPrimitive)?.contentOrNull.isNullOrBlank() -> "$key пустой"
+                        else -> null
+                    }
+                }
+                .ifEmpty { listOf("обязательные поля на месте, запись отвергнута разбором значений") }
+            return "#${index + 1}: ${problems.joinToString(", ")} " +
+                    "(поля записи: ${entry.keys.joinToString(", ")})\n$entry"
         }
 
         val modifications = mutableListOf<InteractionModification>()
@@ -240,7 +255,7 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
         obj[InteractionRequestSchema.RESP_MODIFICATIONS]?.jsonArray?.forEachIndexed { index, element ->
             val entry = element as? JsonObject
             if (entry == null) {
-                malformedModifications += "#${index + 1}: запись не является JSON-объектом"
+                malformedModifications += "#${index + 1}: запись не является JSON-объектом\n$element"
                 return@forEachIndexed
             }
             val parsed = parseModification(entry)

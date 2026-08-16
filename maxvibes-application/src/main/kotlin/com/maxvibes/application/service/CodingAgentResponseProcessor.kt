@@ -64,12 +64,14 @@ object CodingAgentResponseProcessor {
         // Непонятые записи modifications нельзя терять молча: предупреждение вклеивается
         // в сообщение, поэтому доходит и до чата, и до истории — то есть до агента
         // следующим ходом, без отдельного поля в каждом из пяти результатов шага.
+        // Из записи берётся только первая строка: дальше в ней лежит сырой JSON записи,
+        // он нужен отчёту о сбое, но в чате и в промпте раздул бы всё целым файлом.
         val malformedNotice = response.malformedModifications.takeIf { it.isNotEmpty() }?.let { entries ->
             buildString {
                 append("⚠️ Не разобрано и НЕ применено записей в modifications: ")
                 append(entries.size)
                 append(". Обязательные поля каждой записи — type и path.")
-                entries.forEach { append("\n• ").append(it) }
+                entries.forEach { append("\n• ").append(it.lineSequence().first()) }
             }
         }
         val message = listOfNotNull(

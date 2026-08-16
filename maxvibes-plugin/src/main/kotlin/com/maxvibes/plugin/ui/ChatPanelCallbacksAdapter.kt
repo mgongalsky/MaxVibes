@@ -158,6 +158,12 @@ class ChatPanelCallbacksAdapter(
         conversationPanel.addDiagramButton { onOpenDiagram(diagram) }
     }
 
+    override fun showPsiFailureReport(path: String) {
+        // Отложенно намеренно: отчёт пишется раньше, чем в чат ляжет пузырь ответа,
+        // и без этого блок с кнопками встал бы над сообщением, к которому относится.
+        SwingUtilities.invokeLater { conversationPanel.addPsiFailureReportBubble(path) }
+    }
+
     override fun addModificationProposalBubble(
         modifications: List<InteractionModification>,
         heldCommands: Int,

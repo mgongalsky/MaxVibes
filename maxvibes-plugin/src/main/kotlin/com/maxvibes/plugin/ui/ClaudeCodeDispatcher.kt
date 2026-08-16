@@ -478,6 +478,9 @@ class ClaudeCodeDispatcher(
      * Сообщение агенту о сорвавшемся шаге. Уходит как реплика пользователя, а не
      * как запись в его собственной истории: только так это читается моделью как
      * требование исправиться, а не как её же старый текст.
+     *
+     * Из непонятой записи берётся только первая строка: дальше в ней лежит сырой
+     * JSON записи для отчёта о сбое, и при отвергнутом CREATE_FILE это целый файл.
      */
     private fun fixPrompt(malformed: List<String>, failed: List<String>): String = buildString {
         append("[STEP FAILED] Your last modifications did not reach the code.")
@@ -486,7 +489,7 @@ class ClaudeCodeDispatcher(
             append(" entry(ies), so they were NOT applied. Every entry needs a \"type\" ")
             append("(REPLACE_ELEMENT, CREATE_FILE, ...) and one combined \"path\" like ")
             append("\"file:src/Main.kt/class[Foo]/function[bar]\".")
-            malformed.forEach { append("\n").append(it) }
+            malformed.forEach { append("\n").append(it.lineSequence().first()) }
         }
         if (failed.isNotEmpty()) {
             append("\n\n").append(failed.size).append(" entry(ies) parsed but failed to apply:")

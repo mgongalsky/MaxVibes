@@ -515,11 +515,30 @@ class ClaudeCodeProcessAdapter(
     }
 
     private fun handleStdoutLine(line: String) {
-        sessionLog?.inbound(line)
+        val parsed = parser.parse(line)
+
+        // Транскрипт пишется после разбора: только здесь видно, что строка —
+        // частичная дельта на несколько символов, а не полезное событие. Полный
+        // конверт вокруг каждой дельты раздувал файл до неработоспособного размера.
+        val transcript = when (parsed) {
+            is StreamJsonEventParser.Line.Delta -> {
+                val kind = if (parsed.thinking) "thinking" else "text"
+                val preview = parsed.text.take(LOG_LINE_PREVIEW_MAX).replace("\n", "\\n")
+                "STREAM_DELTA type=" + kind + " msg=" + parsed.messageId +
+                        " chars=" + parsed.text.length + " \"" + preview + "\""
+            }
+
+            StreamJsonEventParser.Line.Ignored ->
+                "STREAM_IGNORED chars=" + line.length
+
+            else -> line
+        }
+        sessionLog?.inbound(transcript)
+
         val turn = activeTurn
         turn?.let { it.linesRead++; it.touch() }
 
-        when (val parsed = parser.parse(line)) {
+        when (parsed) {
             is StreamJsonEventParser.Line.RateLimit ->
                 emitEvent(
                     AgentStreamEvent.RateLimitUpdate(
@@ -620,7 +639,7 @@ class ClaudeCodeProcessAdapter(
                     )
                 )
 
-            StreamJsonEventParser.Line.Ignored -> { /* service envelope - raw already in CC log */
+            StreamJsonEventParser.Line.Ignored -> { /* service envelope - transcript keeps a one-line stub */
             }
         }
     }

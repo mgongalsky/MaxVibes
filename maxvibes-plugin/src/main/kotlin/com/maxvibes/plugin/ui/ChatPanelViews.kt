@@ -43,6 +43,13 @@ interface ConversationView {
 
     /** Adds a "Схема" button under the last assistant bubble; opens the plan diagram viewer. */
     fun showDiagramButton(diagram: PlanDiagram)
+
+    /**
+     * Adds an "Открыть / Скопировать" block for a written PSI failure report.
+     * Default is a no-op: the report is already on disk, and test fakes of this
+     * contract have no use for the buttons.
+     */
+    fun showPsiFailureReport(path: String) {}
     fun addModificationProposalBubble(
         modifications: List<InteractionModification>,
         heldCommands: Int,

@@ -486,10 +486,9 @@ class CodexAppServerAdapter(
         readerJob = scope.launch(Dispatchers.IO) {
             try {
                 proc.inputStream.bufferedReader(StandardCharsets.UTF_8).useLines { lines ->
-                    lines.forEach { line ->
-                        sessionLog?.inbound(line)
-                        handleLine(line)
-                    }
+                    // Запись в транскрипт живёт в handleLine: там уже известен тип
+                    // строки, и дельты не уезжают в файл вместе с JSON-RPC конвертом.
+                    lines.forEach { line -> handleLine(line) }
                 }
             } catch (exception: Exception) {
                 MaxVibesLogger.warn(TAG, "reader loop terminated", ex = exception)
@@ -533,7 +532,33 @@ class CodexAppServerAdapter(
     }
 
     private fun handleLine(rawLine: String) {
-        when (val line = parser.parse(rawLine)) {
+        val line = parser.parse(rawLine)
+
+        // Дельта приходит на каждые несколько символов, и вокруг неё едет полный
+        // JSON-RPC конверт — в транскрипте это давало мегабайты шума на короткий
+        // ответ. Тип строки известен только после разбора, поэтому запись идёт
+        // отсюда, а не из цикла чтения: всё, кроме дельт, сохраняется целиком.
+        val transcript = when (line) {
+            is CodexAppServerLineParser.Line.NarrationDelta -> {
+                val preview = line.text.take(PREVIEW_MAX).replace("\n", "\\n")
+                "STREAM_DELTA type=text item=" + line.itemId +
+                        " chars=" + line.text.length + " \"" + preview + "\""
+            }
+
+            is CodexAppServerLineParser.Line.ReasoningDelta -> {
+                val preview = line.text.take(PREVIEW_MAX).replace("\n", "\\n")
+                "STREAM_DELTA type=reasoning item=" + line.itemId +
+                        " chars=" + line.text.length + " \"" + preview + "\""
+            }
+
+            CodexAppServerLineParser.Line.Ignored ->
+                "STREAM_IGNORED chars=" + rawLine.length
+
+            else -> rawLine
+        }
+        sessionLog?.inbound(transcript)
+
+        when (line) {
             is CodexAppServerLineParser.Line.Response ->
                 pending.remove(line.id)?.complete(line)
 

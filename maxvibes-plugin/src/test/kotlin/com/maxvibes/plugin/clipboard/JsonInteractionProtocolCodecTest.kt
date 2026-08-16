@@ -311,6 +311,25 @@ class JsonInteractionProtocolCodecTest {
         assertTrue(response.malformedModifications[0].contains(InteractionRequestSchema.MOD_TYPE))
         assertTrue(response.malformedModifications[1].contains(InteractionRequestSchema.MOD_PATH))
     }
+
+    @Test
+    fun `malformed entry keeps a self-contained first line and the raw record after it`() {
+        val raw = """
+            {
+              "message": "ok",
+              "modifications": [
+                { "kind": "REPLACE_ELEMENT", "path": "src/Main.kt", "content": "здоровенное тело" }
+              ]
+            }
+        """.trimIndent()
+
+        val entry = codec.decode(raw)!!.malformedModifications.single()
+        val firstLine = entry.lineSequence().first()
+
+        assertTrue(firstLine.contains(InteractionRequestSchema.MOD_TYPE), firstLine)
+        assertFalse(firstLine.contains("здоровенное тело"), "чат и промпт берут только первую строку")
+        assertTrue(entry.contains("здоровенное тело"), "отчёт о сбое должен получить запись целиком")
+    }
 }
 
 @Test

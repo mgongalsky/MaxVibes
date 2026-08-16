@@ -55,4 +55,5 @@ bin/
 
 ### MaxVibes runtime artifacts ###
 .maxvibes/logs/
+.maxvibes/reports/
 .maxvibes/plugin.log

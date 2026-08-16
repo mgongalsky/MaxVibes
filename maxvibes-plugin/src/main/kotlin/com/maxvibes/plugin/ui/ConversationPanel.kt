@@ -24,6 +24,11 @@ import java.awt.event.MouseEvent
 import javax.swing.*
 import com.maxvibes.domain.model.interaction.AttachedImage
 import com.maxvibes.domain.model.interaction.InteractionModification
+import com.intellij.openapi.fileEditor.FileEditorManager
+import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.ide.CopyPasteManager
+import java.awt.datatransfer.StringSelection
+import java.io.File
 
 interface ModificationProposalView {
     fun setApplying()
@@ -1057,6 +1062,48 @@ class ConversationPanel(
             isFocusPainted = false
             toolTipText = "Открыть схему плана в отдельном окне"
             addActionListener { onOpen() }
+        })
+        addComp(panel)
+    }
+
+    /**
+     * Adds an "Открыть / Скопировать" block for a PSI failure report written to disk.
+     * Copy puts the whole report text in the clipboard, not the path: the report exists
+     * to be handed to a model, and a path is useless there.
+     */
+    fun addPsiFailureReportBubble(path: String) {
+        val panel = JPanel(FlowLayout(FlowLayout.LEFT, 6, 0)).apply {
+            background = JBColor.background()
+            border = JBUI.Borders.empty(0, 14, 6, 0)
+        }
+        panel.add(JBLabel("\uD83D\uDCC4 Отчёт о сбое").apply {
+            font = font.deriveFont(11f)
+        })
+        panel.add(JButton("Открыть").apply {
+            font = font.deriveFont(11f)
+            isFocusPainted = false
+            toolTipText = path
+            addActionListener {
+                val file = LocalFileSystem.getInstance().refreshAndFindFileByPath(path.replace('\\', '/'))
+                if (file == null) {
+                    Messages.showErrorDialog(project, path, "Отчёт не найден")
+                } else {
+                    FileEditorManager.getInstance(project).openFile(file, true)
+                }
+            }
+        })
+        panel.add(JButton("Скопировать").apply {
+            font = font.deriveFont(11f)
+            isFocusPainted = false
+            toolTipText = "Скопировать текст отчёта целиком"
+            addActionListener {
+                val text = runCatching { File(path).readText() }.getOrNull()
+                if (text == null) {
+                    Messages.showErrorDialog(project, path, "Отчёт не прочитан")
+                } else {
+                    CopyPasteManager.getInstance().setContents(StringSelection(text))
+                }
+            }
         })
         addComp(panel)
     }
