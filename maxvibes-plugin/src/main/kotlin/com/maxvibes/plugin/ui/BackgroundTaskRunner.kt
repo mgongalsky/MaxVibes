@@ -18,7 +18,8 @@ internal interface BackgroundTaskRunner {
         publishIndicator: Boolean = true,
         action: suspend () -> T,
         onSuccess: (T) -> Unit,
-        onCancel: () -> Unit = {}
+        onCancel: () -> Unit = {},
+        onError: (Throwable) -> Unit = { onCancel() }
     )
 }
 
@@ -34,7 +35,8 @@ internal class IntellijBackgroundTaskRunner(
         publishIndicator: Boolean,
         action: suspend () -> T,
         onSuccess: (T) -> Unit,
-        onCancel: () -> Unit
+        onCancel: () -> Unit,
+        onError: (Throwable) -> Unit
     ) {
         ProgressManager.getInstance().run(
             object : Task.Backgroundable(project, title, cancellable) {
@@ -48,6 +50,12 @@ internal class IntellijBackgroundTaskRunner(
 
                 override fun onCancel() {
                     ApplicationManager.getApplication().invokeLater(onCancel)
+                }
+
+                // Без этой ветки исключение из action() гасит задачу молча: onSuccess
+                // не вызывается, и ввод остаётся заблокированным до перезапуска IDE.
+                override fun onThrowable(error: Throwable) {
+                    ApplicationManager.getApplication().invokeLater { onError(error) }
                 }
             }
         )

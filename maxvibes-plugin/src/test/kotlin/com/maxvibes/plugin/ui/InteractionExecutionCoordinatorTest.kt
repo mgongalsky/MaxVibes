@@ -440,7 +440,8 @@ class InteractionExecutionCoordinatorTest {
             publishIndicator: Boolean,
             action: suspend () -> T,
             onSuccess: (T) -> Unit,
-            onCancel: () -> Unit
+            onCancel: () -> Unit,
+            onError: (Throwable) -> Unit
         ) {
             this.title = title
             this.cancellable = cancellable

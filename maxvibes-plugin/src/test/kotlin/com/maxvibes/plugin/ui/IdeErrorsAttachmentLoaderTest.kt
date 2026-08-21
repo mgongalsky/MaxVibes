@@ -111,7 +111,8 @@ class IdeErrorsAttachmentLoaderTest {
                 publishIndicator: Boolean,
                 action: suspend () -> T,
                 onSuccess: (T) -> Unit,
-                onCancel: () -> Unit
+                onCancel: () -> Unit,
+                onError: (Throwable) -> Unit
             ) {
                 invocations.add(
                     title + "|" + cancellable + "|" + publishIndicator +
@@ -142,7 +143,8 @@ class IdeErrorsAttachmentLoaderTest {
             publishIndicator: Boolean,
             action: suspend () -> T,
             onSuccess: (T) -> Unit,
-            onCancel: () -> Unit
+            onCancel: () -> Unit,
+            onError: (Throwable) -> Unit
         ) {
             onSuccess(runBlocking { action() })
         }

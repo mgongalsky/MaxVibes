@@ -778,6 +778,7 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
                 )
             }
     }
+
     private fun restoreSnapshots(snapshots: List<FileSnapshot>): String? {
         var rollbackError: String? = null
         val app = ApplicationManager.getApplication()
@@ -791,7 +792,9 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
                         } else {
                             val originalContent = requireNotNull(snapshot.content)
                             if (current != null) {
-                                modifier.replaceFileContent(current, originalContent)
+                                // Откат обязан вернуть текст дословно: форматирование здесь
+                                // молча изменило бы файл, который обещано восстановить.
+                                modifier.replaceFileContent(current, originalContent, reformat = false)
                             } else {
                                 val directory = findOrCreateDirectory(snapshot.path.filePath)
                                     ?: error("Cannot recreate directory for ${snapshot.path.filePath}")

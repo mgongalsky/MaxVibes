@@ -56,24 +56,19 @@ class PsiModifier(
         return addedFile
     }
 
-    fun replaceFileContent(file: PsiFile, newContent: String): PsiFile? {
+    fun replaceFileContent(file: PsiFile, newContent: String, reformat: Boolean = true): PsiFile? {
         println("[PsiModifier] Replacing content of ${file.name}")
 
-        val newFile = PsiFileFactory.getInstance(project)
-            .createFileFromText(file.name, file.fileType, newContent)
+        val documentManager = com.intellij.psi.PsiDocumentManager.getInstance(project)
+        val document = documentManager.getDocument(file) ?: return null
 
-        val firstChild = file.firstChild
-        val lastChild = file.lastChild
+        // Правим документ, а не дерево: замена детей PSI оставляет документ со
+        // старым текстом, и следующая же операция платформы падает на сверке длин.
+        documentManager.doPostponedOperationsAndUnblockDocument(document)
+        document.setText(com.intellij.openapi.util.text.StringUtil.convertLineSeparators(newContent))
+        documentManager.commitDocument(document)
 
-        if (firstChild != null && lastChild != null) {
-            file.deleteChildRange(firstChild, lastChild)
-        }
-
-        newFile.children.forEach { child ->
-            file.add(child.copy())
-        }
-
-        CodeStyleManager.getInstance(project).reformat(file)
+        if (reformat) CodeStyleManager.getInstance(project).reformat(file)
         return file
     }
 
