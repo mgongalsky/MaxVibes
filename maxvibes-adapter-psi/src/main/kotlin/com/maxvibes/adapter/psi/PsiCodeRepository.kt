@@ -434,97 +434,100 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
     // ═══════════════════════════════════════════════════════════════
 
     private fun createElement(mod: Modification.CreateElement): ModificationResult {
-        if (mod.elementKind == ElementKind.CONSTRUCTOR || mod.elementKind == ElementKind.INIT) {
+        if (mod.elementKind == ElementKind.FILE || mod.elementKind == ElementKind.CONSTRUCTOR) {
             return ModificationResult.Failure(
                 modification = mod,
                 error = ModificationError.InvalidOperation(
-                    "CREATE_ELEMENT does not support constructors or init blocks; use REPLACE_FILE for class-structure changes"
+                    "CREATE_ELEMENT requires a concrete declaration kind and does not support FILE or constructors"
                 )
             )
         }
 
-        val parent = runReadAction { navigator.findElement(mod.targetPath) }
-            ?: return ModificationResult.Failure(
-                modification = mod,
-                error = ModificationError.ElementNotFound(mod.targetPath)
-            )
+        var resultText: String? = null
+        var parentMissing = false
+        var platformError: String? = null
         return try {
-            var resultText: String? = null
             val app = ApplicationManager.getApplication()
             val action = {
                 WriteCommandAction.runWriteCommandAction(project) {
-                    val added = modifier.addElement(parent, mod.content, mod.elementKind, mod.position)
-                    resultText = added?.text
+                    try {
+                        val parent = navigator.findElement(mod.targetPath)
+                        if (parent == null || !parent.isValid) {
+                            parentMissing = true
+                            return@runWriteCommandAction
+                        }
+                        resultText = modifier.addElement(parent, mod.content, mod.elementKind, mod.position)?.text
+                    } catch (e: Exception) {
+                        platformError = "${e.javaClass.simpleName}: ${e.message ?: "element insertion failed"}"
+                    }
                 }
             }
             if (app.isDispatchThread) action() else app.invokeAndWait(action)
-            if (resultText != null) {
-                ModificationResult.Success(
-                    modification = mod,
-                    affectedPath = mod.targetPath,
-                    resultContent = resultText
+
+            when {
+                parentMissing -> ModificationResult.Failure(mod, ModificationError.ElementNotFound(mod.targetPath))
+                platformError != null -> ModificationResult.Failure(mod, ModificationError.IOError(platformError!!))
+                resultText == null -> ModificationResult.Failure(
+                    mod,
+                    ModificationError.ParseError("CREATE_ELEMENT content is not one valid ${mod.elementKind} declaration")
                 )
-            } else {
-                ModificationResult.Failure(
-                    modification = mod,
-                    error = ModificationError.ParseError("Failed to parse: ${mod.content.take(50)}")
-                )
+
+                else -> ModificationResult.Success(mod, mod.targetPath, resultText)
             }
         } catch (e: Exception) {
-            ModificationResult.Failure(
-                modification = mod,
-                error = ModificationError.IOError(e.message ?: "Failed to create element")
-            )
+            ModificationResult.Failure(mod, ModificationError.IOError(e.message ?: "Failed to create element"))
         }
     }
 
     private fun replaceElement(mod: Modification.ReplaceElement): ModificationResult {
         val targetKind = mod.targetPath.segments.lastOrNull()?.kind?.lowercase()
-        if (targetKind == "constructor" || targetKind == "init") {
+        if (targetKind == "constructor") {
             return ModificationResult.Failure(
                 modification = mod,
                 error = ModificationError.InvalidOperation(
-                    "REPLACE_ELEMENT does not support constructors or init blocks; use REPLACE_FILE for class-structure changes"
+                    "REPLACE_ELEMENT does not support constructors; use REPLACE_FILE for constructor changes"
                 )
             )
         }
 
-        val elementAndKind = runReadAction {
-            val element = navigator.findElement(mod.targetPath) ?: return@runReadAction null
-            val kind = mapper.inferKind(element) ?: return@runReadAction null
-            element to kind
-        } ?: return ModificationResult.Failure(
-            modification = mod,
-            error = ModificationError.ElementNotFound(mod.targetPath)
-        )
-        val (element, kind) = elementAndKind
+        var resultText: String? = null
+        var targetMissing = false
+        var platformError: String? = null
         return try {
-            var resultText: String? = null
             val app = ApplicationManager.getApplication()
             val action = {
                 WriteCommandAction.runWriteCommandAction(project) {
-                    val replaced = modifier.replaceElement(element, mod.newContent, kind)
-                    resultText = replaced?.text
+                    try {
+                        val element = navigator.findElement(mod.targetPath)
+                        if (element == null || !element.isValid) {
+                            targetMissing = true
+                            return@runWriteCommandAction
+                        }
+                        val kind = mapper.inferKind(element)
+                        if (kind == null) {
+                            platformError = "Unsupported PSI element type: ${element.javaClass.name}"
+                            return@runWriteCommandAction
+                        }
+                        resultText = modifier.replaceElement(element, mod.newContent, kind)?.text
+                    } catch (e: Exception) {
+                        platformError = "${e.javaClass.simpleName}: ${e.message ?: "element replacement failed"}"
+                    }
                 }
             }
             if (app.isDispatchThread) action() else app.invokeAndWait(action)
-            if (resultText != null) {
-                ModificationResult.Success(
-                    modification = mod,
-                    affectedPath = mod.targetPath,
-                    resultContent = resultText
+
+            when {
+                targetMissing -> ModificationResult.Failure(mod, ModificationError.ElementNotFound(mod.targetPath))
+                platformError != null -> ModificationResult.Failure(mod, ModificationError.IOError(platformError!!))
+                resultText == null -> ModificationResult.Failure(
+                    mod,
+                    ModificationError.ParseError("REPLACE_ELEMENT requires one valid declaration matching the target kind")
                 )
-            } else {
-                ModificationResult.Failure(
-                    modification = mod,
-                    error = ModificationError.ParseError("REPLACE_ELEMENT requires exactly one valid declaration")
-                )
+
+                else -> ModificationResult.Success(mod, mod.targetPath, resultText)
             }
         } catch (e: Exception) {
-            ModificationResult.Failure(
-                modification = mod,
-                error = ModificationError.IOError(e.message ?: "Failed to replace element")
-            )
+            ModificationResult.Failure(mod, ModificationError.IOError(e.message ?: "Failed to replace element"))
         }
     }
 

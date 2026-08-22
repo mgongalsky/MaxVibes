@@ -54,6 +54,14 @@ object InteractionRequestSchema {
     const val MOD_NEW_NAME = "newName"
     const val MOD_DESTINATION = "destination"
 
+    /**
+     * Имена, под которыми модель может прислать содержимое правки; каноническое — первое.
+     *
+     * Codex-семейство регулярно шлёт `replacement`, и без этого списка тело функции
+     * терялось молча: PSI получал замену на пустую строку и падал невнятной ошибкой.
+     */
+    val MOD_CONTENT_KEYS = listOf(MOD_CONTENT, "replacement", "newContent", "newText", "code")
+
     const val DEFAULT_ELEMENT_KIND = "FILE"
     const val DEFAULT_POSITION = "LAST_CHILD"
 

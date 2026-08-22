@@ -38,7 +38,7 @@ class PromptService(private val project: Project) : PromptPort {
 
     override fun getPrompts(): PromptTemplates {
         return PromptTemplates(
-            chatSystem = loadPrompt(CHAT_SYSTEM_FILE, DEFAULT_CHAT_SYSTEM),
+            chatSystem = loadPrompt(CHAT_SYSTEM_FILE, DEFAULT_CHAT_SYSTEM) + INIT_BLOCK_CAPABILITY,
             planningSystem = loadPrompt(PLANNING_SYSTEM_FILE, DEFAULT_PLANNING_SYSTEM)
         )
     }
@@ -82,8 +82,15 @@ class PromptService(private val project: Project) : PromptPort {
             loadResource(CLAUDE_CODE_SYSTEM_RESOURCE)
                 ?: error("Missing classpath resource: $CLAUDE_CODE_SYSTEM_RESOURCE")
         }
-        val catalog = skillCatalogProvider?.invoke()
-        return if (catalog.isNullOrBlank()) base else base + "\n\n" + catalog
+        return buildString {
+            append(base)
+            append(INIT_BLOCK_CAPABILITY)
+            skillCatalogProvider?.invoke()?.takeIf { it.isNotBlank() }?.let {
+                appendLine()
+                appendLine()
+                append(it)
+            }
+        }
     }
 
     override fun codexSystem(): String {
@@ -91,7 +98,7 @@ class PromptService(private val project: Project) : PromptPort {
         val base = if (customFile.exists() && customFile.canRead()) {
             try {
                 customFile.readText()
-            } catch (ignored: Exception) {
+            } catch (_: Exception) {
                 loadResource(CODEX_SYSTEM_RESOURCE)
                     ?: error("Missing classpath resource: $CODEX_SYSTEM_RESOURCE")
             }
@@ -99,12 +106,14 @@ class PromptService(private val project: Project) : PromptPort {
             loadResource(CODEX_SYSTEM_RESOURCE)
                 ?: error("Missing classpath resource: $CODEX_SYSTEM_RESOURCE")
         }
-        val catalog = skillCatalogProvider?.invoke()
-        return if (catalog.isNullOrBlank()) base else buildString {
+        return buildString {
             append(base)
-            appendLine()
-            appendLine()
-            append(catalog)
+            append(INIT_BLOCK_CAPABILITY)
+            skillCatalogProvider?.invoke()?.takeIf { it.isNotBlank() }?.let {
+                appendLine()
+                appendLine()
+                append(it)
+            }
         }
     }
 
@@ -252,4 +261,15 @@ Rules:
 - "message" is REQUIRED
 - "requestedFiles" — list files to read. Empty [] if you just want to discuss.
 - DO NOT wrap JSON in markdown. Raw JSON only.
+""".trimIndent()
+private val INIT_BLOCK_CAPABILITY = """
+
+## Kotlin init blocks — current capability (overrides older limitations above)
+
+- `REPLACE_ELEMENT` supports replacing a complete Kotlin `init { ... }` block.
+- Read it with `ELEMENT` and `elementPath: "class[Name]/init"`; for additional blocks use `init[1]`, `init[2]`, etc.
+- Replace it with path `file:.../File.kt/class[Name]/init` (or `init[index]`) and content containing exactly one complete `init { ... }` block.
+- `CREATE_ELEMENT` supports adding a complete init block to a class with `elementKind: "INIT"` and a normal position.
+- There is no `REPLACE_TEXT`, `call[...]`, `initializer[...]`, or `whenEntry[...]` selector. To change an expression inside init, replace the containing init block as a whole.
+- Constructors remain unsupported by element replacement; use `REPLACE_FILE` for constructor structure changes.
 """.trimIndent()

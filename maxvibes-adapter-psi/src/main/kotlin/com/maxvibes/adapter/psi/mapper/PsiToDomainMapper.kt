@@ -42,13 +42,16 @@ class PsiToDomainMapper {
             is KtNamedFunction -> mapFunction(element, parentPath)
             is KtProperty -> mapProperty(element, parentPath)
             is KtObjectDeclaration -> mapObject(element, parentPath)
-            is KtClassInitializer -> mapInitBlock(element, parentPath)
+            is KtAnonymousInitializer -> mapInitBlock(element, parentPath)
             else -> null
         }
     }
 
-    private fun mapInitBlock(ktInit: KtClassInitializer, parentPath: ElementPath): CodeFunction {
-        val path = parentPath.child("init", "")
+    private fun mapInitBlock(ktInit: KtAnonymousInitializer, parentPath: ElementPath): CodeFunction {
+        val owner = (ktInit.parent as? KtClassBody)?.parent as? KtClassOrObject
+        val initializers = owner?.body?.anonymousInitializers.orEmpty()
+        val index = initializers.indexOf(ktInit).takeIf { it >= 0 } ?: 0
+        val path = if (index == 0) parentPath.childBare("init") else parentPath.child("init", index.toString())
         return CodeFunction(
             path = path,
             name = "init",
@@ -168,11 +171,8 @@ class PsiToDomainMapper {
             is KtNamedFunction -> ElementKind.FUNCTION
             is KtProperty -> ElementKind.PROPERTY
             is KtPrimaryConstructor, is KtSecondaryConstructor -> ElementKind.CONSTRUCTOR
-            is KtClassInitializer -> ElementKind.INIT
-            else -> {
-                println("[PsiToDomainMapper] WARNING: Unknown PSI element type: ${element.javaClass.name} — skipping")
-                null
-            }
+            is KtAnonymousInitializer -> ElementKind.INIT
+            else -> null
         }
     }
 }

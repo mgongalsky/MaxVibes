@@ -11,9 +11,7 @@ dependencies {
     implementation(project(":maxvibes-shared"))
 
     implementation("org.commonmark:commonmark:0.29.0")
-    implementation("org.commonmark:commonmark-ext-gfm-tables:0.29.0") // LLM любят таблицы
-
-    // Use shadow JAR from adapter-llm
+    implementation("org.commonmark:commonmark-ext-gfm-tables:0.29.0")
     implementation(project(path = ":maxvibes-adapter-llm"))
 
     testImplementation(kotlin("test"))
@@ -31,12 +29,6 @@ intellij {
 tasks {
     test {
         useJUnitPlatform()
-
-        // The IDE-bundled coroutines-javaagent is built against kotlinx-coroutines 1.6.4
-        // (platform 2023.1), while the test classpath carries 1.7+ (mockk, app modules).
-        // The agent crashes with NoSuchMethodError in AgentPremain before any test runs.
-        // Tests don't need the coroutine debug agent, so strip it from jvmArgs and from
-        // argument providers while keeping all other provider-supplied args intact.
         doFirst {
             jvmArgs = jvmArgs.orEmpty().filterNot { it.contains("coroutines-javaagent") }
             val keptProviderArgs = jvmArgumentProviders
@@ -54,17 +46,12 @@ tasks {
     }
 
     patchPluginXml {
-        version.set("1.2.12")
+        version.set("1.2.15")
         sinceBuild.set("231")
         untilBuild.set("262.*")
     }
 
     register<org.jetbrains.intellij.tasks.RunIdeTask>("runIdePyCharm") {
-        // gradle-intellij-plugin 1.x cannot boot IDEs with the 2024.2+ distribution layout —
-        // it fails with a bare "Index: 1, Size: 1". Until the migration to IntelliJ Platform
-        // Gradle Plugin 2.x, this task only actually launches a 2023.x–2024.1 PyCharm;
-        // point PYCHARM_PATH at such an install to use it. To test the plugin in a modern
-        // PyCharm, install the buildPlugin zip via "Install Plugin from Disk" instead.
         val pyCharmPath: String =
             System.getenv("PYCHARM_PATH")
                 ?: when {

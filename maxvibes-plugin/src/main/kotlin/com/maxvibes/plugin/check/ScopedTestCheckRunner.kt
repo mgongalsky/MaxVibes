@@ -39,6 +39,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
 import com.maxvibes.domain.model.check.TestFailureText
+import com.intellij.execution.process.ProcessAdapter
+import com.intellij.execution.process.ProcessEvent
+import com.intellij.openapi.util.Key
 
 /**
  * Прогон тестов по кругу, который назвал агент.
@@ -91,12 +94,21 @@ class ScopedTestCheckRunner(private val project: Project) : CheckRunnerPort {
 
         val state = RunState()
         val activeHandler = AtomicReference<ProcessHandler?>()
-        val completed = withTimeoutOrNull(request.timeoutSec * 1000L) {
-            for (target in targets) {
-                if (cancellation.isCancelled || state.cancelled) break
-                runOne(target, progress, cancellation, state, activeHandler)
+        // Делегированная в Gradle тестовая задача умирает на компиляции ещё до
+        // старта процесса: текста ловить неоткуда, и единственным источником
+        // ошибки остаётся поток событий вкладки Build.
+        val buildOutput = BuildOutputCollector(project)
+        buildOutput.start()
+        val completed = try {
+            withTimeoutOrNull(request.timeoutSec * 1000L) {
+                for (target in targets) {
+                    if (cancellation.isCancelled || state.cancelled) break
+                    runOne(target, progress, cancellation, state, activeHandler)
+                }
+                true
             }
-            true
+        } finally {
+            buildOutput.stop()
         }
         if (completed == null) {
             // Оставить процесс жить после таймаута значит отдать пользователю IDE,
@@ -104,23 +116,33 @@ class ScopedTestCheckRunner(private val project: Project) : CheckRunnerPort {
             activeHandler.get()?.destroyProcess()
         }
 
+        val total = maxOf(state.total, state.completed)
+        // Сессия открылась и закрылась, не выполнив ни одного теста. Успехом это
+        // называть нельзя: агент, получив зелёное, сочтёт код проверенным и
+        // пойдёт дальше по сломанному месту. Одного sawTests тут мало — его
+        // поднимает уже старт сессии, а не первый тест.
+        val nothingRan = completed != null && !state.cancelled && total == 0
+
         val status = when {
             state.cancelled -> CheckStatus.CANCELLED
             completed == null -> CheckStatus.TIMEOUT
             state.failures.isNotEmpty() -> CheckStatus.FAILED
             !state.sawTests -> CheckStatus.ERROR
+            nothingRan -> CheckStatus.ERROR
             state.errors.isNotEmpty() -> CheckStatus.ERROR
             else -> CheckStatus.PASSED
         }
-        val total = maxOf(state.total, state.completed)
+        // Ошибка компиляции тестового модуля — это и есть причина пустого
+        // прогона, поэтому она идёт в issues наравне с падениями тестов.
+        val buildIssues = if (nothingRan || state.errors.isNotEmpty()) buildOutput.issues() else emptyList()
         return CheckExecution(
             request = request,
             status = status,
-            issues = state.failures.toList(),
+            issues = state.failures + buildIssues,
             testsTotal = total.takeIf { state.sawTests },
             testsFailed = state.failed.takeIf { state.sawTests },
             durationMs = System.currentTimeMillis() - startedAt,
-            rawOutput = buildReport(scope, targets, problems, state)
+            rawOutput = buildReport(scope, targets, problems, state, nothingRan, buildOutput)
         )
     }
 
@@ -160,6 +182,13 @@ class ScopedTestCheckRunner(private val project: Project) : CheckRunnerPort {
                 if (env.executionId != executionId) return
                 activeHandler.set(handler)
                 state.ownHandler = handler
+                // Без этого весь текст процесса пропадает, и упавшая компиляция
+                // выглядит для агента как «тест не найден».
+                handler.addProcessListener(object : ProcessAdapter() {
+                    override fun onTextAvailable(event: ProcessEvent, outputType: Key<*>) {
+                        state.appendOutput(event.text)
+                    }
+                })
                 if (cancellation.isCancelled) handler.destroyProcess()
                 progress.publish(CheckProgress("Running ${target.label}", state.completed, null, state.failed))
             }
@@ -180,7 +209,9 @@ class ScopedTestCheckRunner(private val project: Project) : CheckRunnerPort {
                 // молчащий фреймворк вешал проверку до самого таймаута.
                 finish(
                     if (state.sawTests) null
-                    else "${target.label} finished without reporting any tests (exit code $exitCode)"
+                    else "${target.label} finished without running a single test (exit code $exitCode). " +
+                            "A non-zero exit code here usually means the test module failed to compile, " +
+                            "not that the test is missing — see the output below."
                 )
             }
         })
@@ -327,13 +358,41 @@ class ScopedTestCheckRunner(private val project: Project) : CheckRunnerPort {
         scope: TestScope,
         targets: List<ResolvedTarget>,
         problems: List<String>,
-        state: RunState
+        state: RunState,
+        nothingRan: Boolean,
+        buildOutput: BuildOutputCollector
     ): String = buildString {
         appendLine("Scope: ${scope.description}")
         appendLine("Launched: " + targets.joinToString(", ") { it.settings.name })
         // Счётчик тестов печатает заголовок проверки — второй раз он тут не нужен.
+        if (nothingRan) {
+            appendLine(
+                "! Not a single test ran for '${scope.description}': the run started and finished empty, " +
+                        "so either the scope matches no tests or the module failed to compile. " + SCOPE_HELP
+            )
+        }
         problems.forEach { appendLine("! $it") }
         state.errors.forEach { appendLine("! $it") }
+        // Без этого хвоста агент видит только «0 tests» и начинает чинить
+        // обнаружение тестов вместо ошибки компиляции, которая всё и убила.
+        // Вывод процесса приоритетнее: он относится к самому прогону, тогда как
+        // вывод сборки остаётся единственным источником, когда процесс не дожил
+        // до старта.
+        if (nothingRan || state.errors.isNotEmpty()) {
+            val processTail = state.outputTail()
+            val buildTail = buildOutput.outputTail()
+            when {
+                processTail.isNotEmpty() -> {
+                    appendLine("--- Process output (tail) ---")
+                    appendLine(processTail)
+                }
+
+                buildTail.isNotEmpty() -> {
+                    appendLine("--- Build output (tail) ---")
+                    appendLine(buildTail)
+                }
+            }
+        }
     }.trim()
 
     private fun displayName(test: SMTestProxy): String =
@@ -357,6 +416,8 @@ class ScopedTestCheckRunner(private val project: Project) : CheckRunnerPort {
     private class RunState {
         val failures = mutableListOf<CheckIssue>()
         val errors = mutableListOf<String>()
+
+        private val output = StringBuilder()
 
         @Volatile
         var ownHandler: ProcessHandler? = null
@@ -383,6 +444,23 @@ class ScopedTestCheckRunner(private val project: Project) : CheckRunnerPort {
         fun owns(root: SMTestProxy.SMRootTestProxy): Boolean {
             val ours = ownHandler ?: return true
             return root.handler === ours
+        }
+
+        /** Текст приходит с потоков процесса, поэтому под замком. */
+        fun appendOutput(text: String) {
+            synchronized(output) {
+                output.append(text)
+                if (output.length > MAX_CAPTURED_OUTPUT_CHARS) {
+                    output.delete(0, output.length - MAX_CAPTURED_OUTPUT_CHARS)
+                }
+            }
+        }
+
+        /** Именно хвост: компилятор печатает ошибки в конце, начало выбросить не жалко. */
+        fun outputTail(): String = synchronized(output) {
+            val text = output.toString().trim()
+            if (text.length <= MAX_REPORTED_OUTPUT_CHARS) text
+            else text.substring(text.length - MAX_REPORTED_OUTPUT_CHARS)
         }
     }
 
@@ -425,5 +503,11 @@ class ScopedTestCheckRunner(private val project: Project) : CheckRunnerPort {
          */
         const val MODEL_HINT: String =
             "If the file exists on disk, the IDE project model may be stale — reload the Gradle/Maven project first."
+
+        /** Вывод тестовой задачи Gradle измеряется мегабайтами — держим только хвост. */
+        const val MAX_CAPTURED_OUTPUT_CHARS: Int = 200_000
+
+        /** В отчёт уходит куда меньше: ошибки компилятора печатаются в самом конце. */
+        const val MAX_REPORTED_OUTPUT_CHARS: Int = 4_000
     }
 }

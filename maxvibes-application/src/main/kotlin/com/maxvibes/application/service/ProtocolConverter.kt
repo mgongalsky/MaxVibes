@@ -21,33 +21,34 @@ import com.maxvibes.domain.model.interaction.InteractionCheck
  */
 object ProtocolConverter {
 
-    /**
-     * Converts an LLM-protocol [InteractionModification] into a domain [Modification].
-     * Returns null for blank type/path, unknown types, or missing type-specific fields
-     * (import fqn, new name, destination).
-     */
     fun convertModification(mod: InteractionModification): Modification? {
         if (mod.type.isBlank() || mod.path.isBlank()) return null
         val elementPath = ElementPath(mod.path)
-        val elementKind = try {
+        val parsedElementKind = runCatching {
             ElementKind.valueOf(mod.elementKind.uppercase())
-        } catch (_: Exception) {
-            ElementKind.FILE
-        }
-        val position = try {
+        }.getOrDefault(ElementKind.FILE)
+        val position = runCatching {
             InsertPosition.valueOf(mod.position.uppercase())
-        } catch (_: Exception) {
-            InsertPosition.LAST_CHILD
-        }
+        }.getOrDefault(InsertPosition.LAST_CHILD)
 
         return when (mod.type.uppercase()) {
             "CREATE_FILE" -> Modification.CreateFile(targetPath = elementPath, content = mod.content)
             "REPLACE_FILE" -> Modification.ReplaceFile(targetPath = elementPath, newContent = mod.content)
             "DELETE_FILE" -> Modification.DeleteFile(targetPath = elementPath)
-            "CREATE_ELEMENT" -> Modification.CreateElement(
-                targetPath = elementPath, elementKind = elementKind,
-                content = mod.content, position = position
-            )
+            "CREATE_ELEMENT" -> {
+                val elementKind = if (parsedElementKind == ElementKind.FILE) {
+                    inferElementKind(mod.content)
+                } else {
+                    parsedElementKind
+                }
+                if (elementKind == ElementKind.FILE) return null
+                Modification.CreateElement(
+                    targetPath = elementPath,
+                    elementKind = elementKind,
+                    content = mod.content,
+                    position = position
+                )
+            }
 
             "REPLACE_ELEMENT" -> Modification.ReplaceElement(targetPath = elementPath, newContent = mod.content)
             "DELETE_ELEMENT" -> Modification.DeleteElement(targetPath = elementPath)
@@ -63,16 +64,16 @@ object ProtocolConverter {
 
             "RENAME_ELEMENT" -> {
                 val newName = mod.newName.trim()
-                if (newName.isBlank()) null
-                else Modification.RenameElement(targetPath = elementPath, newName = newName)
+                if (newName.isBlank()) null else Modification.RenameElement(targetPath = elementPath, newName = newName)
             }
 
             "SAFE_DELETE" -> Modification.SafeDelete(targetPath = elementPath)
-
             "MOVE_ELEMENT" -> {
                 val destination = mod.destination.trim()
-                if (destination.isBlank()) null
-                else Modification.MoveElement(targetPath = elementPath, destination = destination)
+                if (destination.isBlank()) null else Modification.MoveElement(
+                    targetPath = elementPath,
+                    destination = destination
+                )
             }
 
             else -> null
@@ -108,5 +109,34 @@ object ProtocolConverter {
             reason = check.reason.takeIf { it.isNotBlank() },
             timeoutSec = check.timeoutSec.coerceIn(1, 3600)
         )
+    }
+
+    /**
+     * Определяет вид объявления по его тексту — для случая, когда модель не прислала
+     * `elementKind`.
+     *
+     * Комментарии и строковые литералы вырезаются: слово `class` из KDoc или из
+     * аргумента аннотации иначе перебивает настоящее ключевое слово. Не удалось
+     * распознать — возвращается [ElementKind.FILE], то есть прежнее поведение.
+     */
+    private fun inferElementKind(content: String): ElementKind {
+        val code = content
+            .replace(Regex("""/\*[\s\S]*?\*/"""), " ")
+            .replace(Regex("""//[^\n]*"""), " ")
+            .replace(Regex("\"[^\"]*\""), " ")
+        val keyword = Regex("""\b(enum\s+class|fun|val|var|class|interface|object|init|constructor)\b""")
+            .find(code)?.groupValues?.get(1)
+            ?.replace(Regex("""\s+"""), " ")
+        return when (keyword) {
+            "fun" -> ElementKind.FUNCTION
+            "val", "var" -> ElementKind.PROPERTY
+            "enum class" -> ElementKind.ENUM
+            "class" -> ElementKind.CLASS
+            "interface" -> ElementKind.INTERFACE
+            "object" -> ElementKind.OBJECT
+            "init" -> ElementKind.INIT
+            "constructor" -> ElementKind.CONSTRUCTOR
+            else -> ElementKind.FILE
+        }
     }
 }

@@ -87,7 +87,7 @@ class ProtocolConverterTest {
     }
 
     @Test
-    fun `invalid kind falls back to FILE and invalid position to LAST_CHILD`() {
+    fun `unknown kind is inferred from the content and invalid position falls back to LAST_CHILD`() {
         val result = ProtocolConverter.convertModification(
             InteractionModification(
                 type = "CREATE_ELEMENT", path = "file:A.kt/class[A]",
@@ -95,7 +95,7 @@ class ProtocolConverterTest {
             )
         )
         result as Modification.CreateElement
-        assertEquals(ElementKind.FILE, result.elementKind)
+        assertEquals(ElementKind.FUNCTION, result.elementKind)
         assertEquals(InsertPosition.LAST_CHILD, result.position)
     }
 

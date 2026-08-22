@@ -2,14 +2,16 @@ package com.maxvibes.plugin.check
 
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
+import com.intellij.openapi.compiler.CompilationStatusListener
 import com.intellij.openapi.compiler.CompileContext
-import com.intellij.openapi.compiler.CompileStatusNotification
-import com.intellij.openapi.compiler.CompilerManager
 import com.intellij.openapi.compiler.CompilerMessage
 import com.intellij.openapi.compiler.CompilerMessageCategory
+import com.intellij.openapi.compiler.CompilerTopics
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.module.ModuleManager
 import com.intellij.openapi.project.Project
+import com.intellij.task.ProjectTaskManager
+import com.intellij.util.messages.MessageBusConnection
 import com.maxvibes.application.port.output.CheckRunnerPort
 import com.maxvibes.domain.model.check.CheckCancellation
 import com.maxvibes.domain.model.check.CheckExecution
@@ -27,9 +29,16 @@ import kotlin.coroutines.resume
 /**
  * Сборка проекта средствами IDE — то же самое, что Build Project в меню.
  *
- * В проекте с делегированием сборки вызов всё равно уходит в Gradle, но
- * результат приходит структурно: [CompilerMessage] с файлом и позицией вместо
- * текстового лога, который агенту пришлось бы разбирать самому.
+ * Идём через [ProjectTaskManager], а не через `CompilerManager`: последний
+ * дёргает встроенный сборщик JPS напрямую и про делегирование сборки в Gradle
+ * не знает. В Android Studio это означало сборку не тем сборщиком — с чужими
+ * ошибками и без всякой связи с настоящим результатом.
+ *
+ * У результата [ProjectTaskManager] есть только флаги, поэтому диагностику
+ * собираем сами. Gradle-сборка отдаёт её через [BuildOutputCollector], JPS —
+ * своими `CompilerMessage` в [CompilerTopics.COMPILATION_STATUS]. Какой канал
+ * сработает, зависит от настройки делегирования в конкретном проекте, и
+ * слушать оба дешевле, чем угадывать.
  *
  * Класс ссылается на compiler API, которого нет в IDE без JVM-поддержки,
  * поэтому создаётся только через [CheckRunnerProvider].
@@ -68,73 +77,133 @@ class JvmBuildCheckRunner(private val project: Project) : CheckRunnerPort {
             status = status,
             issues = outcome.issues,
             durationMs = durationMs,
-            rawOutput = outcome.failure.orEmpty()
+            rawOutput = outcome.rawOutput
         )
     }
 
     private suspend fun compile(scope: String?, cancellation: CheckCancellation): Outcome =
         suspendCancellableCoroutine { continuation ->
             val settled = AtomicBoolean(false)
+            val diagnostics = BuildDiagnostics()
+
             fun finish(outcome: Outcome) {
                 if (!settled.compareAndSet(false, true)) return
+                diagnostics.stop()
                 if (continuation.isActive) continuation.resume(outcome)
             }
 
-            // Прервать компиляцию нечем: CompilerManager.make не отдаёт хендла.
-            // Поэтому Cancel отпускает ожидание с честной оговоркой — это лучше
-            // и кнопки, которая ничего не делает, и вечно висящей задачи.
+            // Прервать сборку нечем: ProjectTaskManager, как и CompilerManager,
+            // не отдаёт хендла. Поэтому Cancel отпускает ожидание с честной
+            // оговоркой — это лучше и кнопки, которая ничего не делает, и вечно
+            // висящей задачи.
             cancellation.onCancel {
                 finish(Outcome(failure = "Cancelled by user; the IDE build keeps running."))
             }
+
+            diagnostics.start()
 
             // Модальность задаётся явно: по умолчанию invokeLater наследует её от
             // фоновой задачи, из которой пришёл автозапуск чека, и тогда runnable
             // ждёт чужой модальности, которой на EDT уже нет — сборка не стартует.
             ApplicationManager.getApplication().invokeLater({
-                val manager = CompilerManager.getInstance(project)
-                val callback = CompileStatusNotification { aborted, _, _, context ->
-                    finish(
-                        if (aborted) Outcome(failure = "Build was aborted.")
-                        else Outcome(issues = collectErrors(context))
-                    )
-                }
-                if (scope == null) {
-                    manager.make(callback)
-                    return@invokeLater
-                }
-                val module = ModuleManager.getInstance(project).findModuleByName(scope)
-                if (module == null) {
-                    finish(Outcome(failure = "Unknown module: $scope"))
+                val manager = ProjectTaskManager.getInstance(project)
+                val promise = if (scope == null) {
+                    manager.buildAllModules()
                 } else {
-                    manager.make(module, callback)
+                    val module = ModuleManager.getInstance(project).findModuleByName(scope)
+                    if (module == null) {
+                        finish(Outcome(failure = "Unknown module: $scope"))
+                        return@invokeLater
+                    }
+                    manager.build(module)
                 }
+                promise
+                    .onSuccess { result ->
+                        finish(
+                            if (result.isAborted) Outcome(failure = "Build was aborted.")
+                            else diagnostics.toOutcome(result.hasErrors())
+                        )
+                    }
+                    .onError { error ->
+                        finish(Outcome(failure = "Build could not be started: " + (error.message ?: error.toString())))
+                    }
             }, ModalityState.NON_MODAL)
         }
-
-    /**
-     * Только ERROR: предупреждений в живом проекте сотни, и они утопят те три
-     * настоящие ошибки, ради которых проверка и запускалась.
-     */
-    private fun collectErrors(context: CompileContext): List<CheckIssue> =
-        context.getMessages(CompilerMessageCategory.ERROR).map { toIssue(it) }
 
     private fun toIssue(message: CompilerMessage): CheckIssue {
         val descriptor = message.navigatable as? OpenFileDescriptor
         return CheckIssue(
             message = message.message.trim(),
-            filePath = message.virtualFile?.path?.let { toProjectRelative(it) },
+            filePath = message.virtualFile?.path?.let { toProjectRelativePath(project, it) },
             line = descriptor?.line?.plus(1)
         )
     }
 
-    private fun toProjectRelative(path: String): String {
-        val base = project.basePath ?: return path
-        return path.removePrefix(base).removePrefix("/")
+    /** Слушает оба канала сборки одновременно — делегированный Gradle и встроенный JPS. */
+    private inner class BuildDiagnostics {
+
+        private val jpsIssues = mutableListOf<CheckIssue>()
+        private val collector = BuildOutputCollector(project)
+        private var connection: MessageBusConnection? = null
+
+        fun start() {
+            val bus = project.messageBus.connect()
+            bus.subscribe(CompilerTopics.COMPILATION_STATUS, object : CompilationStatusListener {
+                override fun compilationFinished(
+                    aborted: Boolean,
+                    errors: Int,
+                    warnings: Int,
+                    compileContext: CompileContext
+                ) {
+                    collectJps(compileContext)
+                }
+            })
+            connection = bus
+            collector.start()
+        }
+
+        fun stop() {
+            connection?.disconnect()
+            connection = null
+            collector.stop()
+        }
+
+        fun toOutcome(hasErrors: Boolean): Outcome {
+            if (!hasErrors) return Outcome()
+            val issues = collectIssues()
+            if (issues.isNotEmpty()) return Outcome(issues = issues, rawOutput = collector.outputTail())
+            // Ошибки были, а распознать нечего: зелёная проверка здесь была бы
+            // прямым враньём, поэтому падаем и отдаём агенту хвост лога.
+            return Outcome(
+                issues = listOf(
+                    CheckIssue(
+                        message = "Build failed; the compiler output could not be parsed — see the Build tool window.",
+                        filePath = null,
+                        line = null
+                    )
+                ),
+                rawOutput = collector.outputTail()
+            )
+        }
+
+        private fun collectJps(context: CompileContext) {
+            // Только ERROR: предупреждений в живом проекте сотни, и они утопят те
+            // три настоящие ошибки, ради которых проверка и запускалась.
+            val messages = context.getMessages(CompilerMessageCategory.ERROR).map { toIssue(it) }
+            synchronized(jpsIssues) { jpsIssues += messages }
+        }
+
+        private fun collectIssues(): List<CheckIssue> {
+            val fromJps = synchronized(jpsIssues) { jpsIssues.toList() }
+            return (collector.issues() + fromJps).distinct().take(MAX_REPORTED_ISSUES)
+        }
     }
 
     private class Outcome(
         val issues: List<CheckIssue> = emptyList(),
         /** Непустое — сборку не удалось довести до результата; текст уходит агенту. */
-        val failure: String? = null
+        val failure: String? = null,
+        /** Отдельно от [failure]: провал сборки — это FAILED, а не ERROR. */
+        val rawOutput: String = failure.orEmpty()
     )
 }

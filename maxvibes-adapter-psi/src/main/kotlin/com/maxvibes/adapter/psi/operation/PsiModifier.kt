@@ -82,78 +82,41 @@ class PsiModifier(
         kind: ElementKind,
         position: InsertPosition
     ): PsiElement? {
-        println("[PsiModifier] Adding element of kind $kind to ${parent.javaClass.simpleName}")
-        return try {
-            val newElement = elementFactory.createElementFromText(content, kind)
-            if (newElement == null) {
-                println("[PsiModifier] ERROR: Failed to create element from content")
-                return null
+        require(parent.isValid) { "Target PSI parent is no longer valid" }
+        val newElement = elementFactory.createElementFromText(content, kind) ?: return null
+
+        val newName = elementFactory.getElementName(newElement)
+        if (newName != null) {
+            val declarations = when (parent) {
+                is KtClassOrObject -> parent.declarations
+                is KtFile -> parent.declarations
+                else -> emptyList()
             }
-
-            // Проверяем нет ли уже элемента с таким именем — если есть, заменяем вместо дублирования
-            val newName = elementFactory.getElementName(newElement)
-            if (newName != null) {
-                val declarations = when (parent) {
-                    is KtClassOrObject -> parent.declarations
-                    is KtFile -> parent.declarations
-                    else -> emptyList()
-                }
-                val existing = declarations.firstOrNull { elementFactory.getElementName(it) == newName }
-                if (existing != null) {
-                    println("[PsiModifier] Element '$newName' already exists, replacing instead of adding")
-                    return doReplace(existing, newElement)
-                }
-            }
-
-            val added = when (position) {
-                InsertPosition.FIRST_CHILD -> addAsFirstChild(parent, newElement)
-                InsertPosition.LAST_CHILD -> addAsLastChild(parent, newElement)
-                InsertPosition.BEFORE -> parent.parent.addBefore(newElement, parent)
-                InsertPosition.AFTER -> parent.parent.addAfter(newElement, parent)
-            }
-
-            ensureNewLineBefore(added)
-            CodeStyleManager.getInstance(project).reformat(added)
-
-            println("[PsiModifier] Element added successfully")
-            added
-        } catch (e: Exception) {
-            println("[PsiModifier] ERROR: Failed to add element of kind $kind: ${e.javaClass.simpleName}: ${e.message}")
-            null
+            val existing = declarations.firstOrNull { elementFactory.getElementName(it) == newName }
+            if (existing != null) return doReplace(existing, newElement)
         }
+
+        val added = when (position) {
+            InsertPosition.FIRST_CHILD -> addAsFirstChild(parent, newElement)
+            InsertPosition.LAST_CHILD -> addAsLastChild(parent, newElement)
+            InsertPosition.BEFORE -> parent.parent.addBefore(newElement, parent)
+            InsertPosition.AFTER -> parent.parent.addAfter(newElement, parent)
+        }
+
+        ensureNewLineBefore(added)
+        CodeStyleManager.getInstance(project).reformat(added)
+        return added
     }
 
     fun replaceElement(target: PsiElement, content: String, kind: ElementKind): PsiElement? {
-        println("[PsiModifier] Replacing element of kind $kind")
-        return try {
-            if (target is PsiFile || kind == ElementKind.FILE) {
-                val file = if (target is PsiFile) target else target.containingFile
-                if (file != null) {
-                    println("[PsiModifier] Target is FILE, using replaceFileContent")
-                    return replaceFileContent(file, content)
-                }
-            }
-
-            val declarations = elementFactory.parseDeclarations(content)
-            if (declarations.size != 1) {
-                println(
-                    "[PsiModifier] ERROR: REPLACE_ELEMENT requires exactly one declaration, " +
-                            "found ${declarations.size}"
-                )
-                return null
-            }
-
-            val newElement = elementFactory.createElementFromText(content, kind)
-            if (newElement == null) {
-                println("[PsiModifier] ERROR: Failed to create replacement element from content")
-                return null
-            }
-
-            doReplace(target, newElement)
-        } catch (e: Exception) {
-            println("[PsiModifier] ERROR: Failed to replace element of kind $kind: ${e.javaClass.simpleName}: ${e.message}")
-            null
+        if (!target.isValid) throw IllegalStateException("Target PSI element is no longer valid")
+        if (target is PsiFile || kind == ElementKind.FILE) {
+            val file = if (target is PsiFile) target else target.containingFile
+            return file?.let { replaceFileContent(it, content) }
         }
+
+        val newElement = elementFactory.createElementFromText(content, kind) ?: return null
+        return doReplace(target, newElement)
     }
 
     /**

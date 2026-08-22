@@ -2,25 +2,20 @@ package com.maxvibes.adapter.psi.kotlin
 
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiElement
+import com.intellij.psi.PsiErrorElement
+import com.intellij.psi.util.PsiTreeUtil
 import com.maxvibes.domain.model.code.ElementKind
 import org.jetbrains.kotlin.name.FqName
-import org.jetbrains.kotlin.psi.KtDeclaration
-import org.jetbrains.kotlin.psi.KtImportDirective
-import org.jetbrains.kotlin.psi.KtPsiFactory
+import org.jetbrains.kotlin.psi.*
 import org.jetbrains.kotlin.resolve.ImportPath
 
-/**
- * Фабрика для создания Kotlin PSI элементов из текста.
- *
- * Includes fallback parsing: if direct creation fails (e.g. text contains
- * multiple declarations), parses as a file fragment and extracts elements.
- */
+/** Creates validated Kotlin PSI declarations from protocol text. */
 class KotlinElementFactory(private val project: Project) {
 
     private val psiFactory: KtPsiFactory by lazy { KtPsiFactory(project) }
 
     fun createElementFromText(text: String, kind: ElementKind): PsiElement? {
-        return try {
+        val direct = runCatching {
             when (kind) {
                 ElementKind.FILE -> psiFactory.createFile(text)
                 ElementKind.CLASS -> psiFactory.createClass(text)
@@ -30,97 +25,69 @@ class KotlinElementFactory(private val project: Project) {
                 ElementKind.ENUM_ENTRY -> createEnumEntryWithLeadingTrivia(text)
                 ElementKind.FUNCTION -> psiFactory.createFunction(text)
                 ElementKind.PROPERTY -> psiFactory.createProperty(text)
+                ElementKind.INIT -> createInitBlock(text)
                 ElementKind.CONSTRUCTOR -> null
-                ElementKind.INIT -> null
             }
-        } catch (e: Exception) {
-            println("[KotlinElementFactory] Direct creation failed for $kind: ${e.message}")
-            println("[KotlinElementFactory] Trying file-fragment fallback...")
-            createViaFileFallback(text, kind)
-        }
+        }.getOrNull()
+
+        if (direct != null && matchesKind(direct, kind) && !hasSyntaxErrors(direct)) return direct
+        return createViaFileFallback(text, kind)
     }
 
-    /**
-     * Fallback: parse text as a file fragment, extract the first matching declaration.
-     *
-     * Handles cases where LLM sends multiple declarations in one block,
-     * or where the text has leading comments that confuse direct parsing.
-     */
     private fun createViaFileFallback(text: String, kind: ElementKind): PsiElement? {
-        return try {
-            val tempFile = psiFactory.createFile(text)
-            val declarations = tempFile.declarations
-            if (declarations.isEmpty()) {
-                println("[KotlinElementFactory] Fallback: no declarations found in text")
-                return null
-            }
-            println("[KotlinElementFactory] Fallback: found ${declarations.size} declaration(s), using first")
-            declarations.first()
-        } catch (e2: Exception) {
-            println("[KotlinElementFactory] Fallback also failed: ${e2.message}")
-            null
-        }
+        if (kind == ElementKind.FILE || kind == ElementKind.ENUM_ENTRY || kind == ElementKind.INIT) return null
+        val file = runCatching { psiFactory.createFile(text) }.getOrNull() ?: return null
+        if (hasSyntaxErrors(file) || file.declarations.size != 1) return null
+        return file.declarations.single().takeIf { matchesKind(it, kind) }
     }
 
-    /**
-     * Parse text as a file fragment and return ALL declarations.
-     * Used by PsiModifier to handle multi-declaration REPLACE_ELEMENT.
-     */
+    private fun createInitBlock(text: String): KtAnonymousInitializer? {
+        val wrapper = psiFactory.createClass("class __MaxVibesInitWrapper {\n$text\n}")
+        if (hasSyntaxErrors(wrapper)) return null
+        return wrapper.body?.anonymousInitializers?.singleOrNull()
+    }
+
+    private fun matchesKind(element: PsiElement, kind: ElementKind): Boolean = when (kind) {
+        ElementKind.FILE -> element is KtFile
+        ElementKind.CLASS -> element is KtClass && !element.isInterface() && !element.isEnum()
+        ElementKind.INTERFACE -> element is KtClass && element.isInterface()
+        ElementKind.OBJECT -> element is KtObjectDeclaration
+        ElementKind.ENUM -> element is KtClass && element.isEnum()
+        ElementKind.ENUM_ENTRY -> element is KtEnumEntry
+        ElementKind.FUNCTION -> element is KtNamedFunction
+        ElementKind.PROPERTY -> element is KtProperty
+        ElementKind.CONSTRUCTOR -> element is KtConstructor<*>
+        ElementKind.INIT -> element is KtAnonymousInitializer
+    }
+
+    private fun hasSyntaxErrors(element: PsiElement): Boolean =
+        element is PsiErrorElement || PsiTreeUtil.findChildOfType(element, PsiErrorElement::class.java) != null
+
     fun parseDeclarations(text: String): List<KtDeclaration> {
-        return try {
-            val tempFile = psiFactory.createFile(text)
-            tempFile.declarations.toList()
-        } catch (e: Exception) {
-            println("[KotlinElementFactory] parseDeclarations failed: ${e.message}")
-            emptyList()
-        }
+        val file = runCatching { psiFactory.createFile(text) }.getOrNull() ?: return emptyList()
+        return if (hasSyntaxErrors(file)) emptyList() else file.declarations.toList()
     }
 
-    /**
-     * Create an import directive PSI element.
-     */
-    fun createImportDirective(fqName: String, isAllUnder: Boolean = false): KtImportDirective {
-        val importPath = ImportPath(FqName(fqName), isAllUnder)
-        return psiFactory.createImportDirective(importPath)
-    }
+    fun createImportDirective(fqName: String, isAllUnder: Boolean = false): KtImportDirective =
+        psiFactory.createImportDirective(ImportPath(FqName(fqName), isAllUnder))
 
     fun createClass(text: String) = psiFactory.createClass(text)
-
     fun createFunction(text: String) = psiFactory.createFunction(text)
-
     fun createProperty(text: String) = psiFactory.createProperty(text)
-
     fun createObject(text: String) = psiFactory.createObject(text)
-
     fun createFile(text: String) = psiFactory.createFile(text)
-
     fun createFile(name: String, text: String) = psiFactory.createFile(name, text)
-
     fun createNewLine() = psiFactory.createNewLine()
-
     fun createNewLine(count: Int): PsiElement = psiFactory.createNewLine(count)
-
     fun createWhiteSpace(text: String = " ") = psiFactory.createWhiteSpace(text)
 
-    /**
-     * Получить имя элемента для дедупликации в addElement.
-     */
-    fun getElementName(element: PsiElement): String? {
-        return when (element) {
-            is org.jetbrains.kotlin.psi.KtNamedDeclaration -> element.name
-            else -> null
-        }
-    }
+    fun getElementName(element: PsiElement): String? =
+        (element as? KtNamedDeclaration)?.name
+
     private fun createEnumEntryWithLeadingTrivia(text: String): PsiElement? {
-        val wrapper = psiFactory.createFile(
-            "enum class __MaxVibesEnumWrapper {\n$text\n}"
-        )
-        val enumClass = wrapper.declarations
-            .filterIsInstance<org.jetbrains.kotlin.psi.KtClass>()
-            .firstOrNull()
-            ?: return null
-        return enumClass.declarations
-            .filterIsInstance<org.jetbrains.kotlin.psi.KtEnumEntry>()
-            .firstOrNull()
+        val wrapper = psiFactory.createFile("enum class __MaxVibesEnumWrapper {\n$text\n}")
+        if (hasSyntaxErrors(wrapper)) return null
+        val enumClass = wrapper.declarations.filterIsInstance<KtClass>().firstOrNull() ?: return null
+        return enumClass.declarations.filterIsInstance<KtEnumEntry>().singleOrNull()
     }
 }

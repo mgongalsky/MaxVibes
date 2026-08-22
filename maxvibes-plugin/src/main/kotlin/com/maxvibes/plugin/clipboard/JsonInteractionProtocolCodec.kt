@@ -298,7 +298,8 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
      *
      * Возвращает `null`, если отсутствует или пусто обязательное поле
      * [InteractionRequestSchema.MOD_TYPE] либо [InteractionRequestSchema.MOD_PATH],
-     * а также если значение не является строковым примитивом. Отбрасывание записи
+     * а также если операция обязана нести код, но его нет ни под одним из известных
+     * имён ([InteractionRequestSchema.MOD_CONTENT_KEYS]). Отбрасывание записи
      * фиксирует вызывающий код — тихо терять правку нельзя.
      */
     private fun parseModification(obj: JsonObject): InteractionModification? {
@@ -306,10 +307,16 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
             ?.takeIf { it.isNotBlank() } ?: return null
         val path = (obj[InteractionRequestSchema.MOD_PATH] as? JsonPrimitive)?.contentOrNull
             ?.takeIf { it.isNotBlank() } ?: return null
+        val content = InteractionRequestSchema.MOD_CONTENT_KEYS.firstNotNullOfOrNull { key ->
+            (obj[key] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+        } ?: ""
+        val needsContent = type.uppercase() in
+                setOf("CREATE_ELEMENT", "REPLACE_ELEMENT", "CREATE_FILE", "REPLACE_FILE")
+        if (needsContent && content.isBlank()) return null
         return InteractionModification(
             type = type,
             path = path,
-            content = obj[InteractionRequestSchema.MOD_CONTENT]?.jsonPrimitive?.contentOrNull ?: "",
+            content = content,
             elementKind = obj[InteractionRequestSchema.MOD_ELEMENT_KIND]?.jsonPrimitive?.contentOrNull
                 ?: InteractionRequestSchema.DEFAULT_ELEMENT_KIND,
             position = obj[InteractionRequestSchema.MOD_POSITION]?.jsonPrimitive?.contentOrNull

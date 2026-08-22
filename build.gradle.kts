@@ -8,7 +8,7 @@ plugins {
 
 allprojects {
     group = "com.maxvibes"
-    version = "1.2.12"
+    version = "1.2.15"
 
     repositories {
         mavenCentral()
@@ -47,9 +47,6 @@ subprojects {
             exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.SHORT
         }
 
-        // Per-module summary: "module: SUCCESS — N tests, N passed, N failed, N skipped".
-        // project.name is captured at configuration time — touching Task.project inside
-        // the closure at execution time breaks the configuration cache.
         val moduleName = project.name
         afterSuite(KotlinClosure2({ desc: TestDescriptor, result: TestResult ->
             if (desc.parent == null) {
@@ -58,10 +55,6 @@ subprojects {
         }))
     }
 
-    // gradle-intellij-plugin 1.x: instrumentCode ищет macOS-layout ('<jdk>/Packages')
-    // на Windows-JDK и валит buildPlugin после clean. GUI Forms в проекте нет,
-    // инструментация не нужна — выключаем до миграции на IPGP 2.x
-    // (docs/TODOs/migrate-to-intellij-platform-gradle-plugin-2.md).
     plugins.withId("org.jetbrains.intellij") {
         extensions.configure<org.jetbrains.intellij.IntelliJPluginExtension> {
             instrumentCode.set(false)
