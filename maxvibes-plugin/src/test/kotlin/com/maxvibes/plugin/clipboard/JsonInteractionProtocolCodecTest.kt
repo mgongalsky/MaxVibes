@@ -303,11 +303,13 @@ class JsonInteractionProtocolCodecTest {
 
     @Test
     fun `decode reports modifications it could not parse instead of dropping them`() {
+        // `action` — имя, которого нет ни в одном списке синонимов. `kind` здесь не годится:
+        // он читается как type, и запись стала бы валидной вместо того, чтобы быть отвергнутой.
         val raw = """
             {
               "message": "ok",
               "modifications": [
-                { "kind": "REPLACE_ELEMENT", "path": "src/Main.kt", "content": "x" },
+                { "action": "REPLACE_ELEMENT", "path": "src/Main.kt", "content": "x" },
                 { "type": "CREATE_FILE", "path": "src/New.kt", "content": "y" },
                 { "type": "REPLACE_FILE", "path": "", "content": "z" }
               ]
@@ -329,7 +331,7 @@ class JsonInteractionProtocolCodecTest {
             {
               "message": "ok",
               "modifications": [
-                { "kind": "REPLACE_ELEMENT", "path": "src/Main.kt", "content": "здоровенное тело" }
+                { "action": "REPLACE_ELEMENT", "path": "src/Main.kt", "content": "здоровенное тело" }
               ]
             }
         """.trimIndent()
@@ -341,14 +343,14 @@ class JsonInteractionProtocolCodecTest {
         assertFalse(firstLine.contains("здоровенное тело"), "чат и промпт берут только первую строку")
         assertTrue(entry.contains("здоровенное тело"), "отчёт о сбое должен получить запись целиком")
     }
-}
 
-@Test
-fun `response format routes builds and tests through IDE checks`() {
-    val hint = InteractionRequestSchema.RESPONSE_FORMAT_HINT
+    @Test
+    fun `response format routes builds and tests through IDE checks`() {
+        val hint = InteractionRequestSchema.RESPONSE_FORMAT_HINT
 
-    assertTrue(hint.contains("\"checks\""))
-    assertTrue(hint.contains("\"BUILD\""))
-    assertTrue(hint.contains("\"TESTS\""))
-    assertTrue(hint.contains("NEVER put build, compile, or test invocations in \"commands\""))
+        assertTrue(hint.contains("\"checks\""))
+        assertTrue(hint.contains("\"BUILD\""))
+        assertTrue(hint.contains("\"TESTS\""))
+        assertTrue(hint.contains("NEVER put build, compile, or test invocations in \"commands\""))
+    }
 }

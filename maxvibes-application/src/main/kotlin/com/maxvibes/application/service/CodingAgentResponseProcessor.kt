@@ -69,12 +69,19 @@ object CodingAgentResponseProcessor {
         // следующим ходом, без отдельного поля в каждом из пяти результатов шага.
         // Из записи берётся только первая строка: дальше в ней лежит сырой JSON записи,
         // он нужен отчёту о сбое, но в чате и в промпте раздул бы всё целым файлом.
+        //
+        // Шапка говорит о последствии, а не о схеме: по отчётам агент понимал, что формат
+        // не тот, но не понимал, что на диск не легло НИЧЕГО, и уходил перебирать имена
+        // полей вместо того, чтобы повторить правку. Образец даётся на REPLACE_FILE —
+        // по нему видно расположение всех трёх обязательных полей сразу.
         val malformedNotice = response.malformedModifications.takeIf { it.isNotEmpty() }?.let { entries ->
             buildString {
                 append("⚠️ Не разобрано и НЕ применено записей в modifications: ")
                 append(entries.size)
-                append(". Обязательные поля каждой записи — type и path.")
+                append(". Эти правки НЕ попали в файлы — пришлите их заново, исправив указанное ниже.")
                 entries.forEach { append("\n• ").append(it.lineSequence().first()) }
+                append("\nКанонический вид записи: ")
+                append("""{"type": "REPLACE_FILE", "path": "file:docs/PLAN.md", "content": "<полный новый текст файла>"}""")
             }
         }
         val message = listOfNotNull(

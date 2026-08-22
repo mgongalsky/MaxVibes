@@ -62,6 +62,21 @@ object InteractionRequestSchema {
      */
     val MOD_CONTENT_KEYS = listOf(MOD_CONTENT, "replacement", "newContent", "newText", "code")
 
+    /**
+     * Имена, под которыми модель может прислать путь к цели правки; каноническое — первое.
+     * `targetPath` — не догадка: так это поле называется в отчёте о применении, который
+     * модель получает следующим ходом и из которого добросовестно списывает имя.
+     */
+    val MOD_PATH_KEYS = listOf(MOD_PATH, "filePath", "targetPath")
+
+    /**
+     * Имена, под которыми модель может прислать тип операции; каноническое — первое.
+     * `kind` приезжает из соседнего массива `checks`, где поле действительно так и
+     * называется, `operation` — следующая догадка после того, как `kind` не сработал.
+     * Без списка запись отбрасывалась целиком, ещё до попытки применить правку.
+     */
+    val MOD_TYPE_KEYS = listOf(MOD_TYPE, "kind", "operation")
+
     const val DEFAULT_ELEMENT_KIND = "FILE"
     const val DEFAULT_POSITION = "LAST_CHILD"
 

@@ -236,16 +236,34 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
         // Отсутствующее и пустое поле разделены намеренно: в первом случае модель
         // забыла ключ, во втором — знала о нём, но не смогла построить значение.
         // По отчётам это два разных дефекта, и сливать их в «нет поля» нельзя.
+        //
+        // Присутствие ищется по тем же спискам синонимов, что и в parseModification:
+        // иначе запись с `kind` вместо `type` отчиталась бы «type отсутствует», хотя
+        // тип был прислан и отвергнут по совсем другой причине.
         fun describeMalformed(index: Int, entry: JsonObject): String {
-            val problems = listOf(InteractionRequestSchema.MOD_TYPE, InteractionRequestSchema.MOD_PATH)
-                .mapNotNull { key ->
-                    when {
-                        !entry.containsKey(key) -> "$key отсутствует"
-                        (entry[key] as? JsonPrimitive)?.contentOrNull.isNullOrBlank() -> "$key пустой"
-                        else -> null
-                    }
+            fun valueOf(keys: List<String>): String? = keys.firstNotNullOfOrNull { key ->
+                (entry[key] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+            }
+
+            val problems = listOf(
+                InteractionRequestSchema.MOD_TYPE to InteractionRequestSchema.MOD_TYPE_KEYS,
+                InteractionRequestSchema.MOD_PATH to InteractionRequestSchema.MOD_PATH_KEYS
+            ).mapNotNull { (canonical, keys) ->
+                val sent = keys.filter { entry.containsKey(it) }
+                when {
+                    sent.isEmpty() -> "нет поля $canonical"
+                    valueOf(keys) == null -> "$canonical пустой (прислан как ${sent.joinToString("/")})"
+                    else -> null
                 }
-                .ifEmpty { listOf("обязательные поля на месте, запись отвергнута разбором значений") }
+            }.ifEmpty {
+                // У parseModification ровно три причины вернуть null, и две проверены
+                // выше — значит осталась третья, других вариантов сюда попасть нет.
+                val type = valueOf(InteractionRequestSchema.MOD_TYPE_KEYS)?.uppercase()
+                listOf(
+                    "операция $type обязана нести код, " +
+                            "а поле ${InteractionRequestSchema.MOD_CONTENT} пустое или отсутствует"
+                )
+            }
             return "#${index + 1}: ${problems.joinToString(", ")} " +
                     "(поля записи: ${entry.keys.joinToString(", ")})\n$entry"
         }
@@ -296,17 +314,21 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
     /**
      * Парсит одну запись `modifications[]`.
      *
-     * Возвращает `null`, если отсутствует или пусто обязательное поле
-     * [InteractionRequestSchema.MOD_TYPE] либо [InteractionRequestSchema.MOD_PATH],
-     * а также если операция обязана нести код, но его нет ни под одним из известных
-     * имён ([InteractionRequestSchema.MOD_CONTENT_KEYS]). Отбрасывание записи
-     * фиксирует вызывающий код — тихо терять правку нельзя.
+     * Тип, путь и содержимое читаются одинаково — по списку допустимых имён
+     * ([InteractionRequestSchema.MOD_TYPE_KEYS], [InteractionRequestSchema.MOD_PATH_KEYS],
+     * [InteractionRequestSchema.MOD_CONTENT_KEYS]), каноническое имя в каждом первое.
+     *
+     * Возвращает `null`, если тип или путь не нашлись ни под одним из имён, а также
+     * если операция обязана нести код, но его нет. Отбрасывание записи фиксирует
+     * вызывающий код — тихо терять правку нельзя.
      */
     private fun parseModification(obj: JsonObject): InteractionModification? {
-        val type = (obj[InteractionRequestSchema.MOD_TYPE] as? JsonPrimitive)?.contentOrNull
-            ?.takeIf { it.isNotBlank() } ?: return null
-        val path = (obj[InteractionRequestSchema.MOD_PATH] as? JsonPrimitive)?.contentOrNull
-            ?.takeIf { it.isNotBlank() } ?: return null
+        val type = InteractionRequestSchema.MOD_TYPE_KEYS.firstNotNullOfOrNull { key ->
+            (obj[key] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+        } ?: return null
+        val path = InteractionRequestSchema.MOD_PATH_KEYS.firstNotNullOfOrNull { key ->
+            (obj[key] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+        } ?: return null
         val content = InteractionRequestSchema.MOD_CONTENT_KEYS.firstNotNullOfOrNull { key ->
             (obj[key] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
         } ?: ""

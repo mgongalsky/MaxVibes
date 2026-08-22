@@ -18,13 +18,6 @@ class PromptService(private val project: Project) : PromptPort {
 
     companion object {
         private const val PROMPTS_DIR = ".maxvibes/prompts"
-        private const val CHAT_SYSTEM_FILE = "chat-system.md"
-        private const val PLANNING_SYSTEM_FILE = "planning-system.md"
-        private const val CLAUDE_CODE_SYSTEM_FILE = "claude-code-system.md"
-        private const val CLAUDE_CODE_SYSTEM_RESOURCE = "/prompts/claude-code-system.md"
-        private const val CODEX_SYSTEM_FILE = "codex-system.md"
-        private const val CODEX_SYSTEM_RESOURCE = "/prompts/codex-system.md"
-
         fun getInstance(project: Project): PromptService {
             return project.getService(PromptService::class.java)
         }
@@ -36,100 +29,37 @@ class PromptService(private val project: Project) : PromptPort {
     private val promptsDir: File
         get() = File(project.basePath, PROMPTS_DIR)
 
-    override fun getPrompts(): PromptTemplates {
-        return PromptTemplates(
-            chatSystem = loadPrompt(CHAT_SYSTEM_FILE, DEFAULT_CHAT_SYSTEM) + INIT_BLOCK_CAPABILITY,
-            planningSystem = loadPrompt(PLANNING_SYSTEM_FILE, DEFAULT_PLANNING_SYSTEM)
-        )
-    }
+    override fun getPrompts(): PromptTemplates = PromptTemplates(
+        chatSystem = layers.compose(PromptKind.CHAT_SYSTEM),
+        planningSystem = layers.compose(PromptKind.PLANNING_SYSTEM)
+    )
 
-    override fun hasCustomPrompts(): Boolean {
-        return promptsDir.exists() && promptsDir.listFiles()?.isNotEmpty() == true
-    }
+    /**
+     * Дополняет ли проект хоть один промпт.
+     *
+     * Проверяется содержимое слоя, а не наличие файлов: в новой схеме каталог непустой
+     * всегда — там лежат зеркало базы и заглушки, — и проверка по файлам отвечала бы
+     * «да» в проекте, где ничего не настраивали.
+     */
+    override fun hasCustomPrompts(): Boolean =
+        PromptKind.values().any { layers.hasOverlay(it) }
 
     override fun openOrCreatePrompts() {
-        if (!promptsDir.exists()) {
-            promptsDir.mkdirs()
-        }
-
-        val chatFile = File(promptsDir, CHAT_SYSTEM_FILE)
-        if (!chatFile.exists()) {
-            chatFile.writeText(DEFAULT_CHAT_SYSTEM)
-        }
-
-        val planningFile = File(promptsDir, PLANNING_SYSTEM_FILE)
-        if (!planningFile.exists()) {
-            planningFile.writeText(DEFAULT_PLANNING_SYSTEM)
-        }
+        resyncPrompts(archiveLegacy = false)
 
         LocalFileSystem.getInstance().refreshAndFindFileByIoFile(promptsDir)?.let { dir ->
             dir.refresh(false, true)
-            dir.findChild(CHAT_SYSTEM_FILE)?.let { openInEditor(it) }
-            dir.findChild(PLANNING_SYSTEM_FILE)?.let { openInEditor(it) }
-        }
-    }
-
-    override fun claudeCodeSystem(): String {
-        val customFile = File(promptsDir, CLAUDE_CODE_SYSTEM_FILE)
-        val base = if (customFile.exists() && customFile.canRead()) {
-            try {
-                customFile.readText()
-            } catch (_: Exception) {
-                loadResource(CLAUDE_CODE_SYSTEM_RESOURCE)
-                    ?: error("Missing classpath resource: $CLAUDE_CODE_SYSTEM_RESOURCE")
-            }
-        } else {
-            loadResource(CLAUDE_CODE_SYSTEM_RESOURCE)
-                ?: error("Missing classpath resource: $CLAUDE_CODE_SYSTEM_RESOURCE")
-        }
-        return buildString {
-            append(base)
-            append(INIT_BLOCK_CAPABILITY)
-            skillCatalogProvider?.invoke()?.takeIf { it.isNotBlank() }?.let {
-                appendLine()
-                appendLine()
-                append(it)
+            // Открываются именно слои: база в base/ доступна для чтения, но её правка
+            // ни на что не влияет, и предлагать её к редактированию нельзя.
+            PromptKind.values().forEach { kind ->
+                dir.findChild(kind.localFileName)?.let { openInEditor(it) }
             }
         }
     }
 
-    override fun codexSystem(): String {
-        val customFile = File(promptsDir, CODEX_SYSTEM_FILE)
-        val base = if (customFile.exists() && customFile.canRead()) {
-            try {
-                customFile.readText()
-            } catch (_: Exception) {
-                loadResource(CODEX_SYSTEM_RESOURCE)
-                    ?: error("Missing classpath resource: $CODEX_SYSTEM_RESOURCE")
-            }
-        } else {
-            loadResource(CODEX_SYSTEM_RESOURCE)
-                ?: error("Missing classpath resource: $CODEX_SYSTEM_RESOURCE")
-        }
-        return buildString {
-            append(base)
-            append(INIT_BLOCK_CAPABILITY)
-            skillCatalogProvider?.invoke()?.takeIf { it.isNotBlank() }?.let {
-                appendLine()
-                appendLine()
-                append(it)
-            }
-        }
-    }
+    override fun claudeCodeSystem(): String = codingAgentPrompt(PromptKind.CLAUDE_CODE_SYSTEM)
 
-    private fun loadPrompt(fileName: String, default: String): String {
-        val customFile = File(promptsDir, fileName)
-
-        return if (customFile.exists() && customFile.canRead()) {
-            try {
-                customFile.readText()
-            } catch (e: Exception) {
-                default
-            }
-        } else {
-            default
-        }
-    }
+    override fun codexSystem(): String = codingAgentPrompt(PromptKind.CODEX_SYSTEM)
 
     private fun loadResource(path: String): String? {
         return PromptService::class.java.getResourceAsStream(path)
@@ -150,6 +80,45 @@ class PromptService(private val project: Project) : PromptPort {
         com.intellij.openapi.util.SystemInfo.isMac -> "macOS (sh)"
         else -> "Linux (sh)"
     }
+    private val layers: PromptLayers
+        get() = PromptLayers(promptsDir) { baseText(it) }
+
+    /**
+     * Полный базовый текст промпта — то, что уедет модели, если проект ничего не дополняет.
+     *
+     * [INIT_BLOCK_CAPABILITY] входит именно сюда, а не приклеивается к результату сборки:
+     * слой проекта обязан оставаться последним, иначе наша же поправка окажется после
+     * пользовательских правил и молча их перебьёт.
+     */
+    private fun baseText(kind: PromptKind): String = when (kind) {
+        PromptKind.CHAT_SYSTEM -> DEFAULT_CHAT_SYSTEM + INIT_BLOCK_CAPABILITY
+        PromptKind.PLANNING_SYSTEM -> DEFAULT_PLANNING_SYSTEM
+        PromptKind.CLAUDE_CODE_SYSTEM, PromptKind.CODEX_SYSTEM ->
+            (loadResource(kind.resourcePath)
+                ?: error("Missing classpath resource: ${kind.resourcePath}")) + INIT_BLOCK_CAPABILITY
+    }
+
+    /** Промпт кодинг-агента: база, слой проекта, затем каталог скиллов. */
+    private fun codingAgentPrompt(kind: PromptKind): String = buildString {
+        append(layers.compose(kind))
+        skillCatalogProvider?.invoke()?.takeIf { it.isNotBlank() }?.let {
+            appendLine()
+            appendLine()
+            append(it)
+        }
+    }
+
+    internal fun resyncPrompts(archiveLegacy: Boolean): PromptSyncReport {
+        if (!promptsDir.exists()) promptsDir.mkdirs()
+        val report = layers.sync(archiveLegacy)
+        // Файлы пишутся мимо VFS, и без явного обновления IDE покажет их не сразу —
+        // из настроек это выглядело бы как «кнопка ничего не сделала».
+        LocalFileSystem.getInstance().refreshAndFindFileByIoFile(promptsDir)?.refresh(false, true)
+        return report
+    }
+
+    /** Промпты старой схемы, которые больше не читаются. Пустой список — всё в порядке. */
+    internal fun legacyPromptFiles(): List<File> = layers.legacyFiles()
 }
 // ==================== Default Prompts ====================
 
