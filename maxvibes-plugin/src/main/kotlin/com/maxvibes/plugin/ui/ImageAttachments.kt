@@ -11,6 +11,7 @@ import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
 import java.util.Base64
 import javax.imageio.ImageIO
+import kotlin.math.roundToInt
 
 /**
  * Capture and normalization of images attached to a chat message (Claude Code mode).
@@ -129,8 +130,10 @@ object ImageAttachments {
         val longest = maxOf(src.width, src.height)
         if (longest <= MAX_SIDE) return src
         val k = MAX_SIDE.toDouble() / longest
-        val w = (src.width * k).toInt().coerceAtLeast(1)
-        val h = (src.height * k).toInt().coerceAtLeast(1)
+        // Truncation loses a pixel whenever the ratio has no exact binary form,
+        // so the longest side would never actually reach MAX_SIDE.
+        val w = (src.width * k).roundToInt().coerceAtLeast(1)
+        val h = (src.height * k).roundToInt().coerceAtLeast(1)
         val dst = BufferedImage(w, h, BufferedImage.TYPE_INT_RGB)
         val g = dst.createGraphics()
         g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)

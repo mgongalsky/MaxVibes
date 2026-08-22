@@ -15,6 +15,10 @@ import javax.swing.*
 import javax.swing.text.AbstractDocument
 import javax.swing.text.AttributeSet
 import javax.swing.text.DocumentFilter
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.CustomShortcutSet
+import com.intellij.openapi.actionSystem.KeyboardShortcut
+import com.intellij.openapi.project.DumbAwareAction
 
 data class InputSubmission(val text: String, val planOnly: Boolean, val dryRun: Boolean, val addHistory: Boolean)
 
@@ -74,6 +78,7 @@ class ChatInputPanel(
     private var hasImages = false
     private var hasOneShot = false
     private var suppressAutoAttach = false
+    private val pasteRouter = ClipboardPasteRouter()
 
     init {
         border = JBUI.Borders.empty(4, 8, 8, 8)
@@ -190,8 +195,55 @@ class ChatInputPanel(
     }
 
     fun showImages(images: List<AttachedImage>) {
-        hasImages = images.isNotEmpty(); imageChip.text = "\uD83D\uDDBC Images: ${images.size}"; imageChip.isVisible =
-            hasImages; refreshBar()
+        val thumbnailMarker = "maxvibes.image.thumbnail"
+        attachmentBar.components
+            .filter { component ->
+                (component as? JComponent)?.getClientProperty(thumbnailMarker) == true
+            }
+            .forEach(attachmentBar::remove)
+
+        hasImages = images.isNotEmpty()
+        imageChip.isVisible = false
+
+        images.forEachIndexed { index, image ->
+            val thumbnail = ImageAttachments.thumbnail(image)
+            val label = JBLabel(thumbnail).apply {
+                putClientProperty(thumbnailMarker, true)
+                cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+                toolTipText = "Open image ${index + 1}"
+                border = JBUI.Borders.compound(
+                    JBUI.Borders.customLine(JBColor.border(), 1),
+                    JBUI.Borders.empty(2)
+                )
+                addMouseListener(object : MouseAdapter() {
+                    override fun mouseClicked(event: MouseEvent) {
+                        val preview = ImageAttachments.thumbnail(image, 1200, 800)
+                        if (preview != null) {
+                            JOptionPane.showMessageDialog(
+                                this@ChatInputPanel,
+                                JBLabel(preview),
+                                "Attached image ${index + 1}",
+                                JOptionPane.PLAIN_MESSAGE
+                            )
+                        }
+                    }
+                })
+            }
+            attachmentBar.add(label)
+        }
+
+        if (images.isNotEmpty()) {
+            attachmentBar.add(JButton("\u2715").apply {
+                putClientProperty(thumbnailMarker, true)
+                toolTipText = "Remove all attached images"
+                margin = JBUI.insets(2)
+                addActionListener { onClearImages() }
+            })
+        }
+
+        refreshBar()
+        attachmentBar.revalidate()
+        attachmentBar.repaint()
     }
 
     fun showOneShot(label: String?) {
@@ -222,14 +274,43 @@ class ChatInputPanel(
         ).forEach { it.isEnabled = enabled }
     }
 
-    /**
-     * Every paste path in the IDE ends either in the component's TransferHandler or, when the
-     * platform writes into the Swing document directly, in the document itself. Both are covered:
-     * a huge text must never reach the wrapped text area, which would block the EDT on layout.
-     */
     private fun installPasteInterception() {
         inputArea.transferHandler?.let { inputArea.transferHandler = InterceptingTransferHandler(it) }
         (inputArea.document as? AbstractDocument)?.documentFilter = InterceptingDocumentFilter()
+
+        val pasteActionKey = javax.swing.text.DefaultEditorKit.pasteAction
+        val defaultPasteAction = inputArea.actionMap.get(pasteActionKey)
+        val interceptingPaste = object : AbstractAction() {
+            override fun actionPerformed(event: ActionEvent) {
+                val transferable = try {
+                    Toolkit.getDefaultToolkit().systemClipboard.getContents(inputArea)
+                } catch (_: Exception) {
+                    null
+                }
+                if (transferable == null || !captureTransfer(transferable)) {
+                    defaultPasteAction?.actionPerformed(event)
+                }
+            }
+        }
+        inputArea.actionMap.put(pasteActionKey, interceptingPaste)
+
+        // The IDE keymap owns Ctrl+V: $Paste is a TextComponentEditorAction, so it handles this
+        // JBTextArea itself, pastes the string flavor only and consumes the event before Swing
+        // sees it. A component-scoped action outranks the global keymap entry.
+        object : DumbAwareAction() {
+            override fun actionPerformed(e: AnActionEvent) {
+                interceptingPaste.actionPerformed(
+                    ActionEvent(inputArea, ActionEvent.ACTION_PERFORMED, pasteActionKey)
+                )
+            }
+        }.registerCustomShortcutSet(
+            CustomShortcutSet(
+                KeyboardShortcut(KeyStroke.getKeyStroke(KeyEvent.VK_V, InputEvent.CTRL_DOWN_MASK), null),
+                KeyboardShortcut(KeyStroke.getKeyStroke(KeyEvent.VK_V, InputEvent.META_DOWN_MASK), null),
+                KeyboardShortcut(KeyStroke.getKeyStroke(KeyEvent.VK_INSERT, InputEvent.SHIFT_DOWN_MASK), null)
+            ),
+            inputArea
+        )
     }
 
     private fun withoutAutoAttach(block: () -> Unit) {
@@ -247,15 +328,20 @@ class ChatInputPanel(
         return true
     }
 
-    private fun captureTransfer(transferable: Transferable): Boolean {
-        if (transferable.isDataFlavorSupported(DataFlavor.imageFlavor)) {
-            ImageAttachments.fromClipboard()?.let {
-                onImagePasted(it)
-                return true
+    private fun captureTransfer(transferable: Transferable): Boolean =
+        when (val route = pasteRouter.route(transferable, autoAttachText = !suppressAutoAttach)) {
+            is PasteRoute.AttachImage -> {
+                onImagePasted(route.image)
+                true
             }
+
+            is PasteRoute.AttachText -> {
+                onAttachText(route.text)
+                true
+            }
+
+            PasteRoute.PassThrough -> false
         }
-        return captureLargeText(TextClipboardAttachments.readText(transferable), false)
-    }
 
     private inner class InterceptingTransferHandler(private val delegate: TransferHandler) : TransferHandler() {
         override fun canImport(support: TransferSupport): Boolean = delegate.canImport(support)
