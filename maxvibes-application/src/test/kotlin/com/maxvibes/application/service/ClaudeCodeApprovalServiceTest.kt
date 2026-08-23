@@ -242,36 +242,6 @@ class ClaudeCodeApprovalServiceTest {
     }
 
     @Test
-    fun `invalid protocol modifications are dropped without repository call`() = runBlocking {
-        putSession(status = ClipboardSessionStatus.AWAITING_APPROVE)
-        pendingStore.hold(
-            sessionId = sessionId,
-            modifications = listOf(
-                InteractionModification(
-                    type = "",
-                    path = "file:src/New.kt",
-                    content = "class New"
-                ),
-                InteractionModification(
-                    type = "UNKNOWN",
-                    path = "file:src/Other.kt"
-                )
-            )
-        )
-
-        val outcome = service.approve(sessionId)
-
-        val completed = assertIs<ClaudeCodeStepResult.Completed>(
-            assertIs<CodingAgentApprovalOutcome.Immediate>(outcome).result
-        )
-        assertTrue(completed.success)
-        assertTrue(completed.modifications.isEmpty())
-        assertTrue(notifications.successes.isEmpty())
-        assertTrue(notifications.warnings.isEmpty())
-        coVerify(exactly = 0) { codeRepository.applyModifications(any()) }
-    }
-
-    @Test
     fun `approve requested views uses owned workspace and returns continuation`() = runBlocking {
         val assistantContent = "Need Foo"
         putSession(
@@ -602,5 +572,37 @@ class ClaudeCodeApprovalServiceTest {
             notifications.warnings
         )
         assertTrue(notifications.successes.isEmpty())
+    }
+
+    @Test
+    fun `unparseable protocol modifications are reported instead of dropped`() = runBlocking {
+        putSession(status = ClipboardSessionStatus.AWAITING_APPROVE)
+        pendingStore.hold(
+            sessionId = sessionId,
+            modifications = listOf(
+                InteractionModification(
+                    type = "",
+                    path = "file:src/New.kt",
+                    content = "class New"
+                ),
+                InteractionModification(
+                    type = "UNKNOWN",
+                    path = "file:src/Other.kt"
+                )
+            )
+        )
+
+        service.approve(sessionId)
+
+        // Запись с пустым типом отсеивает кодек — о ней уже сообщено там.
+        // Запись с неизвестным типом обязана доехать до репозитория и вернуться
+        // названной ошибкой, иначе модель решит, что правка применена.
+        coVerify(exactly = 1) {
+            codeRepository.applyModifications(
+                match { mods ->
+                    mods.singleOrNull().let { it is Modification.Unsupported && it.reason.contains("UNKNOWN") }
+                }
+            )
+        }
     }
 }

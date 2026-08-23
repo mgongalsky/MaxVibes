@@ -14,6 +14,10 @@ import org.junit.jupiter.api.Test
  * Pins the behaviour of [ProtocolConverter] exactly as it existed in the
  * duplicated private convert* functions of ClaudeCodeInteractionService and
  * ClipboardInteractionService (verified char-identical before extraction).
+ *
+ * A record the converter cannot turn into an operation is reported as
+ * [Modification.Unsupported] rather than dropped: a silently discarded entry
+ * left the model believing an edit had been applied.
  */
 class ProtocolConverterTest {
 
@@ -30,8 +34,13 @@ class ProtocolConverterTest {
     }
 
     @Test
-    fun `unknown type returns null`() {
-        assertNull(ProtocolConverter.convertModification(InteractionModification(type = "EXPLODE", path = "file:A.kt")))
+    fun `unknown type is reported as unsupported and names the type`() {
+        val result = ProtocolConverter.convertModification(
+            InteractionModification(type = "EXPLODE", path = "file:A.kt")
+        )
+        result as Modification.Unsupported
+        assertTrue(result.reason.contains("EXPLODE"), result.reason)
+        assertTrue(result.reason.contains("REPLACE_ELEMENT"), result.reason)
     }
 
     // ── convertModification: type mapping ──────────────────────────────────
@@ -97,6 +106,15 @@ class ProtocolConverterTest {
         result as Modification.CreateElement
         assertEquals(ElementKind.FUNCTION, result.elementKind)
         assertEquals(InsertPosition.LAST_CHILD, result.position)
+
+        val unrecognisable = ProtocolConverter.convertModification(
+            InteractionModification(
+                type = "CREATE_ELEMENT", path = "file:A.kt/class[A]",
+                content = "42", elementKind = "WIDGET"
+            )
+        )
+        unrecognisable as Modification.Unsupported
+        assertTrue(unrecognisable.reason.contains("elementKind"), unrecognisable.reason)
     }
 
     @Test
@@ -129,12 +147,12 @@ class ProtocolConverterTest {
     }
 
     @Test
-    fun `add import with no fqn returns null`() {
-        assertNull(
-            ProtocolConverter.convertModification(
-                InteractionModification(type = "ADD_IMPORT", path = "file:A.kt")
-            )
+    fun `add import with no fqn is reported as unsupported and names the field`() {
+        val result = ProtocolConverter.convertModification(
+            InteractionModification(type = "ADD_IMPORT", path = "file:A.kt")
         )
+        result as Modification.Unsupported
+        assertTrue(result.reason.contains("importPath"), result.reason)
     }
 
     @Test
@@ -149,28 +167,28 @@ class ProtocolConverterTest {
         ) as Modification.RemoveImport
         assertEquals("com.example.Old", fallback.importPath)
 
-        assertNull(
-            ProtocolConverter.convertModification(
-                InteractionModification(type = "REMOVE_IMPORT", path = "file:A.kt")
-            )
+        val missing = ProtocolConverter.convertModification(
+            InteractionModification(type = "REMOVE_IMPORT", path = "file:A.kt")
         )
+        missing as Modification.Unsupported
+        assertTrue(missing.reason.contains("importPath"), missing.reason)
     }
 
     // ── convertModification: refactorings ──────────────────────────────────
 
     @Test
-    fun `rename element trims name and requires it non-blank`() {
+    fun `rename element trims name and reports a blank one`() {
         val result = ProtocolConverter.convertModification(
             InteractionModification(type = "RENAME_ELEMENT", path = "file:A.kt/function[x]", newName = " newX ")
         )
         result as Modification.RenameElement
         assertEquals("newX", result.newName)
 
-        assertNull(
-            ProtocolConverter.convertModification(
-                InteractionModification(type = "RENAME_ELEMENT", path = "file:A.kt/function[x]", newName = "  ")
-            )
+        val blank = ProtocolConverter.convertModification(
+            InteractionModification(type = "RENAME_ELEMENT", path = "file:A.kt/function[x]", newName = "  ")
         )
+        blank as Modification.Unsupported
+        assertTrue(blank.reason.contains("newName"), blank.reason)
     }
 
     @Test
@@ -183,18 +201,18 @@ class ProtocolConverterTest {
     }
 
     @Test
-    fun `move element trims destination and requires it non-blank`() {
+    fun `move element trims destination and reports a blank one`() {
         val result = ProtocolConverter.convertModification(
             InteractionModification(type = "MOVE_ELEMENT", path = "file:A.kt", destination = " src/util ")
         )
         result as Modification.MoveElement
         assertEquals("src/util", result.destination)
 
-        assertNull(
-            ProtocolConverter.convertModification(
-                InteractionModification(type = "MOVE_ELEMENT", path = "file:A.kt", destination = "")
-            )
+        val blank = ProtocolConverter.convertModification(
+            InteractionModification(type = "MOVE_ELEMENT", path = "file:A.kt", destination = "")
         )
+        blank as Modification.Unsupported
+        assertTrue(blank.reason.contains("destination"), blank.reason)
     }
 
     // ── convertCommand ─────────────────────────────────────────────────────

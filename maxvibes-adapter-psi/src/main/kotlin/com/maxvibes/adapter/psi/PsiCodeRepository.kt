@@ -115,11 +115,38 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
             is Modification.RenameElement -> renameElement(modification)
             is Modification.SafeDelete -> safeDeleteElement(modification)
             is Modification.MoveElement -> moveElement(modification)
+
+            // Запись, которую не удалось разобрать. Раньше она отсеивалась ещё до репозитория
+            // и модель не узнавала, что правка не применена. Теперь причина едет по тому же
+            // тракту отчёта, что и любая другая неудача.
+            is Modification.Unsupported -> ModificationResult.Failure(
+                modification = modification,
+                error = ModificationError.InvalidOperation(modification.reason)
+            )
         }
     }
 
     override suspend fun applyModifications(modifications: List<Modification>): List<ModificationResult> {
         if (modifications.isEmpty()) return emptyList()
+
+        // Нераспознанная запись — ошибка формата, а не сломанная правка: применять в ней нечего.
+        // Если пустить её в батч, она вернёт Failure и откатит все правильные правки рядом,
+        // поэтому отделяем её заранее и подставляем объяснение на её место в отчёте.
+        if (modifications.any { it is Modification.Unsupported }) {
+            val applicable = modifications.filterNot { it is Modification.Unsupported }
+            val applied = if (applicable.isEmpty()) emptyList() else applyModifications(applicable)
+            val appliedResults = applied.iterator()
+            return modifications.map { modification ->
+                if (modification is Modification.Unsupported) {
+                    ModificationResult.Failure(
+                        modification = modification,
+                        error = ModificationError.InvalidOperation(modification.reason)
+                    )
+                } else {
+                    appliedResults.next()
+                }
+            }
+        }
 
         val refactorings = modifications.filter {
             it is Modification.RenameElement ||
@@ -480,6 +507,20 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
     }
 
     private fun replaceElement(mod: Modification.ReplaceElement): ModificationResult {
+        // Навигатор на пути без сегментов возвращает сам файл — это нужно CREATE_ELEMENT,
+        // но здесь означало бы замену всего файла текстом одного объявления.
+        if (mod.targetPath.segments.isEmpty()) {
+            return ModificationResult.Failure(
+                modification = mod,
+                error = ModificationError.InvalidOperation(
+                    "REPLACE_ELEMENT needs the address of an element, but '${mod.targetPath}' names a file. " +
+                            "Put the element segments into path itself, e.g. " +
+                            "file:path/To/File.kt/class[Foo]/init — there is no separate elementPath field. " +
+                            "To rewrite the whole file use REPLACE_FILE."
+                )
+            )
+        }
+
         val targetKind = mod.targetPath.segments.lastOrNull()?.kind?.lowercase()
         if (targetKind == "constructor") {
             return ModificationResult.Failure(
@@ -532,6 +573,18 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
     }
 
     private fun deleteElement(mod: Modification.DeleteElement): ModificationResult {
+        // Путь без сегментов резолвится в сам файл, и удаление снесло бы файл целиком.
+        if (mod.targetPath.segments.isEmpty()) {
+            return ModificationResult.Failure(
+                modification = mod,
+                error = ModificationError.InvalidOperation(
+                    "DELETE_ELEMENT needs the address of an element, but '${mod.targetPath}' names a file. " +
+                            "Put the element segments into path itself, e.g. " +
+                            "file:path/To/File.kt/class[Foo]/function[bar] — there is no separate elementPath field."
+                )
+            )
+        }
+
         val element = runReadAction { navigator.findElement(mod.targetPath) }
             ?: return ModificationResult.Failure(
                 modification = mod,
@@ -827,6 +880,7 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
         }
         if (app.isDispatchThread) action() else app.invokeAndWait(action)
     }
+
     private fun verifyPostcondition(modification: Modification): String? = runReadAction {
         fun normalized(text: String): String = text.filterNot { it.isWhitespace() }
 
@@ -855,10 +909,18 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
 
             is Modification.ReplaceElement -> {
                 val element = navigator.findElement(modification.targetPath)
-                    ?: return@runReadAction "Replaced element cannot be resolved: ${modification.targetPath.value}"
-                if (normalized(element.text) != normalized(modification.newContent)) {
-                    "Element content does not match REPLACE_ELEMENT postcondition: ${modification.targetPath.value}"
-                } else null
+                if (element != null && normalized(element.text) == normalized(modification.newContent)) {
+                    null
+                } else {
+                    // Замена вправе изменить имя объявления — тогда по старому пути элемента
+                    // больше нет, и это успех, а не провал. Проверяем по тексту файла.
+                    val file = navigator.findFile(ElementPath.file(modification.targetPath.filePath))
+                        ?: return@runReadAction "Target file disappeared after REPLACE_ELEMENT: " +
+                                modification.targetPath.filePath
+                    if (!normalized(file.text).contains(normalized(modification.newContent))) {
+                        "Element content does not match REPLACE_ELEMENT postcondition: ${modification.targetPath.value}"
+                    } else null
+                }
             }
 
             is Modification.DeleteElement -> {
@@ -901,6 +963,10 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
                     "Import was not removed: ${modification.importPath}"
                 } else null
             }
+
+            // Ничего не применялось — проверять нечего. Это не «проверку ещё не написали»,
+            // как в ветке ниже, а отсутствие самого действия.
+            is Modification.Unsupported -> null
 
             is Modification.RenameElement,
             is Modification.SafeDelete,

@@ -33,4 +33,9 @@ fun Modification.toCategory(): ModificationCategory = when (this) {
 
     is Modification.AddImport, is Modification.RemoveImport ->
         ModificationCategory.IMPORT
+
+    // Отклонённая запись сюда не доходит: в историю пишутся только применённые правки.
+    // Ветка существует, чтобы when оставался исчерпывающим и ловил следующий новый вариант.
+    is Modification.Unsupported ->
+        ModificationCategory.FILE_LEVEL
 }

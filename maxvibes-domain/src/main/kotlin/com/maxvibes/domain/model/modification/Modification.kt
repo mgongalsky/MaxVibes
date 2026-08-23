@@ -103,6 +103,21 @@ sealed interface Modification {
         override val targetPath: ElementPath,
         val destination: String
     ) : Modification
+
+    /**
+     * Запись протокола, которую не удалось превратить в операцию: неизвестный тип,
+     * недостающее обязательное поле.
+     *
+     * Существует ради отчётности, а не ради исполнения. Раньше такая запись
+     * возвращалась как `null` и молча выбрасывалась между разбором и применением:
+     * модель не узнавала, что правка не применена, и запускала проверки поверх
+     * неизменённого кода. [reason] пишется для модели — он должен говорить, как
+     * прислать запись правильно.
+     */
+    data class Unsupported(
+        override val targetPath: ElementPath,
+        val reason: String
+    ) : Modification
 }
 
 sealed interface ModificationResult {

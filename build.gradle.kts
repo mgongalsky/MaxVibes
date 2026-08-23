@@ -8,7 +8,7 @@ plugins {
 
 allprojects {
     group = "com.maxvibes"
-    version = "1.2.16"
+    version = "1.2.17"
 
     repositories {
         mavenCentral()

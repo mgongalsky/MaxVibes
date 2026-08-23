@@ -46,7 +46,9 @@ tasks {
     }
 
     patchPluginXml {
-        version.set("1.2.16")
+        // Версия проекта — единственный источник: раньше её приходилось менять здесь
+        // и в корневом build.gradle.kts, и места расходились.
+        version.set(project.version.toString())
         sinceBuild.set("231")
         untilBuild.set("262.*")
     }

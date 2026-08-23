@@ -12,6 +12,10 @@ import org.junit.jupiter.api.Test
  * Агент, которому нужно было заменить обычный markdown-файл, перебрал `kind`,
  * `operation` и `filePath` и не применил ни одной правки: кодек читал только
  * канонические имена и отбрасывал запись, ничего не сообщая о причине.
+ *
+ * Отдельная группа — склейка `elementPath` с путём файла. Такого поля в протоколе
+ * нет, и без склейки операция над элементом приходила с адресом файла: REPLACE_ELEMENT
+ * молча превращался в перезапись всего файла.
  */
 class JsonInteractionProtocolCodecEnvelopeTest {
 
@@ -108,5 +112,75 @@ class JsonInteractionProtocolCodecEnvelopeTest {
         val entry = response.malformedModifications.single()
         assertTrue(entry.contains("REPLACE_FILE"), entry)
         assertTrue(entry.contains("content"), entry)
+    }
+
+    @Test
+    fun `an element path sent beside a file path is joined into one address`() {
+        val response = decodeSingle(
+            """{"kind": "REPLACE_ELEMENT", "path": "core/src/BattleScreen.kt",
+                 "elementPath": "class[BattleScreen]/init[0]", "newText": "init { }"}"""
+        )
+
+        assertNotNull(response)
+        assertEquals(
+            "file:core/src/BattleScreen.kt/class[BattleScreen]/init[0]",
+            response!!.modifications.single().path
+        )
+    }
+
+    @Test
+    fun `a path that already addresses an element wins over elementPath`() {
+        val response = decodeSingle(
+            """{"type": "REPLACE_ELEMENT", "path": "file:core/src/BattleScreen.kt/class[BattleScreen]/function[draw]",
+                 "elementPath": "class[BattleScreen]/init[0]", "content": "fun draw() {}"}"""
+        )
+
+        assertNotNull(response)
+        assertEquals(
+            "file:core/src/BattleScreen.kt/class[BattleScreen]/function[draw]",
+            response!!.modifications.single().path
+        )
+    }
+
+    @Test
+    fun `joining does not double the file prefix`() {
+        val response = decodeSingle(
+            """{"type": "REPLACE_ELEMENT", "path": "file:core/src/BattleScreen.kt",
+                 "elementPath": "class[BattleScreen]/init", "content": "init { }"}"""
+        )
+
+        assertNotNull(response)
+        assertEquals(
+            "file:core/src/BattleScreen.kt/class[BattleScreen]/init",
+            response!!.modifications.single().path
+        )
+    }
+
+    @Test
+    fun `stray slashes around the element path are trimmed`() {
+        val response = decodeSingle(
+            """{"type": "REPLACE_ELEMENT", "path": "core/src/BattleScreen.kt/",
+                 "elementPath": "/class[BattleScreen]/init/", "content": "init { }"}"""
+        )
+
+        assertNotNull(response)
+        assertEquals(
+            "file:core/src/BattleScreen.kt/class[BattleScreen]/init",
+            response!!.modifications.single().path
+        )
+    }
+
+    @Test
+    fun `an import fqn sent as import is accepted`() {
+        val response = decodeSingle(
+            """{"kind": "ADD_IMPORT", "path": "file:src/A.kt",
+                 "import": "com.example.battle.BattleSimulationResult"}"""
+        )
+
+        assertNotNull(response)
+        assertEquals(
+            "com.example.battle.BattleSimulationResult",
+            response!!.modifications.single().importPath
+        )
     }
 }

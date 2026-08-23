@@ -21,7 +21,12 @@ import com.maxvibes.domain.model.interaction.InteractionCheck
  */
 object ProtocolConverter {
 
+    private const val MISSING_IMPORT_FQN =
+        "the import operation needs the fully qualified name in the importPath field " +
+                "(the name import is also accepted), e.g. \"importPath\": \"com.example.Foo\"."
+
     fun convertModification(mod: InteractionModification): Modification? {
+        // null остаётся только там, где называть нечего и о чём уже отчитался кодек.
         if (mod.type.isBlank() || mod.path.isBlank()) return null
         val elementPath = ElementPath(mod.path)
         val parsedElementKind = runCatching {
@@ -41,42 +46,74 @@ object ProtocolConverter {
                 } else {
                     parsedElementKind
                 }
-                if (elementKind == ElementKind.FILE) return null
-                Modification.CreateElement(
-                    targetPath = elementPath,
-                    elementKind = elementKind,
-                    content = mod.content,
-                    position = position
-                )
+                if (elementKind == ElementKind.FILE) {
+                    Modification.Unsupported(
+                        elementPath,
+                        "CREATE_ELEMENT could not tell what kind of declaration this is. " +
+                                "Send elementKind (FUNCTION, CLASS, PROPERTY, OBJECT, INTERFACE) " +
+                                "or start content with the declaration keyword."
+                    )
+                } else {
+                    Modification.CreateElement(
+                        targetPath = elementPath,
+                        elementKind = elementKind,
+                        content = mod.content,
+                        position = position
+                    )
+                }
             }
 
             "REPLACE_ELEMENT" -> Modification.ReplaceElement(targetPath = elementPath, newContent = mod.content)
             "DELETE_ELEMENT" -> Modification.DeleteElement(targetPath = elementPath)
             "ADD_IMPORT" -> {
                 val fqn = mod.importPath.ifBlank { mod.content.removePrefix("import ").trim() }
-                if (fqn.isBlank()) null else Modification.AddImport(targetPath = elementPath, importPath = fqn)
+                if (fqn.isBlank()) {
+                    Modification.Unsupported(elementPath, MISSING_IMPORT_FQN)
+                } else {
+                    Modification.AddImport(targetPath = elementPath, importPath = fqn)
+                }
             }
 
             "REMOVE_IMPORT" -> {
                 val fqn = mod.importPath.ifBlank { mod.content.removePrefix("import ").trim() }
-                if (fqn.isBlank()) null else Modification.RemoveImport(targetPath = elementPath, importPath = fqn)
+                if (fqn.isBlank()) {
+                    Modification.Unsupported(elementPath, MISSING_IMPORT_FQN)
+                } else {
+                    Modification.RemoveImport(targetPath = elementPath, importPath = fqn)
+                }
             }
 
             "RENAME_ELEMENT" -> {
                 val newName = mod.newName.trim()
-                if (newName.isBlank()) null else Modification.RenameElement(targetPath = elementPath, newName = newName)
+                if (newName.isBlank()) {
+                    Modification.Unsupported(
+                        elementPath,
+                        "RENAME_ELEMENT needs the new name in the newName field."
+                    )
+                } else {
+                    Modification.RenameElement(targetPath = elementPath, newName = newName)
+                }
             }
 
             "SAFE_DELETE" -> Modification.SafeDelete(targetPath = elementPath)
             "MOVE_ELEMENT" -> {
                 val destination = mod.destination.trim()
-                if (destination.isBlank()) null else Modification.MoveElement(
-                    targetPath = elementPath,
-                    destination = destination
-                )
+                if (destination.isBlank()) {
+                    Modification.Unsupported(
+                        elementPath,
+                        "MOVE_ELEMENT needs the target directory in the destination field."
+                    )
+                } else {
+                    Modification.MoveElement(targetPath = elementPath, destination = destination)
+                }
             }
 
-            else -> null
+            else -> Modification.Unsupported(
+                elementPath,
+                "unknown modification type '${mod.type}'. Supported types: CREATE_FILE, REPLACE_FILE, " +
+                        "DELETE_FILE, CREATE_ELEMENT, REPLACE_ELEMENT, DELETE_ELEMENT, ADD_IMPORT, " +
+                        "REMOVE_IMPORT, RENAME_ELEMENT, SAFE_DELETE, MOVE_ELEMENT."
+            )
         }
     }
 

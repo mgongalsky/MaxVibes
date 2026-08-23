@@ -123,11 +123,37 @@ class PyCodeRepository(private val project: Project) : CodeRepository {
             is Modification.RenameElement -> renameElement(modification)
             is Modification.SafeDelete -> safeDeleteElement(modification)
             is Modification.MoveElement -> moveElement(modification)
+
+            // Запись, которую не удалось разобрать. Раньше она отсеивалась ещё до репозитория
+            // и модель не узнавала, что правка не применена.
+            is Modification.Unsupported -> ModificationResult.Failure(
+                modification = modification,
+                error = ModificationError.InvalidOperation(modification.reason)
+            )
         }
     }
 
     override suspend fun applyModifications(modifications: List<Modification>): List<ModificationResult> {
         if (modifications.isEmpty()) return emptyList()
+
+        // Нераспознанная запись — ошибка формата, а не сломанная правка: применять в ней нечего.
+        // Если пустить её в батч, она вернёт Failure и откатит все правильные правки рядом,
+        // поэтому отделяем её заранее и подставляем объяснение на её место в отчёте.
+        if (modifications.any { it is Modification.Unsupported }) {
+            val applicable = modifications.filterNot { it is Modification.Unsupported }
+            val applied = if (applicable.isEmpty()) emptyList() else applyModifications(applicable)
+            val appliedResults = applied.iterator()
+            return modifications.map { modification ->
+                if (modification is Modification.Unsupported) {
+                    ModificationResult.Failure(
+                        modification = modification,
+                        error = ModificationError.InvalidOperation(modification.reason)
+                    )
+                } else {
+                    appliedResults.next()
+                }
+            }
+        }
 
         val refactorings = modifications.filter {
             it is Modification.RenameElement ||
@@ -569,6 +595,7 @@ class PyCodeRepository(private val project: Project) : CodeRepository {
         if (app.isDispatchThread) action() else app.invokeAndWait(action)
         return rollbackError
     }
+
     private fun verifyPostcondition(modification: Modification): String? = runReadAction {
         fun normalized(text: String): String = text.filterNot { it.isWhitespace() }
         fun hasImport(fileText: String, importPath: String): Boolean {
@@ -612,10 +639,17 @@ class PyCodeRepository(private val project: Project) : CodeRepository {
 
             is Modification.ReplaceElement -> {
                 val element = navigator.findElement(modification.targetPath)
-                    ?: return@runReadAction "Replaced Python element cannot be resolved"
-                if (normalized(element.text) != normalized(modification.newContent)) {
-                    "Python element does not match REPLACE_ELEMENT postcondition"
-                } else null
+                if (element != null && normalized(element.text) == normalized(modification.newContent)) {
+                    null
+                } else {
+                    // Замена вправе изменить имя объявления — тогда по старому пути элемента
+                    // больше нет, и это успех, а не провал. Проверяем по тексту файла.
+                    val file = navigator.findFile(ElementPath.file(modification.targetPath.filePath))
+                        ?: return@runReadAction "Python target file disappeared after REPLACE_ELEMENT"
+                    if (!normalized(file.text).contains(normalized(modification.newContent))) {
+                        "Python element does not match REPLACE_ELEMENT postcondition"
+                    } else null
+                }
             }
 
             is Modification.DeleteElement -> {
@@ -633,6 +667,9 @@ class PyCodeRepository(private val project: Project) : CodeRepository {
                     ?: return@runReadAction "Python import target disappeared"
                 if (hasImport(file.text, modification.importPath)) "Python import was not removed" else null
             }
+
+            // Ничего не применялось — проверять нечего.
+            is Modification.Unsupported -> null
 
             is Modification.RenameElement,
             is Modification.SafeDelete,

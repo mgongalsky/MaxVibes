@@ -18,6 +18,7 @@ import com.maxvibes.domain.model.planning.DiagramNodeKind
 import com.maxvibes.domain.model.planning.DiagramEdgeKind
 import com.maxvibes.domain.model.turn.TurnIntent
 import com.maxvibes.domain.model.check.CheckRequest
+import com.maxvibes.domain.model.code.ElementPath
 
 /**
  * Pure [InteractionProtocolCodec] implementation backed by kotlinx.serialization.
@@ -311,17 +312,6 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
         return TurnIntent.values().firstOrNull { it.name.equals(raw.trim(), ignoreCase = true) }
     }
 
-    /**
-     * Парсит одну запись `modifications[]`.
-     *
-     * Тип, путь и содержимое читаются одинаково — по списку допустимых имён
-     * ([InteractionRequestSchema.MOD_TYPE_KEYS], [InteractionRequestSchema.MOD_PATH_KEYS],
-     * [InteractionRequestSchema.MOD_CONTENT_KEYS]), каноническое имя в каждом первое.
-     *
-     * Возвращает `null`, если тип или путь не нашлись ни под одним из имён, а также
-     * если операция обязана нести код, но его нет. Отбрасывание записи фиксирует
-     * вызывающий код — тихо терять правку нельзя.
-     */
     private fun parseModification(obj: JsonObject): InteractionModification? {
         val type = InteractionRequestSchema.MOD_TYPE_KEYS.firstNotNullOfOrNull { key ->
             (obj[key] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
@@ -335,15 +325,30 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
         val needsContent = type.uppercase() in
                 setOf("CREATE_ELEMENT", "REPLACE_ELEMENT", "CREATE_FILE", "REPLACE_FILE")
         if (needsContent && content.isBlank()) return null
+
+        // Модель регулярно выносит адрес элемента в отдельное поле, которого в протоколе нет.
+        // Тогда path указывает на файл, а операция над элементом означает операцию над файлом —
+        // ровно так терялись файлы целиком. Склейка возвращает замысел; если path уже адресует
+        // элемент, побеждает он.
+        val elementSuffix = (obj[InteractionRequestSchema.MOD_ELEMENT_PATH] as? JsonPrimitive)
+            ?.contentOrNull?.trim()?.trim('/')?.takeIf { it.isNotEmpty() }
+        val fullPath = if (elementSuffix != null && ElementPath(path).segments.isEmpty()) {
+            "file:" + path.removePrefix("file:").trimEnd('/') + "/" + elementSuffix
+        } else {
+            path
+        }
+
         return InteractionModification(
             type = type,
-            path = path,
+            path = fullPath,
             content = content,
             elementKind = obj[InteractionRequestSchema.MOD_ELEMENT_KIND]?.jsonPrimitive?.contentOrNull
                 ?: InteractionRequestSchema.DEFAULT_ELEMENT_KIND,
             position = obj[InteractionRequestSchema.MOD_POSITION]?.jsonPrimitive?.contentOrNull
                 ?: InteractionRequestSchema.DEFAULT_POSITION,
-            importPath = obj[InteractionRequestSchema.MOD_IMPORT_PATH]?.jsonPrimitive?.contentOrNull ?: "",
+            importPath = InteractionRequestSchema.MOD_IMPORT_PATH_KEYS.firstNotNullOfOrNull { key ->
+                (obj[key] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+            } ?: "",
             newName = obj[InteractionRequestSchema.MOD_NEW_NAME]?.jsonPrimitive?.contentOrNull ?: "",
             destination = obj[InteractionRequestSchema.MOD_DESTINATION]?.jsonPrimitive?.contentOrNull ?: ""
         )

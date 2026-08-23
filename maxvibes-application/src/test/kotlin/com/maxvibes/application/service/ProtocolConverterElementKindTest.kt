@@ -4,8 +4,8 @@ import com.maxvibes.domain.model.code.ElementKind
 import com.maxvibes.domain.model.interaction.InteractionModification
 import com.maxvibes.domain.model.modification.Modification
 import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Assertions.assertTrue
 
 class ProtocolConverterElementKindTest {
 
@@ -51,15 +51,15 @@ class ProtocolConverterElementKindTest {
 
     @Test
     fun `unrecognisable create element content is rejected before PSI`() {
-        assertNull(
-            ProtocolConverter.convertModification(
-                InteractionModification(
-                    type = "CREATE_ELEMENT",
-                    path = "file:A.kt/class[A]",
-                    content = "// nothing to declare here",
-                    elementKind = "FILE"
-                )
+        val result = ProtocolConverter.convertModification(
+            InteractionModification(
+                type = "CREATE_ELEMENT",
+                path = "file:A.kt/class[A]",
+                content = "// nothing to declare here",
+                elementKind = "FILE"
             )
         )
+        result as Modification.Unsupported
+        assertTrue(result.reason.contains("elementKind"), result.reason)
     }
 }
