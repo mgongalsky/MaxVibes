@@ -48,20 +48,32 @@ class AgentTurnOrchestrator(
     }
 
     /**
+     * Возвращает ход с заново открытым счётом автономных итераций — но только
+     * если автономное продолжение вообще разрешено: иначе одно ручное решение
+     * молча включало бы режим, которого пользователь не включал.
+     *
+     * Правило вынесено сюда, а не оставлено внутри [resumeAfterBudgetExhaustion],
+     * потому что вызывающих у него двое: ручное разрешение припаркованного шага
+     * и снятие хода с ручника после поднятия доверия. Продублировать проверку
+     * значило бы завести второе место, где сессионный тумблер и политика проекта
+     * могут разъехаться.
+     */
+    fun refillIfAllowed(turn: AgentTurn): AgentTurn {
+        if (decideApproval(turn.sessionId, AgentActionKind.CONTINUATION) == ApprovalDecision.Ask) {
+            return turn
+        }
+        return turn.refillBudget()
+    }
+
+    /**
      * Человек разблокировал ход, остановленный именно исчерпанным бюджетом.
      *
-     * Бюджет восстанавливается только если автономное продолжение вообще
-     * разрешено: иначе один ручной Approve молча включал бы автономный режим,
-     * которого пользователь не включал. Разрешение спрашивается у той же точки,
-     * что и всегда, поэтому сессионный тумблер и политика проекта учитываются
-     * оба и не могут разъехаться.
+     * Само разрешение шага бюджет не тратит, а условие пополнения живёт в
+     * [refillIfAllowed] — там же, откуда им пользуется снятие хода с ручника.
      */
     fun resumeAfterBudgetExhaustion(turn: AgentTurn, action: AgentActionKind): TurnTransition {
         val resumed = resumeAfterHuman(turn, action)
-        if (decideApproval(turn.sessionId, AgentActionKind.CONTINUATION) == ApprovalDecision.Ask) {
-            return resumed
-        }
-        return resumed.copy(turn = resumed.turn.refillBudget())
+        return resumed.copy(turn = refillIfAllowed(resumed.turn))
     }
 
     /**

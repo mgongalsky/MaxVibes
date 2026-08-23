@@ -28,6 +28,7 @@ import com.maxvibes.plugin.service.TerminalUsageLogWriter
 import com.maxvibes.domain.model.command.CommandRequest
 import com.maxvibes.plugin.service.TextAttachmentWriter
 import com.maxvibes.plugin.service.AttachmentNote
+import com.maxvibes.domain.model.turn.AwaitReason
 
 /** Composition root behind [ChatMessageController]. */
 internal class ChatMessageControllerComposition(
@@ -127,6 +128,7 @@ internal class ChatMessageControllerComposition(
                     null -> claudeCodeDispatcher.continueTurnAutomatically(sessionId)
                 }
             },
+            onParked = { _, reason, _ -> announceParked(reason) },
             budget = {
                 AutonomyBudget(
                     ApprovalPolicySettings.getInstance(project).loadAutonomousIterations()
@@ -152,6 +154,11 @@ internal class ChatMessageControllerComposition(
                 )
             },
             onBatchComplete = { sessionId, mode, formatted ->
+                // Пузырь команды — такой же ответ человека, как кнопка Approve, и
+                // ход должен об этом узнать: иначе исчерпанный бюджет никогда не
+                // восстановится. Автоматически запущенная пачка сюда тоже приходит,
+                // но у неё парковки нет и вызов молча выходит.
+                turnAutopilot.onHumanApproved(sessionId)
                 commandResultRouter.route(sessionId, mode, formatted)
             }
         )
@@ -174,6 +181,10 @@ internal class ChatMessageControllerComposition(
                 )
             },
             onBatchComplete = { sessionId, mode, formatted ->
+                // Отклонённый или отменённый билд — тоже решение человека. Без этого
+                // вызова ход, припаркованный по лимиту автономии, оставался бы
+                // припаркованным до конца сессии.
+                turnAutopilot.onHumanApproved(sessionId)
                 checkResultRouter.route(sessionId, mode, formatted)
             }
         )
@@ -533,5 +544,23 @@ internal class ChatMessageControllerComposition(
             AttachmentNote.format(saved)
         )
         callbacks.addAttachmentBubble(saved.relativePath, saved.caption)
+    }
+
+    /**
+     * Объясняет остановку автономной работы.
+     *
+     * Про политику и вопросы агента молчим: там на экране уже стоит пузырь с
+     * кнопками или форма вопроса, и вторая строка на каждый шаг превратила бы
+     * сигнал в фон. Молча останавливался только исчерпанный бюджет — со стороны
+     * это выглядело как поломка автономии, а не как её лимит.
+     */
+    private fun announceParked(reason: AwaitReason) {
+        if (reason != AwaitReason.BUDGET_EXHAUSTED) return
+        val limit = ApprovalPolicySettings.getInstance(project).loadAutonomousIterations()
+        callbacks.appendToChat(
+            "\u23F8\uFE0F Лимит автономии исчерпан: $limit шаг(ов) подряд без человека. " +
+                    "Подтвердите следующий шаг или напишите сообщение — счёт начнётся заново."
+        )
+        callbacks.setStatus("\u23F8\uFE0F Лимит автономии ($limit) исчерпан")
     }
 }

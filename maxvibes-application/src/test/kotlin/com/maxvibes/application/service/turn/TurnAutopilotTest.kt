@@ -262,4 +262,59 @@ class TurnAutopilotTest {
         assertEquals(AwaitReason.BUDGET_EXHAUSTED, parkedReason)
         assertEquals(AgentActionKind.MODIFICATION, sut.parkedAction("s1"))
     }
+
+    @Test
+    fun `raising trust after a budget stop hands out a new cycle`() {
+        val continued = mutableListOf<Pair<String, AgentActionKind?>>()
+        val sut = TurnAutopilot(
+            orchestrator(budget = AutonomyBudget(1)),
+            continueTurn = { sessionId, action -> continued += sessionId to action }
+        )
+        sut.startTurn("s1")
+        sut.onStep("s1", TurnSignal.Pending(AgentActionKind.CONTINUATION))
+        val exhausted = sut.onStep("s1", TurnSignal.Pending(AgentActionKind.CONTINUATION))
+        assertEquals(
+            TurnOutcome.AwaitHuman(AwaitReason.BUDGET_EXHAUSTED, AgentActionKind.CONTINUATION),
+            exhausted
+        )
+
+        val outcome = sut.resumeParked("s1")
+
+        assertTrue(
+            outcome is TurnOutcome.Continue,
+            "a turn stopped by the limit must get its budget back, or the trust toggle does nothing"
+        )
+        assertEquals(2, continued.size)
+        assertNull(sut.parkedAction("s1"))
+    }
+
+    @Test
+    fun `resuming a budget stop refills nothing when continuation is not allowed`() {
+        var continuationAllowed = true
+        val sut = TurnAutopilot(
+            orchestrator(
+                budget = AutonomyBudget(1),
+                decide = { _, kind ->
+                    if (kind == AgentActionKind.CONTINUATION && !continuationAllowed) {
+                        ApprovalDecision.Ask
+                    } else {
+                        allow
+                    }
+                }
+            ),
+            continueTurn = { _, _ -> }
+        )
+        sut.startTurn("s1")
+        sut.onStep("s1", TurnSignal.Pending(AgentActionKind.CONTINUATION))
+        sut.onStep("s1", TurnSignal.Pending(AgentActionKind.MODIFICATION))
+
+        continuationAllowed = false
+        val outcome = sut.resumeParked("s1")
+
+        assertEquals(
+            TurnOutcome.AwaitHuman(AwaitReason.BUDGET_EXHAUSTED, AgentActionKind.MODIFICATION),
+            outcome,
+            "unparking must not switch on an autonomy the policy forbids"
+        )
+    }
 }

@@ -104,4 +104,24 @@ class AutonomyBudgetRefillTest {
         assertEquals(0, resumed.autonomousIterationCount)
         assertEquals(2, resumed.steps.size)
     }
+
+    @Test
+    fun `approve on a check stopped by the budget starts a new cycle`() {
+        val sut = TurnAutopilot(orchestrator(budget = AutonomyBudget(1)), continueTurn = { _, _ -> })
+        sut.startTurn("s1")
+        sut.onStep("s1", TurnSignal.Pending(AgentActionKind.CONTINUATION))
+        val exhausted = sut.onStep("s1", TurnSignal.Pending(AgentActionKind.BUILD))
+        assertEquals(
+            TurnOutcome.AwaitHuman(AwaitReason.BUDGET_EXHAUSTED, AgentActionKind.BUILD),
+            exhausted
+        )
+
+        sut.onHumanApproved("s1")
+        val outcome = sut.onStep("s1", TurnSignal.Pending(AgentActionKind.CONTINUATION))
+
+        assertTrue(
+            outcome is TurnOutcome.Continue,
+            "resolving a check bubble is a manual unblock and must give the budget back"
+        )
+    }
 }
