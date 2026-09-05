@@ -75,15 +75,23 @@ internal class CodingAgentViewResolver(
         if (paths.isEmpty()) return emptyMap()
 
         log("Gathering ${paths.size} files (fresh read)...")
-        notificationPort.showProgress(
-            "Gathering ${paths.size} files...",
-            0.4
-        )
+        notificationPort.showProgress("Gathering ${paths.size} files...", 0.4)
 
         return when (val result = contextProvider.gatherFiles(paths)) {
             is Result.Failure -> {
                 log("ERROR: Failed to gather files: ${result.error.message}")
-                null
+                if (result.error is com.maxvibes.application.port.output.ContextError.SizeLimitExceeded) {
+                    // Return feedback so approval can finish and the agent can narrow its request.
+                    // No file content was returned by this failed batch; do not cache these errors.
+                    paths.distinct().associateWith { path ->
+                        "// ERROR: FULL view was not returned for: $path\n" +
+                                "// Requested file batch exceeded the size limit: ${result.error.message}\n" +
+                                "// No FULL file contents from this batch were returned. Request fewer files, " +
+                                "use SIGNATURES or ELEMENT for code, or request a bounded log excerpt through commands."
+                    }
+                } else {
+                    null
+                }
             }
 
             is Result.Success -> {
