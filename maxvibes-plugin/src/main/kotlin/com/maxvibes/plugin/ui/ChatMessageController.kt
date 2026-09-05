@@ -106,4 +106,6 @@ class ChatMessageController(
     fun clearOneShot() = composition.clearOneShot()
     fun isAllowAllApprovals(): Boolean = composition.isAllowAllApprovals()
     fun setAllowAllApprovals(enabled: Boolean) = composition.setAllowAllApprovals(enabled)
+    fun hasParkedContinuation(sessionId: String): Boolean =
+        composition.hasParkedContinuation(sessionId)
 }

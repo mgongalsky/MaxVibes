@@ -318,7 +318,14 @@ class ChatPanelComposition(
         environmentActions.refreshToolWindowState()
     }
 
-    private fun buildState(): ChatPanelState = stateFactory.build()
+    private fun buildState(): ChatPanelState {
+        val state = stateFactory.build()
+        val continuationVisible = state.mode == InteractionMode.CLAUDE_CODE &&
+                messageController.hasParkedContinuation(chatTreeService.getActiveSession().id)
+        return state.copy(
+            claudeCodeApproveVisible = state.claudeCodeApproveVisible || continuationVisible
+        )
+    }
 
     private fun registerElementPaths(
         modifications: List<com.maxvibes.domain.model.modification.ModificationResult>

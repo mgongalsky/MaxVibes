@@ -546,21 +546,21 @@ internal class ChatMessageControllerComposition(
         callbacks.addAttachmentBubble(saved.relativePath, saved.caption)
     }
 
-    /**
-     * Объясняет остановку автономной работы.
-     *
-     * Про политику и вопросы агента молчим: там на экране уже стоит пузырь с
-     * кнопками или форма вопроса, и вторая строка на каждый шаг превратила бы
-     * сигнал в фон. Молча останавливался только исчерпанный бюджет — со стороны
-     * это выглядело как поломка автономии, а не как её лимит.
-     */
     private fun announceParked(reason: AwaitReason) {
-        if (reason != AwaitReason.BUDGET_EXHAUSTED) return
-        val limit = ApprovalPolicySettings.getInstance(project).loadAutonomousIterations()
-        callbacks.appendToChat(
-            "\u23F8\uFE0F Лимит автономии исчерпан: $limit шаг(ов) подряд без человека. " +
-                    "Подтвердите следующий шаг или напишите сообщение — счёт начнётся заново."
-        )
-        callbacks.setStatus("\u23F8\uFE0F Лимит автономии ($limit) исчерпан")
+        callbacks.updateModeIndicator()
+        if (reason == AwaitReason.BUDGET_EXHAUSTED) {
+            val limit = ApprovalPolicySettings.getInstance(project).loadAutonomousIterations()
+            callbacks.appendToChat(
+                "\u23F8\uFE0F Лимит автономии исчерпан: $limit шаг(ов) подряд без человека. " +
+                        "Подтвердите следующий шаг или напишите сообщение — счёт начнётся заново."
+            )
+            callbacks.setStatus("\u23F8\uFE0F Лимит автономии ($limit) исчерпан")
+        } else if (reason == AwaitReason.POLICY_ASK &&
+            hasParkedContinuation(chatTreeService.getActiveSession().id)
+        ) {
+            callbacks.setStatus("Продолжение ожидает подтверждения — нажмите Approve")
+        }
     }
+    fun hasParkedContinuation(sessionId: String): Boolean =
+        turnAutopilot.parkedAction(sessionId) == AgentActionKind.CONTINUATION
 }

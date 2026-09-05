@@ -124,28 +124,48 @@ class ClaudeCodeDispatcher(
         }
     }
 
-    /** Approves the current coding-agent turn with pre-collected text attachments. */
+    /** Approves pending files or modifications, or resumes a parked continuation. */
     fun approve(trace: String?, errs: String?) {
         val session = chatTreeService.getActiveSession()
+        val autopilot = turnAutopilot()
+        val resumeContinuation = autopilot?.parkedAction(session.id) ==
+                com.maxvibes.domain.model.approval.AgentActionKind.CONTINUATION
         MaxVibesLogger.info(
             "ClaudeCodeDispatcher",
             "approve",
             mapOf(
                 "sessionId" to session.id,
                 "hasTrace" to (trace != null),
-                "hasErrors" to (errs != null)
+                "hasErrors" to (errs != null),
+                "resumeContinuation" to resumeContinuation
             )
         )
-        turnAutopilot()?.onHumanApproved(session.id)
-        val approving = "${agentName()}: approving..."
+        autopilot?.onHumanApproved(session.id)
+        val title = if (resumeContinuation) "${agentName()}: continuing..." else "${agentName()}: approving..."
         callbacks.setInputEnabled(false)
-        callbacks.setStatus(approving)
-        executeAsync(approving, session) {
-            claudeCodeService().approve(
-                sessionId = session.id,
-                attachedContext = trace,
-                ideErrors = errs
-            )
+        callbacks.updateModeIndicator()
+        callbacks.setStatus(title)
+        if (resumeContinuation) {
+            val correction = pendingFix.remove(session.id)
+            // A manual retry starts a new retry allowance without resetting the whole turn.
+            fixRetries.remove(session.id)
+            executeAsync(title, session) {
+                claudeCodeService().handleUserInput(
+                    sessionId = session.id,
+                    userInput = correction ?: "[USER APPROVED CONTINUATION] Continue the unfinished task. " +
+                    "Set turnIntent to DONE as soon as the task is complete.",
+                    attachedContext = trace,
+                    ideErrors = errs
+                )
+            }
+        } else {
+            executeAsync(title, session) {
+                claudeCodeService().approve(
+                    sessionId = session.id,
+                    attachedContext = trace,
+                    ideErrors = errs
+                )
+            }
         }
     }
 
