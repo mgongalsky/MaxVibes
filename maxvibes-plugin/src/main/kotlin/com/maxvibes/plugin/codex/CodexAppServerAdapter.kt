@@ -79,17 +79,18 @@ class CodexAppServerAdapter(
         data class Aborted(val partialText: String?) : TurnOutcome
     }
 
-    private class TurnState(
-        val startedAtMs: Long
-    ) {
+    private class TurnState(val startedAtMs: Long) {
         val deferred = CompletableDeferred<TurnOutcome>()
         private val messages = linkedMapOf<String, StringBuilder>()
+        private val phases = mutableMapOf<String, String>()
         private val reasoning = linkedMapOf<String, StringBuilder>()
 
         @Volatile
         var lastActivityAtMs: Long = startedAtMs
+
         @Volatile
         var inputTokens: Int = 0
+
         @Volatile
         var outputTokens: Int = 0
 
@@ -103,8 +104,9 @@ class CodexAppServerAdapter(
         }
 
         @Synchronized
-        fun setMessage(id: String, text: String) {
+        fun setMessage(id: String, text: String, phase: String? = null) {
             messages[id] = StringBuilder(text)
+            if (phase != null) phases[id] = phase
         }
 
         @Synchronized
@@ -121,11 +123,21 @@ class CodexAppServerAdapter(
         fun snapshotText(): String = joinBuffers(messages)
 
         @Synchronized
+        fun snapshotFinalText(): String {
+            val finalId = messages.keys.lastOrNull { phases[it] == "final_answer" }
+            if (finalId != null) return messages.getValue(finalId).toString().trim()
+            if (phases.isEmpty()) return joinBuffers(messages)
+            return messages.entries.filter { phases[it.key] == null }
+                .map { it.value.toString().trim() }
+                .filter { it.isNotBlank() }
+                .joinToString(System.lineSeparator() + System.lineSeparator())
+        }
+
+        @Synchronized
         fun snapshotReasoning(): String = joinBuffers(reasoning)
 
         private fun joinBuffers(source: LinkedHashMap<String, StringBuilder>): String =
-            source.values
-                .map { it.toString().trim() }
+            source.values.map { it.toString().trim() }
                 .filter { it.isNotBlank() }
                 .joinToString(System.lineSeparator() + System.lineSeparator())
     }
@@ -421,6 +433,7 @@ class CodexAppServerAdapter(
         images: List<AttachedImage>
     ): JsonObject = buildJsonObject {
         put("threadId", threadId)
+        put("outputSchema", com.maxvibes.plugin.clipboard.InteractionResponseJsonSchema.schema)
         putJsonArray("input") {
             add(
                 buildJsonObject {
@@ -432,10 +445,7 @@ class CodexAppServerAdapter(
                 add(
                     buildJsonObject {
                         put("type", "image")
-                        put(
-                            "url",
-                            "data:${image.mediaType};base64,${image.base64Data}"
-                        )
+                        put("url", "data:${image.mediaType};base64,${image.base64Data}")
                     }
                 )
             }
@@ -537,12 +547,6 @@ class CodexAppServerAdapter(
 
     private fun handleLine(rawLine: String) {
         val line = parser.parse(rawLine)
-
-        // Дельта приходит на каждые несколько символов, и вокруг неё едет полный
-        // JSON-RPC конверт — в транскрипте это давало мегабайты шума на короткий
-        // ответ. Тип строки известен только после разбора, поэтому запись идёт
-        // отсюда, а не из цикла чтения: дельты сворачиваются в счётчики и уходят
-        // одной строкой на поток перед ближайшей содержательной строкой.
         when (line) {
             is CodexAppServerLineParser.Line.NarrationDelta ->
                 transcriptDigest.delta(kind = "text", id = line.itemId, chars = line.text.length)
@@ -551,7 +555,6 @@ class CodexAppServerAdapter(
                 transcriptDigest.delta(kind = "reasoning", id = line.itemId, chars = line.text.length)
 
             CodexAppServerLineParser.Line.Ignored -> transcriptDigest.skipped(rawLine.length)
-
             else -> {
                 transcriptDigest.flush().forEach { sessionLog?.inbound(it) }
                 sessionLog?.inbound(rawLine)
@@ -559,22 +562,16 @@ class CodexAppServerAdapter(
         }
 
         when (line) {
-            is CodexAppServerLineParser.Line.Response ->
-                pending.remove(line.id)?.complete(line)
-
+            is CodexAppServerLineParser.Line.Response -> pending.remove(line.id)?.complete(line)
             is CodexAppServerLineParser.Line.ThreadStarted -> {
                 currentThreadId = line.threadId
-                emitEvent(
-                    AgentStreamEvent.SessionStarted(
-                        sessionId = line.threadId,
-                        model = line.model ?: settings.codexModel.ifBlank { "auto" }
-                    )
-                )
+                emitEvent(AgentStreamEvent.SessionStarted(
+                    sessionId = line.threadId,
+                    model = line.model ?: settings.codexModel.ifBlank { "auto" }
+                ))
             }
 
-            is CodexAppServerLineParser.Line.TurnStarted ->
-                activeTurn?.touch()
-
+            is CodexAppServerLineParser.Line.TurnStarted -> activeTurn?.touch()
             is CodexAppServerLineParser.Line.NarrationDelta -> {
                 activeTurn?.apply {
                     touch()
@@ -594,7 +591,7 @@ class CodexAppServerAdapter(
             is CodexAppServerLineParser.Line.NarrationMessage -> {
                 activeTurn?.apply {
                     touch()
-                    setMessage(line.itemId, line.text)
+                    setMessage(line.itemId, line.text, line.phase)
                 }
                 emitEvent(AgentStreamEvent.NarrationMessage(line.itemId, line.text, thinking = false))
             }
@@ -617,36 +614,32 @@ class CodexAppServerAdapter(
                 emitEvent(AgentStreamEvent.ToolFinished(line.itemId, line.ok, line.summary))
             }
 
-            is CodexAppServerLineParser.Line.TokenUsage ->
-                activeTurn?.apply {
-                    touch()
-                    inputTokens = line.inputTokens
-                    outputTokens = line.outputTokens
-                }
+            is CodexAppServerLineParser.Line.TokenUsage -> activeTurn?.apply {
+                touch()
+                inputTokens = line.inputTokens
+                outputTokens = line.outputTokens
+            }
 
-            // Лимиты приходят и вне хода, поэтому активный ход тут не трогаем.
-            // Codex не сообщает статус окна — цвет строки считается по проценту.
-            is CodexAppServerLineParser.Line.RateLimits ->
-                line.windows.forEach { window ->
-                    emitEvent(
-                        AgentStreamEvent.RateLimitUpdate(
-                            kind = window.id,
-                            status = "allowed",
-                            utilizationPct = window.usedPercent,
-                            resetsAtEpochSec = window.resetsAtEpochSec,
-                            windowMinutes = window.windowMinutes
-                        )
+            is CodexAppServerLineParser.Line.RateLimits -> line.windows.forEach { window ->
+                emitEvent(
+                    AgentStreamEvent.RateLimitUpdate(
+                        kind = window.id,
+                        status = "allowed",
+                        utilizationPct = window.usedPercent,
+                        resetsAtEpochSec = window.resetsAtEpochSec,
+                        windowMinutes = window.windowMinutes
                     )
-                }
+                )
+            }
 
             is CodexAppServerLineParser.Line.TurnCompleted -> {
                 val turn = activeTurn ?: return
                 turn.touch()
                 val durationMs = System.currentTimeMillis() - turn.startedAtMs
-                val text = turn.snapshotText()
                 val status = line.status?.lowercase()
                 val failed = line.errorMessage != null ||
                         (status != null && status != "completed" && status != "success")
+                val text = if (failed) turn.snapshotText() else turn.snapshotFinalText()
                 val stats = SessionStats(
                     costUsd = 0.0,
                     numTurns = 1,
@@ -655,12 +648,10 @@ class CodexAppServerAdapter(
                     outputTokens = turn.outputTokens
                 )
                 if (failed) {
-                    emitEvent(
-                        AgentStreamEvent.Failed(
-                            line.errorMessage ?: "Codex turn ended with status ${line.status}",
-                            text.takeIf { it.isNotBlank() }
-                        )
-                    )
+                    emitEvent(AgentStreamEvent.Failed(
+                        line.errorMessage ?: "Codex turn ended with status ${line.status}",
+                        text.takeIf { it.isNotBlank() }
+                    ))
                 } else {
                     emitEvent(AgentStreamEvent.Completed(text, stats))
                 }
@@ -682,9 +673,7 @@ class CodexAppServerAdapter(
             is CodexAppServerLineParser.Line.Unknown -> {
                 activeTurn?.touch()
                 MaxVibesLogger.info(
-                    TAG,
-                    "unknown App Server message skipped",
-                    mapOf(
+                    TAG, "unknown App Server message skipped", mapOf(
                         "method" to (line.method ?: "unparseable"),
                         "preview" to rawLine.take(PREVIEW_MAX)
                     )

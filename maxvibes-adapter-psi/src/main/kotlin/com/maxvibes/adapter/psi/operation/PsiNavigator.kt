@@ -70,12 +70,13 @@ class PsiNavigator(private val project: Project) {
         }
     }
 
-    /**
-     * Get declarations from a parent element, handling different container types.
-     */
     private fun getDeclarations(parent: PsiElement): List<KtDeclaration> {
         return when (parent) {
-            is KtFile -> parent.declarations
+            is KtFile -> parent.script?.let { getDeclarations(it) } ?: parent.declarations
+            is KtScript -> parent.blockExpression.statements
+                .filterIsInstance<KtDeclaration>()
+                .filterNot { it is KtScriptInitializer }
+
             is KtClassOrObject -> parent.declarations
             is KtClassBody -> parent.declarations
             else -> emptyList()
@@ -138,13 +139,7 @@ class PsiNavigator(private val project: Project) {
         }
     }
 
-    fun getChildren(element: PsiElement): List<PsiElement> {
-        return when (element) {
-            is KtFile -> element.declarations
-            is KtClassOrObject -> element.declarations
-            else -> emptyList()
-        }
-    }
+    fun getChildren(element: PsiElement): List<PsiElement> = getDeclarations(element)
     private fun namesMatch(actual: String?, requested: String): Boolean {
         if (actual == null) return false
         return actual.removeSurrounding("`") == requested.removeSurrounding("`")

@@ -12,18 +12,11 @@ class TaskContextFormatterTest {
     @Test
     fun `build appends trace and errors using platform separators`() {
         val separator = System.lineSeparator()
-
-        val result = TaskContextFormatter.build(
-            task = "task",
-            trace = "trace",
-            errors = "errors"
-        )
-
+        val result = TaskContextFormatter.build(task = "task", trace = "trace", errors = "errors")
         assertEquals(
             "task" + separator + separator +
-                    "--- Error/Trace/Logs ---" + separator + "trace" +
-                    separator + separator +
-                    "--- IDE Errors ---" + separator + "errors",
+                    "--- Text attachment ---" + separator + "trace" +
+                    separator + separator + "--- IDE Errors ---" + separator + "errors",
             result
         )
     }

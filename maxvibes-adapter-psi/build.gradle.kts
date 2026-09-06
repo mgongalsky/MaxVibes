@@ -10,6 +10,8 @@ dependencies {
 
     testImplementation(kotlin("test"))
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.1")
+    // BasePlatformTestCase uses JUnit 3; include it in JUnit Platform runs.
+    testRuntimeOnly("org.junit.vintage:junit-vintage-engine:5.10.1")
     testImplementation("io.mockk:mockk:1.13.8")
 }
 

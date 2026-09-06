@@ -81,15 +81,10 @@ value class ElementPath(val value: String) {
         return remainder.isNotEmpty()
     }
 
-    /**
-     * Find the index where element segments start in the path.
-     * Detects both bracketed (class[Name]) and bare (companion_object, init) segments.
-     */
     private fun findFirstSegmentStart(path: String): Int {
-        // Look for patterns like /word[, /companion_object, /init, /constructor[
-        val regex = Regex("""/(?:class|interface|object|function|fun|property|val|var|enum|enum_entry|companion_object|companion|init|constructor)[\[/]?""")
-        val match = regex.find(path) ?: return -1
-        return match.range.first
+        val regex =
+            Regex("""/(?:(?:class|interface|object|function|fun|property|val|var|enum|enum_entry|companion_object|companion|init|constructor)\[[^\]]+\](?=/|$)|(?:companion_object|companion|init)(?=/|$))""")
+        return regex.find(path)?.range?.first ?: -1
     }
 
     companion object {

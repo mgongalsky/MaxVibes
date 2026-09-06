@@ -39,23 +39,20 @@ class AttachmentIndicatorsTest {
     @Test
     fun `a single line trace reports one line`() {
         val state = describe(trace = "boom")
-
         assertTrue(state.traceVisible)
-        assertEquals("\uD83D\uDCCE Trace: 1L", state.traceText)
+        assertEquals("📎 Text: 4 chars · 1L", state.traceText)
     }
 
     @Test
     fun `a multi line trace reports its line count`() {
         val state = describe(trace = "a\nb\nc")
-
-        assertEquals("\uD83D\uDCCE Trace: 3L", state.traceText)
+        assertEquals("📎 Text: 5 chars · 3L", state.traceText)
     }
 
     @Test
     fun `a trailing newline counts as an extra trace line`() {
         val state = describe(trace = "a\nb\n")
-
-        assertEquals("\uD83D\uDCCE Trace: 3L", state.traceText)
+        assertEquals("📎 Text: 4 chars · 3L", state.traceText)
     }
 
     @Test

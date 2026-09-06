@@ -115,6 +115,15 @@ class PsiModifier(
             return file?.let { replaceFileContent(it, content) }
         }
 
+        // These declarations can be parsed at file level. INIT and ENUM_ENTRY
+        // require their dedicated wrappers in KotlinElementFactory.
+        if (kind in setOf(
+                ElementKind.CLASS, ElementKind.INTERFACE, ElementKind.OBJECT,
+                ElementKind.ENUM, ElementKind.FUNCTION, ElementKind.PROPERTY
+            ) &&
+            elementFactory.parseDeclarations(content).size != 1
+        ) return null
+
         val newElement = elementFactory.createElementFromText(content, kind) ?: return null
         return doReplace(target, newElement)
     }

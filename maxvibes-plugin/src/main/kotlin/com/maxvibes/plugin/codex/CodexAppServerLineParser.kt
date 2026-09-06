@@ -50,7 +50,8 @@ internal class CodexAppServerLineParser {
 
         data class NarrationMessage(
             val itemId: String,
-            val text: String
+            val text: String,
+            val phase: String? = null
         ) : Line
 
         data class ReasoningMessage(
@@ -190,8 +191,10 @@ internal class CodexAppServerLineParser {
         val id = item.str("id") ?: "item-unknown"
         return when (type) {
             "agentMessage" -> {
-                val text = itemText(item).takeIf { it.isNotBlank() } ?: return Line.Ignored
-                Line.NarrationMessage(id, text)
+                val text = itemText(item)
+                val phase = item.str("phase")
+                if (text.isBlank() && phase == null) return Line.Ignored
+                Line.NarrationMessage(id, text, phase)
             }
 
             "reasoning" -> {

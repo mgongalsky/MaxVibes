@@ -470,6 +470,19 @@ class PsiCodeRepository(private val project: Project) : CodeRepository {
             )
         }
 
+        val siblingPosition = mod.position == com.maxvibes.domain.model.modification.InsertPosition.BEFORE ||
+                mod.position == com.maxvibes.domain.model.modification.InsertPosition.AFTER
+        if (siblingPosition && mod.targetPath.segments.isEmpty()) {
+            return ModificationResult.Failure(
+                modification = mod,
+                error = ModificationError.InvalidOperation(
+                    "CREATE_ELEMENT with BEFORE or AFTER requires a declaration target, not a file. " +
+                            "Use FIRST_CHILD or LAST_CHILD to insert into the file, " +
+                            "or specify the declaration path to insert beside."
+                )
+            )
+        }
+
         var resultText: String? = null
         var parentMissing = false
         var platformError: String? = null

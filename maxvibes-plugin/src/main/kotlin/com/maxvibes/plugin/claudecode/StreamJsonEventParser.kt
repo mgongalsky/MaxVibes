@@ -232,9 +232,11 @@ internal class StreamJsonEventParser {
         val input = (usage?.int("input_tokens") ?: 0) +
                 (usage?.int("cache_creation_input_tokens") ?: 0) +
                 (usage?.int("cache_read_input_tokens") ?: 0)
+        val isError = (obj["is_error"] as? JsonPrimitive)?.booleanOrNull ?: false
+        val structured = obj.obj("structured_output")
         return Line.TurnEnd(
-            finalText = obj.str("result"),
-            isError = (obj["is_error"] as? JsonPrimitive)?.booleanOrNull ?: false,
+            finalText = if (!isError && structured != null) structured.toString() else obj.str("result"),
+            isError = isError,
             costUsd = (obj["total_cost_usd"] as? JsonPrimitive)?.doubleOrNull ?: 0.0,
             numTurns = obj.int("num_turns") ?: 0,
             durationMs = obj.long("duration_ms") ?: 0L,

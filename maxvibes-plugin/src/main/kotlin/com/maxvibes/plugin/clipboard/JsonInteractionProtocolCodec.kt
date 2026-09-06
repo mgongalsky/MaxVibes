@@ -212,35 +212,15 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
 
     private fun parseUnifiedResponse(jsonText: String): InteractionResponse {
         val obj = lenientJson.parseToJsonElement(jsonText).jsonObject
+        fun optionalArray(key: String): JsonArray? = obj[key]?.takeUnless { it is JsonNull }?.jsonArray
 
-        // Legacy requestedFiles — kept as-is for backward compatibility
-        val legacyFiles: List<String> = obj[InteractionRequestSchema.RESP_REQUESTED_FILES]?.jsonArray
+        val legacyFiles: List<String> = optionalArray(InteractionRequestSchema.RESP_REQUESTED_FILES)
             ?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
-
-        // 1. Legacy requestedFiles → CodeViewRequest(path, FULL)
-        val fromFiles: List<CodeViewRequest> = legacyFiles
-            .map { CodeViewRequest(it, CodeGranularity.FULL) }
-
-        // 2. New requestedViews → CodeViewRequest with explicit granularity
-        val fromViews: List<CodeViewRequest> = obj[InteractionRequestSchema.REQUESTED_VIEWS]?.jsonArray
+        val fromFiles = legacyFiles.map { CodeViewRequest(it, CodeGranularity.FULL) }
+        val fromViews = optionalArray(InteractionRequestSchema.REQUESTED_VIEWS)
             ?.toCodeViewRequests() ?: emptyList()
+        val mergedRequests = (fromViews + fromFiles).distinctBy { it.filePath }
 
-        // 3. Merge: requestedViews wins on duplicate path
-        val mergedRequests: List<CodeViewRequest> = (fromViews + fromFiles)
-            .distinctBy { it.filePath }
-
-        // Формат записи: первая строка — описание для человека и для агента,
-        // дальше сама отвергнутая запись. Потребители берут только первую строку,
-        // поэтому запись с целым файлом в content не раздувает ни чат, ни промпт
-        // на переделку хода, но целиком доезжает до отчёта о сбое.
-        //
-        // Отсутствующее и пустое поле разделены намеренно: в первом случае модель
-        // забыла ключ, во втором — знала о нём, но не смогла построить значение.
-        // По отчётам это два разных дефекта, и сливать их в «нет поля» нельзя.
-        //
-        // Присутствие ищется по тем же спискам синонимов, что и в parseModification:
-        // иначе запись с `kind` вместо `type` отчиталась бы «type отсутствует», хотя
-        // тип был прислан и отвергнут по совсем другой причине.
         fun describeMalformed(index: Int, entry: JsonObject): String {
             fun valueOf(keys: List<String>): String? = keys.firstNotNullOfOrNull { key ->
                 (entry[key] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
@@ -257,8 +237,6 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
                     else -> null
                 }
             }.ifEmpty {
-                // У parseModification ровно три причины вернуть null, и две проверены
-                // выше — значит осталась третья, других вариантов сюда попасть нет.
                 val type = valueOf(InteractionRequestSchema.MOD_TYPE_KEYS)?.uppercase()
                 listOf(
                     "операция $type обязана нести код, " +
@@ -271,14 +249,20 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
 
         val modifications = mutableListOf<InteractionModification>()
         val malformedModifications = mutableListOf<String>()
-        obj[InteractionRequestSchema.RESP_MODIFICATIONS]?.jsonArray?.forEachIndexed { index, element ->
+        optionalArray(InteractionRequestSchema.RESP_MODIFICATIONS)?.forEachIndexed { index, element ->
             val entry = element as? JsonObject
             if (entry == null) {
                 malformedModifications += "#${index + 1}: запись не является JSON-объектом\n$element"
                 return@forEachIndexed
             }
-            val parsed = parseModification(entry)
-            if (parsed != null) modifications += parsed else malformedModifications += describeMalformed(index, entry)
+            val parsed = try {
+                parseModification(entry)
+            } catch (e: IllegalArgumentException) {
+                malformedModifications += "#${index + 1}: ${e.message ?: "invalid modification"}\n$entry"
+                return@forEachIndexed
+            }
+            if (parsed != null) modifications += parsed
+            else malformedModifications += describeMalformed(index, entry)
         }
 
         return InteractionResponse(
@@ -290,11 +274,11 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
             malformedModifications = malformedModifications,
             commitMessage = obj[InteractionRequestSchema.RESP_COMMIT_MESSAGE]?.jsonPrimitive?.contentOrNull,
             chatTitle = obj[InteractionRequestSchema.RESP_CHAT_TITLE]?.jsonPrimitive?.contentOrNull,
-            commands = obj[InteractionRequestSchema.RESP_COMMANDS]?.jsonArray
+            commands = optionalArray(InteractionRequestSchema.RESP_COMMANDS)
                 ?.mapNotNull { parseCommand(it.jsonObject) } ?: emptyList(),
-            checks = obj[InteractionRequestSchema.RESP_CHECKS]?.jsonArray
+            checks = optionalArray(InteractionRequestSchema.RESP_CHECKS)
                 ?.mapNotNull { parseCheck(it.jsonObject) } ?: emptyList(),
-            questions = obj[InteractionRequestSchema.RESP_QUESTIONS]?.jsonArray
+            questions = optionalArray(InteractionRequestSchema.RESP_QUESTIONS)
                 ?.mapNotNull { parseQuestion(it.jsonObject) } ?: emptyList(),
             plan = parsePlan(obj),
             diagram = parseDiagram(obj),
@@ -326,17 +310,23 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
                 setOf("CREATE_ELEMENT", "REPLACE_ELEMENT", "CREATE_FILE", "REPLACE_FILE")
         if (needsContent && content.isBlank()) return null
 
-        // Модель регулярно выносит адрес элемента в отдельное поле, которого в протоколе нет.
-        // Тогда path указывает на файл, а операция над элементом означает операцию над файлом —
-        // ровно так терялись файлы целиком. Склейка возвращает замысел; если path уже адресует
-        // элемент, побеждает он.
-        val elementSuffix = (obj[InteractionRequestSchema.MOD_ELEMENT_PATH] as? JsonPrimitive)
-            ?.contentOrNull?.trim()?.trim('/')?.takeIf { it.isNotEmpty() }
-        val fullPath = if (elementSuffix != null && ElementPath(path).segments.isEmpty()) {
-            "file:" + path.removePrefix("file:").trimEnd('/') + "/" + elementSuffix
-        } else {
-            path
-        }
+        // An explicit element target in path takes precedence over the compatibility field.
+        val suffix = (obj[InteractionRequestSchema.MOD_ELEMENT_PATH] as? JsonPrimitive)
+            ?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
+        val fullPath = if (suffix != null && ElementPath(path).segments.isEmpty()) {
+            val file = path.removePrefix("file:").trimEnd('/')
+            when {
+                suffix.startsWith("file:") -> {
+                    require(ElementPath(suffix).filePath == file) {
+                        "path and elementPath refer to different files"
+                    }
+                    suffix
+                }
+
+                suffix.startsWith("$file/") -> "file:$suffix"
+                else -> "file:$file/${suffix.trim('/')}"
+            }
+        } else path
 
         return InteractionModification(
             type = type,
@@ -368,19 +358,12 @@ class JsonInteractionProtocolCodec : InteractionProtocolCodec {
         )
     }
 
-    /**
-     * Parses a single `questions[]` entry.
-     * Returns `null` (skips the entry) if the mandatory `question` field is absent or blank.
-     * A missing `id` falls back to a hash-derived value so the entry survives when the
-     * model forgets the field. Parsing is deliberately lenient: the 1-4 questions /
-     * 2-4 options limits are enforced prompt-side, not here.
-     */
     private fun parseQuestion(obj: JsonObject): InteractionQuestion? {
         val question = obj[InteractionRequestSchema.Q_QUESTION]?.jsonPrimitive?.contentOrNull
             ?.takeIf { it.isNotBlank() } ?: return null
         val id = obj[InteractionRequestSchema.Q_ID]?.jsonPrimitive?.contentOrNull
             ?.takeIf { it.isNotBlank() } ?: ("q" + question.hashCode().toString(16))
-        val options = obj[InteractionRequestSchema.Q_OPTIONS]?.jsonArray
+        val options = obj[InteractionRequestSchema.Q_OPTIONS]?.takeUnless { it is JsonNull }?.jsonArray
             ?.mapNotNull { it.jsonPrimitive.contentOrNull?.takeIf(String::isNotBlank) }
             ?: emptyList()
         return InteractionQuestion(id = id, question = question, options = options)

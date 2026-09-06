@@ -101,18 +101,11 @@ class ChatMessageControllerCompositionSmokeTest {
     @Test
     fun `compatibility task formatter is independent from controller construction`() {
         val separator = System.lineSeparator()
-
-        val result = ChatMessageController.buildTaskWithContext(
-            task = "task",
-            trace = "trace",
-            errs = "errors"
-        )
-
+        val result = ChatMessageController.buildTaskWithContext(task = "task", trace = "trace", errs = "errors")
         assertEquals(
             "task" + separator + separator +
-                    "--- Error/Trace/Logs ---" + separator + "trace" +
-                    separator + separator +
-                    "--- IDE Errors ---" + separator + "errors",
+                    "--- Text attachment ---" + separator + "trace" +
+                    separator + separator + "--- IDE Errors ---" + separator + "errors",
             result
         )
     }

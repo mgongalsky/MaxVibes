@@ -50,68 +50,59 @@ class PsiModifierTest {
 
     @Test
     fun `replaceFileContent forwards resolved file type and replaces child range`() {
-        val jsonType = mockk<FileType>()
-        val oldFirst = mockk<PsiElement>()
-        val oldLast = mockk<PsiElement>()
-        val sourceChild = mockk<PsiElement>()
-        val copiedChild = mockk<PsiElement>()
-        val targetFile = mockk<PsiFile>(relaxed = true)
-        val parsedFile = mockk<PsiFile>()
-        val forwardedType = slot<FileType>()
-        val newContent = "{\"enabled\":true}"
-
+        // Replacement now updates the existing document, preserving the file and its type.
+        val targetFile = mockk<PsiFile>()
+        val document = mockk<com.intellij.openapi.editor.Document>(relaxed = true)
+        val manager = mockk<com.intellij.psi.PsiDocumentManager>(relaxed = true)
         every { targetFile.name } returns "config.json"
-        every { targetFile.fileType } returns jsonType
-        every { targetFile.firstChild } returns oldFirst
-        every { targetFile.lastChild } returns oldLast
-        every { parsedFile.children } returns arrayOf(sourceChild)
-        every { sourceChild.copy() } returns copiedChild
-        every {
-            psiFileFactory.createFileFromText("config.json", capture(forwardedType), newContent)
-        } returns parsedFile
+        every { project.getService(com.intellij.psi.PsiDocumentManager::class.java) } returns manager
+        every { manager.getDocument(targetFile) } returns document
 
         val result = PsiModifier(project, elementFactory)
-            .replaceFileContent(targetFile, newContent)
+            .replaceFileContent(targetFile, "{\r\n\"enabled\":true\r\n}")
 
         assertSame(targetFile, result)
-        assertSame(jsonType, forwardedType.captured, "replaceFileContent must forward the file's own type")
-        verify(exactly = 1) { targetFile.deleteChildRange(oldFirst, oldLast) }
-        verify(exactly = 1) { targetFile.add(copiedChild) }
-        verify(exactly = 1) { codeStyleManager.reformat(targetFile) }
+        io.mockk.verifyOrder {
+            manager.doPostponedOperationsAndUnblockDocument(document)
+            document.setText("{\n\"enabled\":true\n}")
+            manager.commitDocument(document)
+            codeStyleManager.reformat(targetFile)
+        }
+        verify(exactly = 1) { document.setText(any()) }
+        verify(exactly = 1) { manager.commitDocument(document) }
+        verify(exactly = 0) { targetFile.deleteChildRange(any<PsiElement>(), any<PsiElement>()) }
+        verify(exactly = 0) { targetFile.add(any<PsiElement>()) }
     }
 
     @Test
     fun `replaceFileContent supports an empty original file`() {
-        val markdownType = mockk<FileType>()
-        val targetFile = mockk<PsiFile>(relaxed = true)
-        val parsedFile = mockk<PsiFile>()
-        val forwardedType = slot<FileType>()
-
+        val targetFile = mockk<PsiFile>()
+        val document = mockk<com.intellij.openapi.editor.Document>(relaxed = true)
+        val manager = mockk<com.intellij.psi.PsiDocumentManager>(relaxed = true)
         every { targetFile.name } returns "notes.md"
-        every { targetFile.fileType } returns markdownType
-        every { targetFile.firstChild } returns null
-        every { targetFile.lastChild } returns null
-        every { parsedFile.children } returns emptyArray()
-        every {
-            psiFileFactory.createFileFromText("notes.md", capture(forwardedType), "")
-        } returns parsedFile
+        every { document.text } returns ""
+        every { project.getService(com.intellij.psi.PsiDocumentManager::class.java) } returns manager
+        every { manager.getDocument(targetFile) } returns document
 
         val result = PsiModifier(project, elementFactory)
-            .replaceFileContent(targetFile, "")
+            .replaceFileContent(targetFile, "", reformat = false)
 
         assertSame(targetFile, result)
-        assertSame(markdownType, forwardedType.captured, "replaceFileContent must forward the file's own type")
-        verify(exactly = 0) {
-            targetFile.deleteChildRange(any<PsiElement>(), any<PsiElement>())
+        io.mockk.verifyOrder {
+            manager.doPostponedOperationsAndUnblockDocument(document)
+            document.setText("")
+            manager.commitDocument(document)
         }
-        verify(exactly = 1) { codeStyleManager.reformat(targetFile) }
+        verify(exactly = 1) { document.setText("") }
+        verify(exactly = 1) { manager.commitDocument(document) }
+        verify(exactly = 0) { codeStyleManager.reformat(any<PsiElement>()) }
     }
 
     @Test
     fun `replaceElement rejects content carrying more than one declaration`() {
         val target = mockk<PsiElement>()
         val content = "fun first() = 1\n\nfun second() = 2"
-
+        every { target.isValid } returns true
         every { elementFactory.parseDeclarations(content) } returns
                 listOf(mockk<KtDeclaration>(), mockk<KtDeclaration>())
 
@@ -120,13 +111,14 @@ class PsiModifierTest {
 
         assertNull(result)
         verify(exactly = 0) { elementFactory.createElementFromText(any(), any()) }
+        verify(exactly = 0) { target.replace(any<PsiElement>()) }
     }
 
     @Test
     fun `replaceElement leaves the target untouched when the factory fails`() {
         val target = mockk<PsiElement>()
         val content = "fun first() = 1"
-
+        every { target.isValid } returns true
         every { elementFactory.parseDeclarations(content) } returns listOf(mockk<KtDeclaration>())
         every { elementFactory.createElementFromText(content, ElementKind.FUNCTION) } returns null
 
@@ -189,6 +181,7 @@ class PsiModifierTest {
         val replaced = mockk<PsiElement>(relaxed = true)
         val content = "fun render() = Unit"
 
+        every { parent.isValid } returns true
         every { elementFactory.createElementFromText(content, ElementKind.FUNCTION) } returns created
         every { elementFactory.getElementName(created) } returns "render"
         every { elementFactory.getElementName(existing) } returns "render"
@@ -202,6 +195,7 @@ class PsiModifierTest {
             .addElement(parent, content, ElementKind.FUNCTION, InsertPosition.LAST_CHILD)
 
         assertSame(replaced, result)
+        verify(exactly = 1) { existing.replace(copied) }
         verify(exactly = 0) { parent.add(any<PsiElement>()) }
     }
 }

@@ -193,227 +193,174 @@ class ClaudeCodeProcessAdapter(
     override suspend fun ensureStarted(
         resumeSessionId: String?,
         systemPrompt: String?
-    ): Result<Unit, ClaudeCodeError> =
-        sendMutex.withLock {
-            val desired = currentSpawnConfig(systemPrompt)
-            val alive = process
-            if (alive?.isAlive == true) {
-                if (spawnConfig == desired) {
-                    MaxVibesLogger.info(
-                        TAG,
-                        "ensureStarted: already alive",
-                        mapOf(
-                            "resume" to (resumeSessionId ?: "null"),
-                            "promptHash" to desired.systemPromptHash
-                        )
-                    )
-                    sessionLog?.event(
-                        "ensureStarted: already alive",
-                        mapOf(
-                            "resume" to (resumeSessionId ?: "null"),
-                            "promptHash" to desired.systemPromptHash
-                        )
-                    )
-                    return Result.Success(Unit)
-                }
-
-                MaxVibesLogger.info(TAG, "ensureStarted: config changed (settings or system prompt) - respawning")
-                sessionLog?.event("config changed - respawning")
-                terminate(reason = "config changed", asAbort = false)
-            }
-
-            if (!isAvailable()) {
-                MaxVibesLogger.warn(
-                    TAG,
-                    "ensureStarted: binary not found",
-                    data = mapOf("path" to settings.claudeCodePath)
-                )
-                sessionLog?.event("binary not found", mapOf("path" to settings.claudeCodePath))
-                return Result.Failure(ClaudeCodeError.BinaryNotFound)
-            }
-
-            val baseArgs = mutableListOf(
-                "-p",
-                "--input-format", "stream-json",
-                "--output-format", "stream-json",
-                "--verbose",
-                "--include-partial-messages",
-                "--disallowed-tools",
-                "Read,Write,Edit,MultiEdit,NotebookEdit,Bash,Glob,Grep,WebFetch,WebSearch,PowerShell,Task,AskUserQuestion",
-                // Strict MCP isolation: without this the CLI attaches the user's claude.ai account
-                // connectors (ClickUp, Gmail, ...) - context bloat + wording collisions with the protocol.
-                "--strict-mcp-config"
-            )
-
-            val hasSystemPrompt = !systemPrompt.isNullOrBlank()
-            var promptFilePath: String? = null
-            if (!systemPrompt.isNullOrBlank()) {
-                val promptFile = java.nio.file.Files.createTempFile("maxvibes-sysprompt-", ".md")
-                java.nio.file.Files.writeString(promptFile, systemPrompt, Charsets.UTF_8)
-                promptFile.toFile().deleteOnExit()
-                promptFilePath = promptFile.toAbsolutePath().toString()
-                baseArgs += "--append-system-prompt-file"
-                baseArgs += promptFilePath
-            }
-
-            if (resumeSessionId != null) {
-                baseArgs += "--resume"
-                baseArgs += resumeSessionId
-            }
-
-            val modelFlag = "--model"
-            val model = settings.claudeCodeModel.trim()
-            if (model.isNotEmpty() && !settings.claudeCodeExtraArgs.contains(modelFlag)) {
-                baseArgs += modelFlag
-                baseArgs += model
-            }
-
-            val extraArgs = settings.claudeCodeExtraArgs.split(' ').filter { it.isNotBlank() }
-            val allArgs = baseArgs + extraArgs
-
-            val resolvedWorkDir: File? = workingDirectory
-                ?.takeIf { it.isNotBlank() }
-                ?.let { File(it) }
-                ?.takeIf { it.isDirectory }
-
-            val cmd = GeneralCommandLine(settings.claudeCodePath).apply {
-                charset = StandardCharsets.UTF_8
-                addParameters(*allArgs.toTypedArray())
-                if (resolvedWorkDir != null) withWorkDirectory(resolvedWorkDir)
-
-                if (settings.claudeCodeMaxOutputTokens > 0) {
-                    withEnvironment(
-                        "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
-                        settings.claudeCodeMaxOutputTokens.toString()
-                    )
-                }
-                if (settings.claudeCodeThinkingBudget > 0) {
-                    withEnvironment(
-                        "MAX_THINKING_TOKENS",
-                        settings.claudeCodeThinkingBudget.toString()
-                    )
-                }
-                if (settings.claudeCodeEffortLevel.isNotBlank()) {
-                    withEnvironment(
-                        "CLAUDE_CODE_EFFORT_LEVEL",
-                        settings.claudeCodeEffortLevel
-                    )
-                }
-            }
-
-            MaxVibesLogger.info(
-                TAG,
-                "ensureStarted: spawning",
-                mapOf(
-                    "path" to settings.claudeCodePath,
-                    "args" to allArgs.joinToString(" "),
-                    "envMaxOut" to settings.claudeCodeMaxOutputTokens,
-                    "envThink" to settings.claudeCodeThinkingBudget,
-                    "envEffort" to settings.claudeCodeEffortLevel.ifBlank { "auto" },
-                    "resume" to (resumeSessionId ?: "null"),
-                    "hasSystemPrompt" to hasSystemPrompt,
-                    "promptFile" to (promptFilePath ?: "<none>"),
-                    "promptLen" to (systemPrompt?.length ?: 0),
-                    "workDir" to (resolvedWorkDir?.absolutePath ?: "<inherited>"),
-                    "requestedWorkDir" to (workingDirectory ?: "null")
-                )
-            )
-            sessionLog?.event(
-                "spawning",
-                mapOf(
-                    "cmd" to settings.claudeCodePath,
-                    "args" to allArgs.joinToString(" "),
-                    "envMaxOut" to settings.claudeCodeMaxOutputTokens,
-                    "envThink" to settings.claudeCodeThinkingBudget,
-                    "envEffort" to settings.claudeCodeEffortLevel.ifBlank { "auto" },
-                    "resume" to (resumeSessionId ?: "null"),
-                    "workDir" to (resolvedWorkDir?.absolutePath ?: "<inherited>")
-                )
-            )
-
-            val proc = try {
-                cmd.createProcess()
-            } catch (e: Exception) {
-                MaxVibesLogger.error(
-                    TAG,
-                    "ensureStarted: createProcess threw",
-                    ex = e,
-                    data = mapOf(
-                        "path" to settings.claudeCodePath,
-                        "args" to allArgs.joinToString(" ")
-                    )
+    ): Result<Unit, ClaudeCodeError> = sendMutex.withLock {
+        val desired = currentSpawnConfig(systemPrompt)
+        val alive = process
+        if (alive?.isAlive == true) {
+            if (spawnConfig == desired) {
+                MaxVibesLogger.info(
+                    TAG, "ensureStarted: already alive",
+                    mapOf("resume" to (resumeSessionId ?: "null"), "promptHash" to desired.systemPromptHash)
                 )
                 sessionLog?.event(
-                    "createProcess threw",
-                    mapOf("ex" to e.javaClass.simpleName, "exMsg" to (e.message ?: ""))
+                    "ensureStarted: already alive",
+                    mapOf("resume" to (resumeSessionId ?: "null"), "promptHash" to desired.systemPromptHash)
                 )
-                return Result.Failure(
-                    ClaudeCodeError.Crashed("Could not spawn process: ${e.message}")
-                )
+                return Result.Success(Unit)
             }
-
-            process = proc
-            stdin = proc.outputStream.bufferedWriter(StandardCharsets.UTF_8)
-            synchronized(stderrBuffer) {
-                stderrBuffer.setLength(0)
-            }
-            lastStderrSnapshot = ""
-
-            startStderrCollector(proc)
-            startReaderLoop(proc)
-
-            delay(SPAWN_GRACE_MS)
-
-            if (!proc.isAlive) {
-                val err = stderrSnapshot()
-                lastStderrSnapshot = err
-                val exitCode = runCatching { proc.exitValue() }.getOrDefault(-1)
-                MaxVibesLogger.error(
-                    TAG,
-                    "ensureStarted: process died during grace period",
-                    data = mapOf(
-                        "exit" to exitCode,
-                        "stderr" to err.take(LOG_LINE_PREVIEW_MAX),
-                        "resume" to (resumeSessionId ?: "null")
-                    )
-                )
-                sessionLog?.event(
-                    "process died during spawn grace",
-                    mapOf(
-                        "exit" to exitCode,
-                        "resume" to (resumeSessionId ?: "null"),
-                        "stderr" to err
-                    )
-                )
-                terminate(reason = "died during spawn grace", asAbort = false)
-                return if (resumeSessionId != null) {
-                    Result.Failure(ClaudeCodeError.ResumeFailed(resumeSessionId, err))
-                } else {
-                    Result.Failure(ClaudeCodeError.ProcessFailed(exitCode, err))
-                }
-            }
-
-            // Record what this process was ACTUALLY spawned with: a null systemPrompt spawns
-            // without --append-system-prompt-file, so store hash 0 here (not the inherited
-            // comparison hash) and let the next prompt-carrying call trigger a corrective respawn.
-            spawnConfig = desired.copy(systemPromptHash = systemPrompt?.hashCode() ?: 0)
-            MaxVibesLogger.info(
-                TAG,
-                "ensureStarted: alive after grace",
-                mapOf(
-                    "pid" to runCatching { proc.pid() }.getOrDefault(-1L),
-                    "resume" to (resumeSessionId ?: "null")
-                )
-            )
-            sessionLog?.event(
-                "alive after grace",
-                mapOf(
-                    "pid" to runCatching { proc.pid() }.getOrDefault(-1L),
-                    "resume" to (resumeSessionId ?: "null")
-                )
-            )
-            return Result.Success(Unit)
+            MaxVibesLogger.info(TAG, "ensureStarted: config changed (settings or system prompt) - respawning")
+            sessionLog?.event("config changed - respawning")
+            terminate(reason = "config changed", asAbort = false)
         }
+
+        if (!isAvailable()) {
+            MaxVibesLogger.warn(
+                TAG, "ensureStarted: binary not found",
+                data = mapOf("path" to settings.claudeCodePath)
+            )
+            sessionLog?.event("binary not found", mapOf("path" to settings.claudeCodePath))
+            return Result.Failure(ClaudeCodeError.BinaryNotFound)
+        }
+
+        val baseArgs = mutableListOf(
+            "-p",
+            "--input-format", "stream-json",
+            "--output-format", "stream-json",
+            "--verbose",
+            "--include-partial-messages",
+            "--json-schema", com.maxvibes.plugin.clipboard.InteractionResponseJsonSchema.schema.toString(),
+            "--disallowed-tools",
+            "Read,Write,Edit,MultiEdit,NotebookEdit,Bash,Glob,Grep,WebFetch,WebSearch,PowerShell,Task,AskUserQuestion",
+            "--strict-mcp-config"
+        )
+
+        val hasSystemPrompt = !systemPrompt.isNullOrBlank()
+        var promptFilePath: String? = null
+        if (!systemPrompt.isNullOrBlank()) {
+            val promptFile = java.nio.file.Files.createTempFile("maxvibes-sysprompt-", ".md")
+            java.nio.file.Files.writeString(promptFile, systemPrompt, Charsets.UTF_8)
+            promptFile.toFile().deleteOnExit()
+            promptFilePath = promptFile.toAbsolutePath().toString()
+            baseArgs += "--append-system-prompt-file"
+            baseArgs += promptFilePath
+        }
+        if (resumeSessionId != null) {
+            baseArgs += "--resume"
+            baseArgs += resumeSessionId
+        }
+        val modelFlag = "--model"
+        val model = settings.claudeCodeModel.trim()
+        if (model.isNotEmpty() && !settings.claudeCodeExtraArgs.contains(modelFlag)) {
+            baseArgs += modelFlag
+            baseArgs += model
+        }
+        val extraArgs = settings.claudeCodeExtraArgs.split(' ').filter { it.isNotBlank() }
+        val allArgs = baseArgs + extraArgs
+        val resolvedWorkDir: File? = workingDirectory
+            ?.takeIf { it.isNotBlank() }?.let { File(it) }?.takeIf { it.isDirectory }
+
+        val cmd = GeneralCommandLine(settings.claudeCodePath).apply {
+            charset = StandardCharsets.UTF_8
+            addParameters(*allArgs.toTypedArray())
+            if (resolvedWorkDir != null) withWorkDirectory(resolvedWorkDir)
+            if (settings.claudeCodeMaxOutputTokens > 0) {
+                withEnvironment("CLAUDE_CODE_MAX_OUTPUT_TOKENS", settings.claudeCodeMaxOutputTokens.toString())
+            }
+            if (settings.claudeCodeThinkingBudget > 0) {
+                withEnvironment("MAX_THINKING_TOKENS", settings.claudeCodeThinkingBudget.toString())
+            }
+            if (settings.claudeCodeEffortLevel.isNotBlank()) {
+                withEnvironment("CLAUDE_CODE_EFFORT_LEVEL", settings.claudeCodeEffortLevel)
+            }
+        }
+
+        MaxVibesLogger.info(
+            TAG, "ensureStarted: spawning", mapOf(
+                "path" to settings.claudeCodePath,
+                "args" to allArgs.joinToString(" "),
+                "envMaxOut" to settings.claudeCodeMaxOutputTokens,
+                "envThink" to settings.claudeCodeThinkingBudget,
+                "envEffort" to settings.claudeCodeEffortLevel.ifBlank { "auto" },
+                "resume" to (resumeSessionId ?: "null"),
+                "hasSystemPrompt" to hasSystemPrompt,
+                "promptFile" to (promptFilePath ?: "<none>"),
+                "promptLen" to (systemPrompt?.length ?: 0),
+                "workDir" to (resolvedWorkDir?.absolutePath ?: "<inherited>"),
+                "requestedWorkDir" to (workingDirectory ?: "null")
+            )
+        )
+        sessionLog?.event(
+            "spawning", mapOf(
+                "cmd" to settings.claudeCodePath,
+                "args" to allArgs.joinToString(" "),
+                "envMaxOut" to settings.claudeCodeMaxOutputTokens,
+                "envThink" to settings.claudeCodeThinkingBudget,
+                "envEffort" to settings.claudeCodeEffortLevel.ifBlank { "auto" },
+                "resume" to (resumeSessionId ?: "null"),
+                "workDir" to (resolvedWorkDir?.absolutePath ?: "<inherited>")
+            )
+        )
+
+        val proc = try {
+            cmd.createProcess()
+        } catch (e: Exception) {
+            MaxVibesLogger.error(
+                TAG, "ensureStarted: createProcess threw", ex = e,
+                data = mapOf("path" to settings.claudeCodePath, "args" to allArgs.joinToString(" "))
+            )
+            sessionLog?.event(
+                "createProcess threw",
+                mapOf("ex" to e.javaClass.simpleName, "exMsg" to (e.message ?: ""))
+            )
+            return Result.Failure(ClaudeCodeError.Crashed("Could not spawn process: ${e.message}"))
+        }
+        process = proc
+        stdin = proc.outputStream.bufferedWriter(StandardCharsets.UTF_8)
+        synchronized(stderrBuffer) { stderrBuffer.setLength(0) }
+        lastStderrSnapshot = ""
+        startStderrCollector(proc)
+        startReaderLoop(proc)
+        delay(SPAWN_GRACE_MS)
+
+        if (!proc.isAlive) {
+            val err = stderrSnapshot()
+            lastStderrSnapshot = err
+            val exitCode = runCatching { proc.exitValue() }.getOrDefault(-1)
+            MaxVibesLogger.error(
+                TAG, "ensureStarted: process died during grace period", data = mapOf(
+                    "exit" to exitCode, "stderr" to err.take(LOG_LINE_PREVIEW_MAX),
+                    "resume" to (resumeSessionId ?: "null")
+                )
+            )
+            sessionLog?.event(
+                "process died during spawn grace", mapOf(
+                    "exit" to exitCode, "resume" to (resumeSessionId ?: "null"), "stderr" to err
+                )
+            )
+            terminate(reason = "died during spawn grace", asAbort = false)
+            return if (resumeSessionId != null) {
+                Result.Failure(ClaudeCodeError.ResumeFailed(resumeSessionId, err))
+            } else {
+                Result.Failure(ClaudeCodeError.ProcessFailed(exitCode, err))
+            }
+        }
+
+        // Record the prompt actually used at spawn; null means no prompt file.
+        spawnConfig = desired.copy(systemPromptHash = systemPrompt?.hashCode() ?: 0)
+        MaxVibesLogger.info(
+            TAG, "ensureStarted: alive after grace", mapOf(
+                "pid" to runCatching { proc.pid() }.getOrDefault(-1L),
+                "resume" to (resumeSessionId ?: "null")
+            )
+        )
+        sessionLog?.event(
+            "alive after grace", mapOf(
+                "pid" to runCatching { proc.pid() }.getOrDefault(-1L),
+                "resume" to (resumeSessionId ?: "null")
+            )
+        )
+        return Result.Success(Unit)
+    }
 
     override fun shutdown() {
         terminate(reason = "explicit shutdown", asAbort = false)
