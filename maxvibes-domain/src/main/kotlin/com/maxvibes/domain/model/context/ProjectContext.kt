@@ -20,21 +20,21 @@ data class FileTree(
     val totalFiles: Int,
     val totalDirectories: Int
 ) {
-    /**
-     * Компактное представление для промпта (экономим токены)
-     */
-    fun toCompactString(maxDepth: Int = Int.MAX_VALUE): String {
-        val sb = StringBuilder()
-        fun appendNode(node: FileNode, indent: String) {
-            sb.append(indent)
-            sb.append(if (node.isDirectory) "📁 " else "📄 ")
-            sb.appendLine(node.name)
-            if (node.isDirectory) {
-                node.children.forEach { appendNode(it, "$indent  ") }
+    fun toCompactString(maxDepth: Int = Int.MAX_VALUE): String = buildString {
+        fun appendNode(node: FileNode, depth: Int) {
+            val indent = "  ".repeat(depth)
+            append(indent)
+            append(if (node.isDirectory) "📁 " else "📄 ")
+            appendLine(node.name)
+            if (node.isDirectory && node.children.isNotEmpty()) {
+                if (depth >= maxDepth.coerceAtLeast(0)) {
+                    appendLine("$indent  … [depth limit reached]")
+                } else {
+                    node.children.forEach { appendNode(it, depth + 1) }
+                }
             }
         }
-        appendNode(root, "")
-        return sb.toString()
+        appendNode(root, 0)
     }
 }
 

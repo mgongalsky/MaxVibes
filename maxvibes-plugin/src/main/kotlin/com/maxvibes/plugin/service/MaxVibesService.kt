@@ -98,37 +98,22 @@ class MaxVibesService(private val project: Project) : Disposable {
         createCodeRepository()
     }
 
-    /**
-     * Runtime dispatch of the PSI adapter by available language support.
-     *
-     * The Kotlin and Python plugin dependencies are OPTIONAL (plugin.xml), so
-     * concrete repository classes must never be referenced from this
-     * always-loaded service. Construction is isolated in [KotlinAdapterProvider]
-     * and [PythonAdapterProvider]; each is touched only after the corresponding
-     * language is confirmed present via [Language.findLanguageByID] — otherwise
-     * class loading would fail with NoClassDefFoundError.
-     *
-     * Priority: Kotlin over Python — keeps existing IDEA behaviour intact when
-     * both plugins are installed. Known limitation: a mixed IDE (e.g. PyCharm
-     * with the Kotlin plugin installed) gets the Kotlin adapter; per-project
-     * detection is a possible follow-up (see docs/features/PyCharm/STEP_9_DI.md).
-     */
     private fun createCodeRepository(): CodeRepository {
         val kotlinAvailable = Language.findLanguageByID("kotlin") != null
         val pythonAvailable = Language.findLanguageByID("Python") != null
         MaxVibesLogger.info(
-            "Service",
-            "codeRepository dispatch",
+            "Service", "codeRepository dispatch",
             mapOf("kotlin" to kotlinAvailable.toString(), "python" to pythonAvailable.toString())
         )
-        return when {
+        val languageRepository = when {
             kotlinAvailable -> KotlinAdapterProvider.createCodeRepository(project)
             pythonAvailable -> PythonAdapterProvider.createCodeRepository(project)
             else -> {
-                LOG.warn("No supported language plugin (Kotlin/Python) — code operations disabled")
+                LOG.info("No Kotlin/Python plugin — whole text file operations remain available")
                 UnsupportedLanguageCodeRepository()
             }
         }
+        return com.maxvibes.plugin.files.FileAwareCodeRepository(project, languageRepository)
     }
 
     val projectContextProvider: ProjectContextPort by lazy {

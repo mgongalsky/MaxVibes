@@ -83,19 +83,15 @@ class PromptService(private val project: Project) : PromptPort {
     private val layers: PromptLayers
         get() = PromptLayers(promptsDir) { baseText(it) }
 
-    /**
-     * Полный базовый текст промпта — то, что уедет модели, если проект ничего не дополняет.
-     *
-     * [INIT_BLOCK_CAPABILITY] входит именно сюда, а не приклеивается к результату сборки:
-     * слой проекта обязан оставаться последним, иначе наша же поправка окажется после
-     * пользовательских правил и молча их перебьёт.
-     */
-    private fun baseText(kind: PromptKind): String = when (kind) {
-        PromptKind.CHAT_SYSTEM -> DEFAULT_CHAT_SYSTEM + INIT_BLOCK_CAPABILITY
-        PromptKind.PLANNING_SYSTEM -> DEFAULT_PLANNING_SYSTEM
-        PromptKind.CLAUDE_CODE_SYSTEM, PromptKind.CODEX_SYSTEM ->
-            (loadResource(kind.resourcePath)
-                ?: error("Missing classpath resource: ${kind.resourcePath}")) + INIT_BLOCK_CAPABILITY
+    private fun baseText(kind: PromptKind): String {
+        val base = when (kind) {
+            PromptKind.CHAT_SYSTEM -> DEFAULT_CHAT_SYSTEM + "\n\n" + INIT_BLOCK_CAPABILITY
+            PromptKind.PLANNING_SYSTEM -> DEFAULT_PLANNING_SYSTEM
+            PromptKind.CLAUDE_CODE_SYSTEM, PromptKind.CODEX_SYSTEM ->
+                (loadResource(kind.resourcePath)
+                    ?: error("Missing classpath resource: ${kind.resourcePath}")) + "\n\n" + INIT_BLOCK_CAPABILITY
+        }
+        return base + "\n\n" + TEXT_FILE_CAPABILITY
     }
 
     /** Промпт кодинг-агента: база, слой проекта, затем каталог скиллов. */
@@ -241,4 +237,19 @@ private val INIT_BLOCK_CAPABILITY = """
 - `CREATE_ELEMENT` supports adding a complete init block to a class with `elementKind: "INIT"` and a normal position.
 - There is no `REPLACE_TEXT`, `call[...]`, `initializer[...]`, or `whenEntry[...]` selector. To change an expression inside init, replace the containing init block as a whole.
 - Constructors remain unsupported by element replacement; use `REPLACE_FILE` for constructor structure changes.
+""".trimIndent()
+private val TEXT_FILE_CAPABILITY = """
+
+## Whole text files — current capability (overrides language-only rules above)
+
+- FULL reads any project text file, independently of Kotlin/Python support: INI, JSON, TOML, YAML, XML, Markdown, plain text, Gradle scripts, .gitignore, and extensionless text files.
+- For files without supported structural views, request FULL even if the file is long. Do not request SIGNATURES or ELEMENT for configuration or documentation files.
+- CREATE_FILE, REPLACE_FILE and DELETE_FILE operate on whole text files. Use a file path without element segments, e.g. file:pytest-unit.ini. CREATE_FILE fails if the file already exists; use REPLACE_FILE to update it, including small edits to non-language files.
+- Supply the entire new content for CREATE_FILE and REPLACE_FILE. Whitespace is significant; whole-file writes do not reformat the content. The editor normalizes line endings.
+- RENAME_ELEMENT with a whole-file path and newName renames the file. newName is a basename, e.g. notes.md, not a path.
+- MOVE_ELEMENT with a whole-file path and destination moves the file to that project-relative directory, preserving its filename. Missing parent directories are created. Existing destination files are never overwritten.
+- Whole-file rename/move are filesystem operations: they do NOT update references, imports or package declarations. Account for affected references explicitly. RENAME_ELEMENT with declaration segments remains an IDE semantic refactoring.
+- File operations stay inside the project and do not support binary file contents or directory operations. Use modifications, not shell commands, for supported text file operations.
+- The file tree includes tests and project text files, with service directories, environments, dependencies, caches, build output and binary files omitted. Listing budgets/depth limits are explicitly marked. Omission from the tree does not prove a file is absent: request a known path directly with FULL. A listing-limit marker is not a real file.
+- Failed batches restore and verify file snapshots. An incomplete rollback is reported explicitly; never tell the user that files were restored when the result reports a restoration error. Review those paths before retrying.
 """.trimIndent()

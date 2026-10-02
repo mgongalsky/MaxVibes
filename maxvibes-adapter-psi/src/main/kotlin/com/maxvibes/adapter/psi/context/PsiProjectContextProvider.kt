@@ -17,31 +17,25 @@ import java.nio.charset.Charset
 class PsiProjectContextProvider(private val project: Project) : ProjectContextPort {
 
     override suspend fun getProjectContext(): Result<ProjectContext, ContextError> {
-        // Refresh BEFORE runReadAction
-        val projectDir = com.intellij.openapi.application.ApplicationManager.getApplication()
-            .runReadAction<VirtualFile?> { project.guessProjectDir() }
+        val projectDir = runReadAction { project.guessProjectDir() }
             ?: return Result.Failure(ContextError.ProjectNotFound())
-
-        VfsUtil.markDirtyAndRefresh(false, true, true, projectDir)
-
+        // The bounded tree builder reads the filesystem directly. A recursive VFS
+        // refresh here would traverse excluded environments and generated output.
+        val treeResult = buildFileTree(projectDir, Int.MAX_VALUE, ProjectContextPort.DEFAULT_EXCLUDES)
+        val fileTree = when (treeResult) {
+            is Result.Success -> treeResult.value
+            is Result.Failure -> return Result.Failure(treeResult.error)
+        }
         return runReadAction {
-            val fileTreeResult = buildFileTree(projectDir, Int.MAX_VALUE, ProjectContextPort.DEFAULT_EXCLUDES)
-            if (fileTreeResult is Result.Failure) {
-                return@runReadAction fileTreeResult as Result.Failure
-            }
-            val fileTree = (fileTreeResult as Result.Success).value
-
-            val descFiles = findDescriptionFilesInternal(projectDir)
-            val techStack = detectTechStack(projectDir)
-
+            val descriptions = findDescriptionFilesInternal(projectDir)
             Result.Success(
                 ProjectContext(
                     name = project.name,
                     rootPath = projectDir.path,
-                    description = descFiles["README.md"] ?: descFiles["README"],
-                    architecture = descFiles["ARCHITECTURE.md"] ?: descFiles["docs/ARCHITECTURE.md"],
+                    description = descriptions["README.md"] ?: descriptions["README"],
+                    architecture = descriptions["ARCHITECTURE.md"] ?: descriptions["docs/ARCHITECTURE.md"],
                     fileTree = fileTree,
-                    techStack = techStack
+                    techStack = detectTechStack(projectDir)
                 )
             )
         }
@@ -120,64 +114,14 @@ class PsiProjectContextProvider(private val project: Project) : ProjectContextPo
         root: VirtualFile,
         maxDepth: Int,
         excludePatterns: List<String>
-    ): Result<FileTree, ContextError> {
-        var totalFiles = 0
-        var totalDirs = 0
-
-        log("[FileTree] Starting buildFileTree from: ${root.path}")
-        log("[FileTree] maxDepth: $maxDepth")
-        log("[FileTree] excludePatterns: $excludePatterns")
-
-        fun buildNode(file: java.io.File, depth: Int): FileNode? {
-            val excluded = shouldExclude(file.name, excludePatterns)
-            if (excluded) {
-                log("[FileTree] EXCLUDED: ${file.path}")
-                return null
-            }
-
-            return if (file.isDirectory) {
-                totalDirs++
-                val allChildren = file.listFiles()
-                log("[FileTree] DIR depth=$depth: ${file.path} | children count: ${allChildren?.size ?: -1}")
-                allChildren?.forEach { log("[FileTree]   child: ${it.name} isDir=${it.isDirectory}") }
-
-                val children = allChildren
-                    ?.mapNotNull { buildNode(it, depth + 1) }
-                    ?.sortedWith(compareBy({ !it.isDirectory }, { it.name }))
-                    ?: emptyList()
-
-                FileNode(
-                    name = file.name,
-                    path = file.path,
-                    isDirectory = true,
-                    children = children
-                )
-            } else {
-                totalFiles++
-                log("[FileTree] FILE depth=$depth: ${file.path}")
-                FileNode(
-                    name = file.name,
-                    path = file.path,
-                    isDirectory = false,
-                    size = file.length()
-                )
-            }
-        }
-
-        val rootFile = java.io.File(root.path)
-        log("[FileTree] rootFile exists: ${rootFile.exists()}, isDir: ${rootFile.isDirectory}")
-
-        val rootNode = buildNode(rootFile, 0)
-            ?: return Result.Failure(ContextError.ProjectNotFound())
-
-        log("[FileTree] Done: totalFiles=$totalFiles, totalDirs=$totalDirs")
-        return Result.Success(
-            FileTree(
-                root = rootNode,
-                totalFiles = totalFiles,
-                totalDirectories = totalDirs
+    ): Result<FileTree, ContextError> = try {
+        Result.Success(
+            ProjectFileTreeBuilder().build(
+                java.nio.file.Path.of(root.path), maxDepth, excludePatterns
             )
         )
+    } catch (e: Exception) {
+        Result.Failure(ContextError.FileReadError(root.path, e.message ?: "Cannot build file tree"))
     }
 
     private fun log(message: String) {
