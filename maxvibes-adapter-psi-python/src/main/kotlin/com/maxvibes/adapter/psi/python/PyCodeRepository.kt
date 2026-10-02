@@ -601,15 +601,6 @@ class PyCodeRepository(private val project: Project) : CodeRepository {
 
     private fun verifyPostcondition(modification: Modification): String? = runReadAction {
         fun normalized(text: String): String = text.filterNot { it.isWhitespace() }
-        fun hasImport(fileText: String, importPath: String): Boolean {
-            val dot = importPath.lastIndexOf('.')
-            val plain = normalized("import $importPath")
-            val fromImport = if (dot > 0) {
-                normalized("from ${importPath.substring(0, dot)} import ${importPath.substring(dot + 1)}")
-            } else null
-            val actual = normalized(fileText)
-            return actual.contains(plain) || (fromImport != null && actual.contains(fromImport))
-        }
 
         when (modification) {
             is Modification.CreateFile -> {
@@ -662,13 +653,17 @@ class PyCodeRepository(private val project: Project) : CodeRepository {
             is Modification.AddImport -> {
                 val file = navigator.findFile(modification.targetPath)
                     ?: return@runReadAction "Python import target disappeared"
-                if (!hasImport(file.text, modification.importPath)) "Python import was not added" else null
+                if (!PythonImportLookup.contains(file, modification.importPath)) "Python import was not added" else null
             }
 
             is Modification.RemoveImport -> {
                 val file = navigator.findFile(modification.targetPath)
                     ?: return@runReadAction "Python import target disappeared"
-                if (hasImport(file.text, modification.importPath)) "Python import was not removed" else null
+                if (PythonImportLookup.contains(
+                        file,
+                        modification.importPath
+                    )
+                ) "Python import was not removed" else null
             }
 
             // Ничего не применялось — проверять нечего.
