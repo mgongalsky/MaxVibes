@@ -10,18 +10,11 @@ import com.maxvibes.domain.model.check.CheckRequest
 import com.maxvibes.domain.model.check.CheckStatus
 
 /**
- * Собирает раннер проверок для текущей IDE.
- *
- * Контракт изоляции — тот же, что у KotlinAdapterProvider: [JvmBuildCheckRunner]
- * ссылается на compiler API, которого нет в IDE без JVM-поддержки, поэтому его
- * класс не должен загружаться раньше, чем подтверждено наличие API. Проверяем
- * сам вызываемый класс, а не косвенный признак вроде наличия языка.
- *
- * [ScopedTestCheckRunner] в гейте не нуждается: он построен на платформенном
- * execution API, а Java-PSI прячет во вложенном классе с отложенной загрузкой.
+ * Builds the runners available in the current IDE.
+ * Compiler API is optional. ScopedTestCheckRunner uses platform execution APIs;
+ * named targets go through platform resolution before a guarded Java PSI branch.
  */
 object CheckRunnerProvider {
-
     fun forProject(project: Project): CheckRunnerPort {
         val runners = buildList {
             if (hasCompilerApi()) add(JvmBuildCheckRunner(project))

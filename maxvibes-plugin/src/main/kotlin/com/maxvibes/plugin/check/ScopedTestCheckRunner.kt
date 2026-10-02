@@ -68,7 +68,6 @@ class ScopedTestCheckRunner(private val project: Project) : CheckRunnerPort {
     ): CheckExecution {
         val startedAt = System.currentTimeMillis()
         val scope = TestScopeParser.parse(request.scope)
-
         val unknown = scope.unknownTargets
         if (unknown.isNotEmpty()) {
             return CheckExecution(
@@ -81,22 +80,29 @@ class ScopedTestCheckRunner(private val project: Project) : CheckRunnerPort {
 
         progress.publish(CheckProgress("Resolving ${scope.description}"))
         val problems = mutableListOf<String>()
-        val targets = ReadAction.compute<List<ResolvedTarget>, RuntimeException> { resolveTargets(scope, problems) }
-        if (targets.isEmpty()) {
+        val targets = try {
+            ReadAction.compute<List<ResolvedTarget>, RuntimeException> { resolveTargets(scope, problems) }
+        } catch (e: UnsupportedTestTargetException) {
+            return CheckExecution(
+                request = request,
+                status = CheckStatus.UNSUPPORTED,
+                durationMs = System.currentTimeMillis() - startedAt,
+                rawOutput = "Cannot run scope '${scope.description}': ${e.message}"
+            )
+        }
+        // Never report a partially resolved scope as a successful complete check.
+        if (targets.isEmpty() || problems.isNotEmpty()) {
             return CheckExecution(
                 request = request,
                 status = CheckStatus.ERROR,
                 durationMs = System.currentTimeMillis() - startedAt,
-                rawOutput = "Nothing to run for scope '${scope.description}'.\n" +
+                rawOutput = "Cannot resolve the complete scope '${scope.description}'. No tests were started.\n" +
                         problems.joinToString("\n").ifBlank { SCOPE_HELP }
             )
         }
 
         val state = RunState()
         val activeHandler = AtomicReference<ProcessHandler?>()
-        // Делегированная в Gradle тестовая задача умирает на компиляции ещё до
-        // старта процесса: текста ловить неоткуда, и единственным источником
-        // ошибки остаётся поток событий вкладки Build.
         val buildOutput = BuildOutputCollector(project)
         buildOutput.start()
         val completed = try {
@@ -110,19 +116,10 @@ class ScopedTestCheckRunner(private val project: Project) : CheckRunnerPort {
         } finally {
             buildOutput.stop()
         }
-        if (completed == null) {
-            // Оставить процесс жить после таймаута значит отдать пользователю IDE,
-            // в которой продолжают крутиться чужие тесты.
-            activeHandler.get()?.destroyProcess()
-        }
+        if (completed == null) activeHandler.get()?.destroyProcess()
 
         val total = maxOf(state.total, state.completed)
-        // Сессия открылась и закрылась, не выполнив ни одного теста. Успехом это
-        // называть нельзя: агент, получив зелёное, сочтёт код проверенным и
-        // пойдёт дальше по сломанному месту. Одного sawTests тут мало — его
-        // поднимает уже старт сессии, а не первый тест.
         val nothingRan = completed != null && !state.cancelled && total == 0
-
         val status = when {
             state.cancelled -> CheckStatus.CANCELLED
             completed == null -> CheckStatus.TIMEOUT
@@ -132,8 +129,6 @@ class ScopedTestCheckRunner(private val project: Project) : CheckRunnerPort {
             state.errors.isNotEmpty() -> CheckStatus.ERROR
             else -> CheckStatus.PASSED
         }
-        // Ошибка компиляции тестового модуля — это и есть причина пустого
-        // прогона, поэтому она идёт в issues наравне с падениями тестов.
         val buildIssues = if (nothingRan || state.errors.isNotEmpty()) buildOutput.issues() else emptyList()
         return CheckExecution(
             request = request,
@@ -285,20 +280,40 @@ class ScopedTestCheckRunner(private val project: Project) : CheckRunnerPort {
         target: TestTarget,
         problems: MutableList<String>
     ): List<Pair<String, PsiElement>> = when (target) {
-        is TestTarget.AllTests -> testSourceDirectories()
-        is TestTarget.TestFile -> resolveFile(target.path, problems)
-        is TestTarget.TestClass -> single(target.fqn, JavaTargets.findClass(project, target.fqn), problems)
-        is TestTarget.TestMethod -> single(
-            target.description,
-            JavaTargets.findMethod(project, target.classFqn, target.methodName),
-            problems
-        )
+        is TestTarget.AllTests -> testSourceDirectories().ifEmpty {
+            PlatformPythonTestTargets(project).allTests()
+        }
 
-        is TestTarget.TestPackage -> single(
-            target.packageName,
-            JavaTargets.findPackage(project, target.packageName),
-            problems
-        )
+        is TestTarget.TestFile -> resolveFile(target.path, problems)
+        is TestTarget.TestClass, is TestTarget.TestMethod, is TestTarget.TestPackage ->
+            TestTargetDispatch.resolve(
+                label = target.description,
+                platformTargets = { PlatformPythonTestTargets(project).resolve(target) },
+                javaAvailable = { TestTargetDispatch.javaPsiAvailable() },
+                javaTargets = {
+                    when (target) {
+                        is TestTarget.TestClass -> single(
+                            target.fqn,
+                            JavaTargets.findClass(project, target.fqn),
+                            problems
+                        )
+
+                        is TestTarget.TestMethod -> single(
+                            target.description,
+                            JavaTargets.findMethod(project, target.classFqn, target.methodName),
+                            problems
+                        )
+
+                        is TestTarget.TestPackage -> single(
+                            target.packageName,
+                            JavaTargets.findPackage(project, target.packageName),
+                            problems
+                        )
+
+                        else -> emptyList()
+                    }
+                }
+            )
 
         is TestTarget.Unknown -> emptyList()
     }
@@ -344,12 +359,19 @@ class ScopedTestCheckRunner(private val project: Project) : CheckRunnerPort {
         element: PsiElement,
         problems: MutableList<String>
     ): ResolvedTarget? {
-        val context = ConfigurationContext(element)
-        val settings: RunnerAndConfigurationSettings? =
+        val settings = try {
+            val context = ConfigurationContext(element)
             context.configurationsFromContext?.firstOrNull()?.configurationSettings ?: context.configuration
+        } catch (e: LinkageError) {
+            throw UnsupportedTestTargetException(
+                "Test runner support could not be loaded for '$label': ${e.message}", e
+            )
+        }
         if (settings == null) {
-            problems += "No test runner in this IDE can run $label"
-            return null
+            throw UnsupportedTestTargetException(
+                "No test runner in this IDE can run '$label'. Enable the matching language/test plugin " +
+                        "and configure the project SDK or Python interpreter and test framework."
+            )
         }
         return ResolvedTarget(label, settings)
     }
