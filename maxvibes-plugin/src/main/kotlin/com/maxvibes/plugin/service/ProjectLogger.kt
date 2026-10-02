@@ -15,10 +15,10 @@ import kotlin.concurrent.thread
 
 class ProjectLogger(private val project: Project) : LoggerPort {
 
-    private val sessionId: String = "s-" + UUID.randomUUID().toString().take(8)
+    val sessionId: String = "s-" + UUID.randomUUID().toString().take(8)
     private val ideLogger = Logger.getInstance(ProjectLogger::class.java)
 
-    private val logDir = File(project.basePath, ".maxvibes")
+    private val logDir = File(project.basePath ?: System.getProperty("user.home"), ".maxvibes")
     private val logFile = File(logDir, "plugin.log")
     private val maxSizeBytes = 5L * 1024 * 1024
     private val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS")
@@ -90,12 +90,8 @@ class ProjectLogger(private val project: Project) : LoggerPort {
         writerThread.join(2000)
     }
 
-    private fun exData(ex: Throwable?, base: Map<String, Any?>?, stack: Boolean = false): Map<String, Any?>? {
-        if (ex == null) return base
-        val m = mutableMapOf<String, Any?>("ex" to ex.javaClass.simpleName, "exMsg" to ex.message)
-        if (stack) m["stack"] = ex.stackTrace.take(10).joinToString(" | ")
-        return (base ?: emptyMap()) + m
-    }
+    private fun exData(ex: Throwable?, base: Map<String, Any?>?, stack: Boolean = true): Map<String, Any?>? =
+        exceptionLogData(ex, base, stack)
 
     private fun log(level: String, tag: String, msg: String, data: Map<String, Any?>?) {
         val t = LocalDateTime.now().format(formatter)
@@ -150,4 +146,5 @@ class ProjectLogger(private val project: Project) : LoggerPort {
         is String -> escapeJson(v)
         else -> escapeJson(v.toString())
     }
+    val logFilePath: String get() = logFile.absolutePath
 }

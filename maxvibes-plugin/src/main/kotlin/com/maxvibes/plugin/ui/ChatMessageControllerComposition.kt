@@ -81,7 +81,13 @@ internal class ChatMessageControllerComposition(
 
     private val documentSaver: DocumentSaver = IntellijDocumentSaver()
     private val psiFailureReports: PsiFailureReportPort by lazy {
-        PsiFailureReportWriter(project.basePath ?: System.getProperty("user.home"))
+        val logger = service.projectLogger
+        PsiFailureReportWriter(
+            projectBasePath = project.basePath ?: System.getProperty("user.home"),
+            logger = logger,
+            logSessionId = logger.sessionId,
+            logFilePath = logger.logFilePath
+        )
     }
     private val terminalUsageLog: TerminalUsageLogPort by lazy {
         TerminalUsageLogWriter(project.basePath ?: System.getProperty("user.home"))

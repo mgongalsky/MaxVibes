@@ -147,9 +147,8 @@ class MaxVibesService(private val project: Project) : Disposable {
     val notificationPort: NotificationPort
         get() = notificationService
 
-    val loggerPort: LoggerPort by lazy {
-        ProjectLogger(project)
-    }
+    val loggerPort: LoggerPort
+        get() = projectLogger
 
     // ========== Use Cases ==========
 
@@ -550,7 +549,12 @@ class MaxVibesService(private val project: Project) : Disposable {
         }
         runCatching { serviceScope.cancel() }
             .onFailure { LOG.warn("serviceScope.cancel failed: ${it.message}", it) }
-        MaxVibesLogger.info("MaxVibesService", "disposed", mapOf("project" to project.name))
+        if (projectLoggerLazy.isInitialized()) {
+            runCatching {
+                projectLogger.info("MaxVibesService", "disposed", mapOf("project" to project.name))
+                projectLogger.shutdown()
+            }.onFailure { LOG.warn("ProjectLogger.shutdown failed: ${it.message}", it) }
+        }
     }
 
     companion object {
@@ -558,6 +562,10 @@ class MaxVibesService(private val project: Project) : Disposable {
             return project.getService(MaxVibesService::class.java)
         }
     }
+
+    private val projectLoggerLazy: Lazy<ProjectLogger> = lazy { ProjectLogger(project) }
+    val projectLogger: ProjectLogger
+        get() = projectLoggerLazy.value
 }
 
 /**

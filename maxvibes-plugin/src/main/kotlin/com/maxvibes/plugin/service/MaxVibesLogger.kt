@@ -116,12 +116,8 @@ object MaxVibesLogger : LoggerPort {
         writerThread.join(2000)
     }
 
-    private fun exData(ex: Throwable?, base: Map<String, Any?>?, stack: Boolean = false): Map<String, Any?>? {
-        if (ex == null) return base
-        val m = mutableMapOf<String, Any?>("ex" to ex.javaClass.simpleName, "exMsg" to ex.message)
-        if (stack) m["stack"] = ex.stackTrace.take(5).joinToString(" | ")
-        return (base ?: emptyMap()) + m
-    }
+    private fun exData(ex: Throwable?, base: Map<String, Any?>?, stack: Boolean = true): Map<String, Any?>? =
+        exceptionLogData(ex, base, stack)
 
     private fun log(level: String, tag: String, msg: String, data: Map<String, Any?>?) {
         val t = LocalDateTime.now().format(formatter)
