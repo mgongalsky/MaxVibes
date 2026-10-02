@@ -101,8 +101,12 @@ class PyCodeRepository(private val project: Project) : CodeRepository {
 
             is Modification.DeleteFile -> deleteFile(modification)
             is Modification.CreateElement ->
-                modifier.createElement(modification.targetPath, modification.content, modification.position)
-                    .toModificationResult(modification)
+                modifier.createElement(
+                    modification.targetPath,
+                    modification.content,
+                    modification.position,
+                    modification.elementKind
+                ).toModificationResult(modification)
 
             is Modification.ReplaceElement ->
                 modifier.replaceElement(modification.targetPath, modification.newContent)
@@ -124,8 +128,7 @@ class PyCodeRepository(private val project: Project) : CodeRepository {
             is Modification.SafeDelete -> safeDeleteElement(modification)
             is Modification.MoveElement -> moveElement(modification)
 
-            // Запись, которую не удалось разобрать. Раньше она отсеивалась ещё до репозитория
-            // и модель не узнавала, что правка не применена.
+            // Запись, которую не удалось разобрать, должна вернуть явную ошибку.
             is Modification.Unsupported -> ModificationResult.Failure(
                 modification = modification,
                 error = ModificationError.InvalidOperation(modification.reason)

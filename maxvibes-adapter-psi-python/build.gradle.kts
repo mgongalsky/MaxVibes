@@ -1,26 +1,28 @@
 plugins {
-  kotlin("jvm")
-  id("org.jetbrains.intellij")
+    kotlin("jvm")
+    id("org.jetbrains.intellij")
 }
 
 dependencies {
-  implementation(project(":maxvibes-domain"))
-  implementation(project(":maxvibes-application"))
-  implementation(project(":maxvibes-shared"))
-  testImplementation(kotlin("test"))
+    implementation(project(":maxvibes-domain"))
+    implementation(project(":maxvibes-application"))
+    implementation(project(":maxvibes-shared"))
+    testImplementation(kotlin("test"))
+    testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
 }
 
 intellij {
-  version.set("2023.1.5")
-  type.set("PC")
-  plugins.set(listOf("PythonCore"))
-  downloadSources.set(false)
-  instrumentCode.set(false)
+    version.set("2023.1.5")
+    type.set("PC")
+    plugins.set(listOf("PythonCore"))
+    downloadSources.set(false)
+    instrumentCode.set(false)
 }
 
 tasks {
-  buildSearchableOptions { enabled = false }
-  buildPlugin { enabled = false }
-  runIde { enabled = false }
-  patchPluginXml { enabled = false }
+    buildSearchableOptions { enabled = false }
+    buildPlugin { enabled = false }
+    runIde { enabled = false }
+    patchPluginXml { enabled = false }
 }

@@ -11,6 +11,7 @@ import com.maxvibes.shared.result.Result
 import com.jetbrains.python.codeInsight.imports.AddImportHelper
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.openapi.util.text.StringUtil
+import com.maxvibes.domain.model.code.ElementKind
 
 class PyPsiModifier(
     private val project: Project,
@@ -28,19 +29,66 @@ class PyPsiModifier(
         Result.Success(Unit)
     }
 
-    fun createElement(parentPath: ElementPath, content: String, position: InsertPosition): Result<Unit, String> =
-        runWrite {
-            val parent = navigator.findElement(parentPath)
-                ?: return@runWrite Result.Failure("Parent not found: ${parentPath.value}")
-            val newElement = createMatchingElement(parent, content)
-            when (position) {
-                InsertPosition.LAST_CHILD -> parent.add(newElement)
-                InsertPosition.FIRST_CHILD -> parent.addBefore(newElement, parent.firstChild)
-                InsertPosition.AFTER -> parent.parent?.addAfter(newElement, parent)
-                InsertPosition.BEFORE -> parent.parent?.addBefore(newElement, parent)
-            }
-            Result.Success(Unit)
+    fun createElement(
+        parentPath: ElementPath,
+        content: String,
+        position: InsertPosition,
+        elementKind: ElementKind
+    ): Result<Unit, String> = runWrite {
+        val target = navigator.findElement(parentPath)
+            ?: return@runWrite Result.Failure("Target not found: ${parentPath.value}")
+        // Creation is dispatched by the requested declaration, never by its parent.
+        val newElement = factory.createDeclaration(content, elementKind)
+        val sibling = position == InsertPosition.BEFORE || position == InsertPosition.AFTER
+        val anchor = if (sibling) {
+            (target as? PyStatement)
+                ?: com.intellij.psi.util.PsiTreeUtil.getParentOfType(target, PyStatement::class.java)
+                ?: return@runWrite Result.Failure("Insertion target is not a Python statement: ${parentPath.value}")
+        } else null
+        val container = if (sibling) {
+            anchor!!.parent
+        } else when (target) {
+            is PyClass -> target.statementList
+            is PyFunction -> target.statementList
+            is PyStatementList -> target
+            is PyFile -> target
+            else -> return@runWrite Result.Failure("Target cannot contain Python declarations: ${parentPath.value}")
         }
+        if (container !is PyStatementList && container !is PyFile) {
+            return@runWrite Result.Failure("Insertion requires a Python file or statement list")
+        }
+        val documentManager = PsiDocumentManager.getInstance(project)
+        val document = documentManager.getDocument(target.containingFile)
+            ?: return@runWrite Result.Failure("No document for file: ${parentPath.filePath}")
+        val added = when (position) {
+            InsertPosition.FIRST_CHILD -> {
+                val first = when (container) {
+                    is PyStatementList -> container.statements.firstOrNull()
+                    is PyFile -> container.statements.firstOrNull()
+                    else -> null
+                }
+                container.addBefore(newElement, first)
+            }
+
+            InsertPosition.LAST_CHILD -> container.add(newElement)
+            InsertPosition.BEFORE -> container.addBefore(newElement, anchor)
+            InsertPosition.AFTER -> container.addAfter(newElement, anchor)
+        }
+        // Format the suite owner too: insertion can expand an inline suite.
+        val formatTarget = if (container is PyStatementList) container.parent else added
+        val formatPointer = com.intellij.psi.SmartPointerManager.getInstance(project)
+            .createSmartPsiElementPointer(formatTarget)
+        // Flush formatting scheduled by PSI insertion before explicitly formatting
+        // the element, otherwise its document offsets can still be stale.
+        documentManager.doPostponedOperationsAndUnblockDocument(document)
+        documentManager.commitDocument(document)
+        val currentTarget = formatPointer.element
+            ?: return@runWrite Result.Failure("Created Python declaration was lost during PSI synchronization")
+        com.intellij.psi.codeStyle.CodeStyleManager.getInstance(project).reformat(currentTarget)
+        documentManager.doPostponedOperationsAndUnblockDocument(document)
+        documentManager.commitDocument(document)
+        Result.Success(Unit)
+    }
 
     fun replaceElement(targetPath: ElementPath, newContent: String): Result<Unit, String> = runWrite {
         val target = navigator.findElement(targetPath)
