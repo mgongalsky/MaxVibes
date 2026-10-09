@@ -299,6 +299,16 @@ class ChatPanelComposition(
     }
 
     private fun sendMessage() {
+        val sessionId = chatTreeService.getActiveSession().id
+        val mode = modeCoordinator.currentMode
+        if (view.deferSendUntilTranscript {
+                if (chatTreeService.getActiveSession().id == sessionId && modeCoordinator.currentMode == mode) {
+                    sendMessage()
+                } else {
+                    view.setStatus("Chat or mode changed. Voice transcript inserted; press Send to send it.")
+                }
+            }) return
+
         val submission = view.takeSubmission() ?: return
         val state = buildState()
         messageController.sendMessage(

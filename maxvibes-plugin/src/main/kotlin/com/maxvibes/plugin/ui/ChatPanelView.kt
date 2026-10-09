@@ -278,4 +278,6 @@ class ChatPanelView(
 
     fun setAutonomyLimit(current: () -> Int, onChange: (Int) -> Unit) =
         inputPanel.setAutonomyLimit(current, onChange)
+    fun deferSendUntilTranscript(send: () -> Unit): Boolean =
+        voiceCoordinator.deferSendUntilTranscript(send)
 }
