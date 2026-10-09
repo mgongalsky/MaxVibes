@@ -636,8 +636,7 @@ class PyCodeRepository(private val project: Project) : CodeRepository {
                 if (element != null && normalized(element.text) == normalized(modification.newContent)) {
                     null
                 } else {
-                    // Замена вправе изменить имя объявления — тогда по старому пути элемента
-                    // больше нет, и это успех, а не провал. Проверяем по тексту файла.
+                    // A replacement may rename the declaration, invalidating its old path.
                     val file = navigator.findFile(ElementPath.file(modification.targetPath.filePath))
                         ?: return@runReadAction "Python target file disappeared after REPLACE_ELEMENT"
                     if (!normalized(file.text).contains(normalized(modification.newContent))) {
@@ -659,16 +658,14 @@ class PyCodeRepository(private val project: Project) : CodeRepository {
             is Modification.RemoveImport -> {
                 val file = navigator.findFile(modification.targetPath)
                     ?: return@runReadAction "Python import target disappeared"
-                if (PythonImportLookup.contains(
+                if (PythonImportLookup.containsAny(
                         file,
                         modification.importPath
                     )
                 ) "Python import was not removed" else null
             }
 
-            // Ничего не применялось — проверять нечего.
             is Modification.Unsupported -> null
-
             is Modification.RenameElement,
             is Modification.SafeDelete,
             is Modification.MoveElement -> null

@@ -184,4 +184,51 @@ class FileAwareCodeRepositoryTest {
         assertEquals(mapOf(target to "notes"), contents)
         assertEquals(target, assertIs<ModificationResult.Success>(result).affectedPath.filePath)
     }
+
+    @Test
+    fun languageRollbackUsesOuterIndexAndOriginalReason() = runBlocking {
+        contents["viewer.py"] = "value = 1\n"
+        val import = Modification.AddImport(ElementPath.file("viewer.py"), "from normalization import detail_settings")
+        coEvery { language.applyModifications(listOf(import)) } returns listOf(
+            ModificationResult.Failure(import, ModificationError.BatchRolledBack(0, "Python import was not added"))
+        )
+        val results = repository.applyModifications(
+            listOf(
+                Modification.CreateFile(ElementPath.file("normalization.py"), "value = 42\n"),
+                Modification.ReplaceFile(ElementPath.file("viewer.py"), "value = 2\n"),
+                import
+            )
+        )
+        assertEquals(3, results.size)
+        results.forEach { result ->
+            val error = assertIs<ModificationError.BatchRolledBack>(assertIs<ModificationResult.Failure>(result).error)
+            assertEquals(2, error.failedOperation)
+            assertEquals("Python import was not added", error.reason)
+            assertEquals(
+                "Modification batch was rolled back after operation 3 failed: Python import was not added",
+                error.message
+            )
+        }
+        assertEquals(mapOf("viewer.py" to "value = 1\n"), contents)
+    }
+
+    @Test
+    fun languageFailureRetainsRestorationErrors() = runBlocking {
+        contents["viewer.py"] = "value = 1\n"
+        val import = Modification.RemoveImport(ElementPath.file("viewer.py"), ".m.B")
+        coEvery { language.applyModifications(listOf(import)) } returns listOf(
+            ModificationResult.Failure(
+                import,
+                ModificationError.BatchRolledBack(0, "Import not found: .m.B; rollback error: inner restore failed")
+            )
+        )
+        every { anyConstructed<ProjectTextFiles>().restore(any()) } returns listOf("viewer.py: access denied")
+        val result = repository.applyModification(import)
+        val error = assertIs<ModificationError.IOError>(assertIs<ModificationResult.Failure>(result).error)
+        assertContains(error.message, "Import not found: .m.B")
+        assertContains(error.message, "inner restore failed")
+        assertContains(error.message, "viewer.py: access denied")
+        assertContains(error.message, "NOT restored")
+        assertFalse(error.message.contains("batch was rolled back"))
+    }
 }

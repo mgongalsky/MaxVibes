@@ -70,7 +70,6 @@ class FileAwareCodeRepository(project: Project, private val language: CodeReposi
             if (modifications.size != 1) return modifications.map {
                 failure(it, "IDE refactorings cannot be mixed with other modifications in one atomic batch")
             }
-            // Semantic refactorings can affect references outside the target file.
             return language.applyModifications(modifications)
         }
 
@@ -96,15 +95,16 @@ class FileAwareCodeRepository(project: Project, private val language: CodeReposi
                 val result = if (isWholeFileOperation(modification)) {
                     files.write { applyFile(modification) }
                 } else {
-                    // Retain the language adapter's structural postcondition checks.
+                    // The adapter receives one operation, so its index is local to that singleton.
                     language.applyModifications(listOf(modification)).single()
                 }
-                if (result is ModificationResult.Failure) error(result.error.message)
+                if (result is ModificationResult.Failure) {
+                    val cause = result.error
+                    error(if (cause is ModificationError.BatchRolledBack) cause.reason else cause.message)
+                }
                 results += result
             }
-            files.write {
-                snapshots.forEach { files.save(it.path) }
-            }
+            files.write { snapshots.forEach { files.save(it.path) } }
             return results
         } catch (e: Exception) {
             val rollbackErrors = try {

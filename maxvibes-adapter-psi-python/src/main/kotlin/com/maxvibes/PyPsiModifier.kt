@@ -106,69 +106,57 @@ class PyPsiModifier(
         Result.Success(Unit)
     }
 
-    /**
-     * Adds an import to a Python file via [AddImportHelper].
-     *
-     * Convention for [importPath]:
-     * - contains a dot ("typing.List") -> `from typing import List`
-     * - single name ("os") -> `import os`
-     */
+    /** Adds a legacy FQN or an explicit Python import, preserving aliases and relative levels. */
     fun addImport(filePath: ElementPath, importPath: String): Result<Unit, String> = runWrite {
         val file = navigator.findFile(filePath)
             ?: return@runWrite Result.Failure("File not found: ${filePath.filePath}")
-        val dotIndex = importPath.lastIndexOf('.')
-        if (dotIndex > 0) {
-            AddImportHelper.addOrUpdateFromImportStatement(
-                file,
-                importPath.substring(0, dotIndex),
-                importPath.substring(dotIndex + 1),
-                null,
-                AddImportHelper.ImportPriority.THIRD_PARTY,
-                null
-            )
-        } else {
-            AddImportHelper.addImportStatement(
-                file,
-                importPath,
-                null,
-                AddImportHelper.ImportPriority.THIRD_PARTY,
-                null
-            )
+        val request = PythonImportLookup.parse(file, importPath)
+        for (expected in request.entries) {
+            val exists = file.statements.filterIsInstance<PyImportStatementBase>().any { statement ->
+                statement.importElements.any { request.matches(expected, PythonImportLookup.entry(statement, it)) }
+            }
+            if (exists) continue
+            if (expected.source != null) {
+                AddImportHelper.addOrUpdateFromImportStatement(
+                    file, expected.source, expected.name, expected.alias,
+                    AddImportHelper.ImportPriority.THIRD_PARTY, null
+                )
+            } else {
+                AddImportHelper.addImportStatement(
+                    file, expected.name, expected.alias,
+                    AddImportHelper.ImportPriority.THIRD_PARTY, null
+                )
+            }
         }
         Result.Success(Unit)
     }
 
-    /**
-     * Removes an import matching [importPath] (FQN) from a Python file.
-     *
-     * Matches both plain imports (`import os.path`) and from-imports
-     * (`from typing import List` matches "typing.List"). If the statement
-     * has a single import element, the whole statement is removed.
-     */
+    /** Removes every matching file-level import; explicit requests also match form and alias. */
     fun removeImport(filePath: ElementPath, importPath: String): Result<Unit, String> = runWrite {
         val file = navigator.findFile(filePath)
             ?: return@runWrite Result.Failure("File not found: ${filePath.filePath}")
-        var removed = false
-        outer@ for (statement in file.statements.filterIsInstance<PyImportStatementBase>()) {
-            val elements = statement.importElements
-            for (importElement in elements) {
-                val fqn = when (statement) {
-                    is PyFromImportStatement -> {
-                        val source = statement.importSourceQName?.toString() ?: continue
-                        val name = importElement.importedQName?.toString() ?: continue
-                        "$source.$name"
-                    }
-
-                    else -> importElement.importedQName?.toString() ?: continue
-                }
-                if (fqn == importPath) {
-                    if (elements.size == 1) statement.delete() else importElement.delete()
-                    removed = true
-                    break@outer
-                }
+        val request = PythonImportLookup.parse(file, importPath)
+        val statements = file.statements.filterIsInstance<PyImportStatementBase>()
+        val actual = statements.flatMap { statement ->
+            statement.importElements.map { PythonImportLookup.entry(statement, it) }
+        }
+        if (request.entries.any { expected -> actual.none { request.matches(expected, it) } }) {
+            return@runWrite Result.Failure("Import not found: $importPath")
+        }
+        for (statement in statements) {
+            val elements = statement.importElements.toList()
+            val matching = elements.filter { element ->
+                val entry = PythonImportLookup.entry(statement, element)
+                request.entries.any { request.matches(it, entry) }
+            }
+            if (matching.isEmpty()) continue
+            if (matching.size == elements.size) {
+                statement.delete()
+            } else {
+                matching.asReversed().forEach { it.delete() }
             }
         }
-        if (removed) Result.Success(Unit) else Result.Failure("Import not found: $importPath")
+        Result.Success(Unit)
     }
 
     private fun createMatchingElement(target: PsiElement, source: String): PsiElement = when (target) {
