@@ -71,4 +71,14 @@ class IdeNotificationService(private val project: Project) : NotificationPort {
             }
         }
     }
+    fun notifyUserAttention(sessionTitle: String, message: String) {
+        ApplicationManager.getApplication().invokeLater {
+            if (project.isDisposed) return@invokeLater
+            com.intellij.ui.SystemNotifications.getInstance().notify(
+                "MaxVibes",
+                "MaxVibes — ${project.name}",
+                "$sessionTitle: $message"
+            )
+        }
+    }
 }

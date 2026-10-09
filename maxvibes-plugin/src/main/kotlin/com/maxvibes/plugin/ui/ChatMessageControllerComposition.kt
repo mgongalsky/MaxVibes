@@ -134,7 +134,16 @@ internal class ChatMessageControllerComposition(
                     null -> claudeCodeDispatcher.continueTurnAutomatically(sessionId)
                 }
             },
-            onParked = { _, reason, _ -> announceParked(reason) },
+            onParked = { sessionId, reason, _ ->
+                announceParked(reason)
+                val title = chatTreeService.getSessionById(sessionId)?.title ?: "Чат"
+                val message = when (reason) {
+                    AwaitReason.AGENT_QUESTIONS -> "Нужен ваш ответ"
+                    AwaitReason.POLICY_ASK -> "Нужно ваше подтверждение"
+                    AwaitReason.BUDGET_EXHAUSTED -> "Лимит автономии исчерпан. Нужно ваше решение"
+                }
+                service.notificationService.notifyUserAttention(title, message)
+            },
             budget = {
                 AutonomyBudget(
                     ApprovalPolicySettings.getInstance(project).loadAutonomousIterations()
@@ -321,19 +330,12 @@ internal class ChatMessageControllerComposition(
             val completed = result as? ClaudeCodeStepResult.Completed
             val checks = completed?.checks.orEmpty()
             val blockedByCommands = checks.isNotEmpty() && completed?.commands?.isNotEmpty() == true
-            // Правки этого шага не дошли до кода, значит проверять нечего: собирать
-            // и тестировать пришлось бы то, чего на диске нет.
             val brokenStep = completed?.malformedModifications?.isNotEmpty() == true ||
                     completed?.modifications?.any { !it.success } == true
-            // Отчёт пишется до handleResult: тот дёргает автопилот, а он может тут же
-            // начать следующий ход поверх состояния этого.
-            // Проверка на null избыточна по смыслу, но нужна редактору: умное
-            // приведение через булеву переменную видит не всякий анализатор.
+            // Record failures and prepare checks before the dispatcher can continue automatically.
             if (brokenStep && completed != null) {
                 reportBrokenStep(session, completed)
             }
-            // Батч чеков должен существовать до handleResult: тот дёргает автопилот,
-            // а автопилот запускает уже готовый батч без участия человека.
             if (checks.isNotEmpty() && !blockedByCommands && !brokenStep) {
                 checkCoordinator.presentChecks(checks, session.id, InteractionMode.CLAUDE_CODE)
             }
@@ -346,6 +348,22 @@ internal class ChatMessageControllerComposition(
                 callbacks.appendToChat(
                     "\u26A0\uFE0F ${checks.size} check(s) skipped \u2014 the modifications of this step never reached the code"
                 )
+            }
+            // A Completed response can still contain checks, commands or CONTINUE.
+            // Use the same signal as the autopilot so those intermediate steps stay silent.
+            val message = when (com.maxvibes.application.service.turn.TurnSignalMapper.from(result)) {
+                com.maxvibes.domain.model.turn.TurnSignal.Completed ->
+                    if (completed?.success == false) "Работа завершилась с ошибками. Проверьте чат"
+                    else "Работа завершена. Можно продолжать диалог"
+
+                is com.maxvibes.domain.model.turn.TurnSignal.Failed ->
+                    "Работа остановилась с ошибкой. Нужно ваше внимание"
+
+                else -> null
+            }
+            if (message != null) {
+                val sessionTitle = chatTreeService.getSessionById(session.id)?.title ?: session.title
+                service.notificationService.notifyUserAttention(sessionTitle, message)
             }
         }
     )
