@@ -72,8 +72,16 @@ class ChatPanelCallbacksAdapter(
         warnings: List<String>,
         onRun: () -> Unit,
         onDecline: (String?) -> Unit
-    ): CommandBlockView =
-        conversationPanel.addCommandBubble(command, reason, warnings, onRun, onDecline)
+    ): CommandBlockView {
+        setActivity(ChatActivity.WAITING)
+        val block = conversationPanel.addCommandBubble(command, reason, warnings, onRun, onDecline)
+        return object : CommandBlockView by block {
+            override fun setRunning() {
+                setActivity(ChatActivity.RUNNING)
+                block.setRunning()
+            }
+        }
+    }
 
     override fun addCheckBubble(
         title: String,
@@ -81,6 +89,7 @@ class ChatPanelCallbacksAdapter(
         onRun: () -> Unit,
         onDecline: (String?) -> Unit
     ): CheckBlockView {
+        setActivity(ChatActivity.WAITING)
         val block = conversationPanel.addCommandBubble(
             command = title,
             reason = reason,
@@ -91,8 +100,8 @@ class ChatPanelCallbacksAdapter(
         )
         return object : CheckBlockView {
             override fun setQueued() = block.setQueued()
-
             override fun setRunning(onCancel: () -> Unit) {
+                setActivity(ChatActivity.RUNNING)
                 block.setRunning()
                 block.setCancelAction(onCancel)
             }
@@ -102,11 +111,11 @@ class ChatPanelCallbacksAdapter(
                     progress.completed?.let { done ->
                         append(done)
                         progress.total?.let { append('/').append(it) }
-                        append(" \u00B7 ")
+                        append(" · ")
                     }
-                    if (progress.failed > 0) append("${progress.failed} failed \u00B7 ")
+                    if (progress.failed > 0) append("${progress.failed} failed · ")
                 }
-                block.setProgress("\u23F3 $counters${progress.label}")
+                block.setProgress("⏳ $counters${progress.label}")
             }
 
             override fun setResult(headline: String, details: String, success: Boolean) =
@@ -141,6 +150,7 @@ class ChatPanelCallbacksAdapter(
     override fun appendIconToLastBubble(icon: String) = conversationPanel.appendIconToLastBubble(icon)
 
     override fun setInputEnabled(enabled: Boolean) {
+        if (!enabled) setActivity(ChatActivity.RUNNING)
         inputPanel.setControlsEnabled(enabled)
         headerPanel.setControlsEnabled(enabled)
         specificPromptPanel.setControlsEnabled(enabled)
@@ -196,5 +206,9 @@ class ChatPanelCallbacksAdapter(
     }
     override fun addAttachmentBubble(relativePath: String, caption: String) {
         SwingUtilities.invokeLater { conversationPanel.addAttachmentBubble(relativePath, caption) }
+    }
+    var onActivity: (ChatActivity) -> Unit = {}
+    override fun setActivity(activity: ChatActivity) {
+        onActivity(activity)
     }
 }

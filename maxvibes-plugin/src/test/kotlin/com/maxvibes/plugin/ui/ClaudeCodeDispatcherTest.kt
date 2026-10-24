@@ -208,4 +208,45 @@ class ClaudeCodeDispatcherTest {
         assertTrue(callbacks.statusUpdates.last().contains("transport error"))
         assertEquals("Claude Code transport error: no binary", lastMessage().content)
     }
+
+    @Test
+    fun `activity finishes only after a final answer without pending work`() {
+        val activities = mutableListOf<ChatActivity>()
+        val recordingCallbacks = object : ChatPanelCallbacks by callbacks {
+            override fun setActivity(activity: ChatActivity) {
+                activities.add(activity)
+            }
+        }
+        val subject = ClaudeCodeDispatcher(
+            claudeCodeService = { error("No transport expected") },
+            resolveSpecificPrompt = { null },
+            chatTreeService = chatTreeService,
+            callbacks = recordingCallbacks,
+            presentQuestions = {},
+            presentCommands = { _, _, _ -> },
+            executeAsync = { _, _, _ -> }
+        )
+        val finished = ClaudeCodeStepResult.Completed(
+            message = "answer", modifications = emptyList(), success = true
+        )
+        val check = io.mockk.mockk<com.maxvibes.domain.model.check.CheckRequest>(relaxed = true)
+        io.mockk.every { check.kind } returns com.maxvibes.domain.model.check.CheckKind.TESTS
+        val cases = listOf(
+            finished.copy(turnIntent = com.maxvibes.domain.model.turn.TurnIntent.CONTINUE) to ChatActivity.WAITING,
+            finished.copy(checks = listOf(check)) to ChatActivity.WAITING,
+            finished.copy(commands = listOf(CommandRequest("echo status"))) to ChatActivity.WAITING,
+            ClaudeCodeStepResult.WaitingForApprove(
+                assistantMessage = "files",
+                requestedViews = emptyList()
+            ) to ChatActivity.WAITING,
+            ClaudeCodeStepResult.Error("failed") to ChatActivity.ERROR,
+            finished.copy(success = false) to ChatActivity.ERROR,
+            finished to ChatActivity.FINISHED
+        )
+        for ((result, expected) in cases) {
+            activities.clear()
+            subject.handleResult(result, activeSession())
+            assertEquals(listOf(expected), activities, "Unexpected activity for $result")
+        }
+    }
 }

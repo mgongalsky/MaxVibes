@@ -245,20 +245,16 @@ class ChatPanelComposition(
                 view.updateBreadcrumb(chatTreeService.getSessionPath(session.id))
             },
             onUpdateTokenDisplay = {
-                view.updateTokenDisplay(
-                    chatTreeService.getActiveSession().tokenUsage.formatDisplay()
-                )
+                view.updateTokenDisplay(chatTreeService.getActiveSession().tokenUsage.formatDisplay())
             },
             onRegisterElementPaths = ::registerElementPaths,
             onCommitMessage = { environmentActions.setCommitMessage(it) },
             onLoadSession = { sessionUiCoordinator.loadCurrentSession() },
             onShowWelcome = { sessionUiCoordinator.showWelcome() },
             onSendCurrentInput = ::sendMessage,
-            onOpenDiagram = { diagram ->
-                DiagramViewerDialog(project, diagram).show()
-            },
+            onOpenDiagram = { diagram -> DiagramViewerDialog(project, diagram).show() },
             onClearNavigation = { elementNavRegistry.clear() }
-        )
+        ).also { it.onActivity = view::setActivity }
     }
 
     private val messageController: ChatMessageController by lazy {
@@ -275,7 +271,36 @@ class ChatPanelComposition(
         )
         view.setAutonomyLimit(
             current = { ApprovalPolicySettings.getInstance(project).loadAutonomousIterations() },
-            onChange = { ApprovalPolicySettings.getInstance(project).saveAutonomousIterations(it) }
+            onChange = { requested ->
+                val approvalSettings = ApprovalPolicySettings.getInstance(project)
+                val previous = approvalSettings.loadAutonomousIterations()
+                approvalSettings.saveAutonomousIterations(requested)
+                val current = approvalSettings.loadAutonomousIterations()
+                if (previous != current) {
+                    service.loggerPort.info(
+                        "Autonomy", "iteration_limit_changed", mapOf(
+                            "sessionId" to chatTreeService.getActiveSession().id,
+                            "source" to "chat_spinner",
+                            "previous" to previous,
+                            "limit" to current,
+                            "appliesTo" to "next_turn"
+                        )
+                    )
+                }
+            }
+        )
+        val approvalSettings = ApprovalPolicySettings.getInstance(project)
+        service.loggerPort.info(
+            "Autonomy", "settings_snapshot", mapOf(
+                "source" to "panel_initialized",
+                "sessionId" to chatTreeService.getActiveSession().id,
+                "allowAll" to messageController.isAllowAllApprovals(),
+                "policy" to approvalSettings.load().asMap().entries.joinToString(",") { "${it.key}=${it.value}" },
+                "configuredLimit" to approvalSettings.loadAutonomousIterations(),
+                "formatRetries" to approvalSettings.loadMaxFormatRetries(),
+                "mode" to modeCoordinator.currentMode.name,
+                "agent" to service.activeCodingAgentName
+            )
         )
     }
 

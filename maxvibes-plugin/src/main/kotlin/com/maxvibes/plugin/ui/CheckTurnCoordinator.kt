@@ -133,15 +133,29 @@ class CheckTurnCoordinator(
         if (checkTurn !== turn || item !in turn.items || item.resolved || item.started) return
         item.started = true
         val title = titleOf(item.request)
+        val cancelling = java.util.concurrent.atomic.AtomicBoolean(false)
         item.view?.setRunning {
-            callbacks.setStatus("\uD83D\uDED1 Cancelling: $title")
+            cancelling.set(true)
+            callbacks.setStatus("🛑 Cancelling: $title")
             item.cancellation.cancel()
         }
-        callbacks.setStatus("\uD83D\uDD27 Running: $title")
+        callbacks.setActivity(ChatActivity.RUNNING)
+        callbacks.setStatus("🔧 Running: $title")
         val progress = CheckProgressSink { update ->
             if (checkTurn !== turn || item.resolved) return@CheckProgressSink
             item.view?.setProgress(update)
-            callbacks.setStatus("\uD83D\uDD27 $title \u2014 ${update.label}")
+            if (activeSessionId() == turn.sessionId) {
+                val counters = buildString {
+                    update.completed?.let { done ->
+                        append(done)
+                        update.total?.let { append('/').append(it) }
+                        append(" · ")
+                    }
+                    if (update.failed > 0) append("${update.failed} failed · ")
+                }
+                val phase = if (cancelling.get()) "🛑 Cancelling" else "🔧 Running"
+                callbacks.setStatus("$phase: $title — $counters${update.label}")
+            }
         }
         executeAsync(item.request, progress, item.cancellation) completion@{ execution ->
             if (checkTurn !== turn || item.resolved) return@completion
@@ -152,17 +166,11 @@ class CheckTurnCoordinator(
                 runCheckUseCase.formatForLlm(execution),
                 execution.status == CheckStatus.PASSED
             )
-            addSystemMessage(
-                checkTurn?.sessionId ?: activeSessionId(),
-                "\uD83D\uDD27 $title \u2192 $headline"
-            )
+            addSystemMessage(turn.sessionId, "🔧 $title → $headline")
             recordExecution(turn, execution)
             if (turn.sequential && checkTurn === turn) {
-                if (execution.status == CheckStatus.PASSED) {
-                    runNextQueued(turn)
-                } else {
-                    declineAllRemaining(turn, "skipped: previous check did not pass")
-                }
+                if (execution.status == CheckStatus.PASSED) runNextQueued(turn)
+                else declineAllRemaining(turn, "skipped: previous check did not pass")
             }
         }
     }
@@ -172,7 +180,10 @@ class CheckTurnCoordinator(
         turn.executions.add(execution)
         val remaining = turn.items.size - turn.executions.size
         if (remaining > 0) {
-            if (!turn.sequential) callbacks.setStatus("\uD83D\uDD27 $remaining check(s) awaiting approval")
+            if (!turn.sequential && turn.items.none { it.started && !it.resolved }) {
+                callbacks.setActivity(ChatActivity.WAITING)
+                callbacks.setStatus("🔧 $remaining check(s) awaiting approval")
+            }
             return
         }
         checkTurn = null
@@ -185,7 +196,8 @@ class CheckTurnCoordinator(
             "checkTurn complete",
             mapOf("mode" to turn.mode.name, "n" to turn.executions.size)
         )
-        callbacks.setStatus("\uD83D\uDD27 Sending check results...")
+        callbacks.setActivity(ChatActivity.RUNNING)
+        callbacks.setStatus("🔧 Sending check results...")
         onBatchComplete(turn.sessionId, turn.mode, formatted)
     }
 

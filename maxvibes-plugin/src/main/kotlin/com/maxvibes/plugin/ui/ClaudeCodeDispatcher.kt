@@ -482,10 +482,6 @@ class ClaudeCodeDispatcher(
     }
 
     private fun notifyTurn(result: ClaudeCodeStepResult, session: ChatSession) {
-        // Незаконченный шаг — правки на подтверждении, запрос файлов, вопросы — ничего
-        // не говорит о том, дошли ли правки до кода, поэтому серию срывов не трогает.
-        // Иначе удержание правок обнуляло бы счётчик, и лимит повторов был бы
-        // недостижим для ошибок применения: они всегда идут через подтверждение.
         val completed = result as? ClaudeCodeStepResult.Completed
         if (completed != null) {
             val malformed = completed.malformedModifications
@@ -499,8 +495,43 @@ class ClaudeCodeDispatcher(
                 pendingFix[session.id] = fixPrompt(malformed, failed)
             }
         }
-        val autopilot = turnAutopilot() ?: return
-        autopilot.onStep(session.id, TurnSignalMapper.from(result))
+        val signal = TurnSignalMapper.from(result)
+        val autopilot = turnAutopilot()
+        if (autopilot == null) {
+            if (chatTreeService.getActiveSession().id != session.id) return
+            callbacks.setActivity(
+                when (signal) {
+                    com.maxvibes.domain.model.turn.TurnSignal.Completed ->
+                        if (completed?.success == true) ChatActivity.FINISHED else ChatActivity.ERROR
+
+                    is com.maxvibes.domain.model.turn.TurnSignal.Failed -> ChatActivity.ERROR
+                    else -> ChatActivity.WAITING
+                }
+            )
+            return
+        }
+        // A continuation may start synchronously; never overwrite its activity after onStep.
+        if (chatTreeService.getActiveSession().id == session.id) callbacks.setActivity(ChatActivity.RUNNING)
+        val outcome = autopilot.onStep(session.id, signal)
+        if (chatTreeService.getActiveSession().id != session.id) return
+        when (outcome) {
+            is com.maxvibes.domain.model.turn.TurnOutcome.Continue -> Unit
+            is com.maxvibes.domain.model.turn.TurnOutcome.AwaitHuman -> callbacks.setActivity(ChatActivity.WAITING)
+            com.maxvibes.domain.model.turn.TurnOutcome.Finished -> {
+                if (completed?.success == true) {
+                    callbacks.setActivity(ChatActivity.FINISHED)
+                    callbacks.setStatus("Готово — ожидается ваше сообщение")
+                } else {
+                    callbacks.setActivity(ChatActivity.ERROR)
+                    callbacks.setStatus("Работа завершилась с ошибками — проверьте чат")
+                }
+            }
+
+            is com.maxvibes.domain.model.turn.TurnOutcome.Aborted -> {
+                callbacks.setActivity(ChatActivity.ERROR)
+                callbacks.setStatus("Работа остановлена: ${outcome.cause}")
+            }
+        }
     }
 
     /**

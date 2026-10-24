@@ -172,15 +172,16 @@ class CommandTurnCoordinator(
         turn.executions.add(execution)
         val remaining = turn.items.size - turn.executions.size
         if (remaining > 0) {
-            callbacks.setStatus("⚡ $remaining command(s) awaiting approval")
+            if (!turn.runAllActive && turn.items.none { it.started && !it.resolved }) {
+                callbacks.setActivity(ChatActivity.WAITING)
+                callbacks.setStatus("⚡ $remaining command(s) awaiting approval")
+            }
             return
         }
         turn.batchBar?.dismiss()
         commandTurn = null
         val lineFeed = 10.toChar().toString()
-        val formatted = turn.executions.joinToString(
-            lineFeed + lineFeed + "---" + lineFeed + lineFeed
-        ) {
+        val formatted = turn.executions.joinToString(lineFeed + lineFeed + "---" + lineFeed + lineFeed) {
             executeCommandUseCase.formatForLlm(it)
         }
         MaxVibesLogger.info(
@@ -188,6 +189,7 @@ class CommandTurnCoordinator(
             "commandTurn complete",
             mapOf("mode" to turn.mode.name, "n" to turn.executions.size)
         )
+        callbacks.setActivity(ChatActivity.RUNNING)
         callbacks.setStatus("⚡ Sending command results...")
         onBatchComplete(turn.sessionId, turn.mode, formatted)
     }

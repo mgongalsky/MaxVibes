@@ -78,6 +78,9 @@ interface InputStatusView {
 
     /** Submits text through the exact same path as the main input's Send button. */
     fun sendUserMessage(text: String)
+
+    /** Reports interaction lifecycle separately from transient status messages. */
+    fun setActivity(activity: ChatActivity) {}
 }
 
 /** Combined transcript and input/status surface used by message dispatchers. */

@@ -375,4 +375,23 @@ class ChatInputPanel(
             super.replace(fb, offset, length, text, attrs)
         }
     }
+
+    /** Colors only layout panels behind the model selectors and action buttons. */
+    fun setWorkFinished(finished: Boolean) {
+        val controls = (layout as BorderLayout).getLayoutComponent(BorderLayout.SOUTH) as? JPanel ?: return
+        val originalBackgroundKey = "maxvibes.controls.originalBackground"
+        val finishedBackground = JBColor(Color(0xC8E6C9), Color(0x28543B))
+        fun updatePanel(panel: JPanel) {
+            if (panel === usageBar) return
+            if (panel.getClientProperty(originalBackgroundKey) == null) {
+                panel.putClientProperty(originalBackgroundKey, panel.background)
+            }
+            panel.background = if (finished) finishedBackground
+            else panel.getClientProperty(originalBackgroundKey) as Color
+            // Stop at controls: their editors, fields and button surfaces retain their own colors.
+            panel.components.filterIsInstance<JPanel>().forEach(::updatePanel)
+            panel.repaint()
+        }
+        updatePanel(controls)
+    }
 }

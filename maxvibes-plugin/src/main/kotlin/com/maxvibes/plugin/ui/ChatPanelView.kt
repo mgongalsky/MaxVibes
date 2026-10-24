@@ -66,7 +66,11 @@ class ChatPanelView(
     claudeCliSettings: ClaudeCliSettings,
     actions: ChatPanelViewActions
 ) : JPanel(BorderLayout()) {
-    private val statusLabel = JBLabel("Ready").apply { foreground = JBColor.GRAY }
+    private val statusLabel = JBLabel("Ready").apply {
+        foreground = JBColor.foreground()
+        minimumSize = java.awt.Dimension(0, preferredSize.height)
+        putClientProperty("html.disable", true)
+    }
     private val tokenLabel = JBLabel("").apply {
         foreground = JBColor.GRAY
         font = font.deriveFont(10f)
@@ -153,6 +157,15 @@ class ChatPanelView(
     }
 
     fun render(state: ChatPanelState) {
+        val sessionId = state.currentSession?.id
+        if (displayedSessionId != sessionId) {
+            displayedSessionId = sessionId
+            val awaiting = state.claudeCodeApproveVisible ||
+                    state.clipboardStatus == com.maxvibes.domain.model.interaction.ClipboardSessionStatus.AWAITING_PASTE ||
+                    state.clipboardStatus == com.maxvibes.domain.model.interaction.ClipboardSessionStatus.AWAITING_APPROVE
+            setActivity(if (awaiting) ChatActivity.WAITING else ChatActivity.IDLE)
+            setStatus(if (awaiting) "Ожидается ваше действие" else "Ready")
+        }
         headerPanel.updateBreadcrumb(state.sessionPath)
         planPanel.update(state.plan)
         claudeCliSettingsPanel.setClaudeCodeVisible(state.mode == InteractionMode.CLAUDE_CODE)
@@ -188,10 +201,17 @@ class ChatPanelView(
     }
 
     fun setStatus(text: String) {
-        statusLabel.text = text
+        val update = Runnable {
+            statusLabel.text = text.lineSequence().joinToString(" ")
+            statusLabel.toolTipText = text
+        }
+        if (javax.swing.SwingUtilities.isEventDispatchThread()) update.run()
+        else javax.swing.SwingUtilities.invokeLater(update)
     }
 
-    fun takeSubmission(): InputSubmission? = inputPanel.takeSubmission()
+    fun takeSubmission(): InputSubmission? = inputPanel.takeSubmission()?.also {
+        setActivity(ChatActivity.RUNNING)
+    }
 
     fun prefill(prefill: EditorPrefill) {
         inputPanel.prefill(prefill.text, prefill.append)
@@ -235,18 +255,12 @@ class ChatPanelView(
     private fun setupUI() {
         border = JBUI.Borders.empty()
         background = JBColor.background()
-        val statusBar = JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            border = JBUI.Borders.empty(2, 10, 2, 10)
+        val statusBar = JPanel(BorderLayout(0, 2)).apply {
+            border = JBUI.Borders.empty(4, 10, 4, 10)
             background = JBColor.background()
-            add(JPanel(BorderLayout()).apply {
-                background = JBColor.background()
-                add(statusLabel, BorderLayout.WEST)
-            })
-            add(JPanel(BorderLayout()).apply {
-                background = JBColor.background()
-                add(tokenLabel.apply { horizontalAlignment = SwingConstants.LEFT }, BorderLayout.WEST)
-            })
+            add(statusLabel, BorderLayout.CENTER)
+            add(tokenLabel.apply { horizontalAlignment = SwingConstants.LEFT }, BorderLayout.SOUTH)
+            minimumSize = java.awt.Dimension(0, preferredSize.height)
         }
         val conversationWithPlan = JPanel(BorderLayout()).apply {
             background = JBColor.background()
@@ -280,4 +294,16 @@ class ChatPanelView(
         inputPanel.setAutonomyLimit(current, onChange)
     fun deferSendUntilTranscript(send: () -> Unit): Boolean =
         voiceCoordinator.deferSendUntilTranscript(send)
+    private var activity: ChatActivity = ChatActivity.IDLE
+    fun setActivity(value: ChatActivity) {
+        val update = Runnable {
+            activity = value
+            liveTurnPanel.updateActivity(value)
+            inputPanel.setWorkFinished(value == ChatActivity.FINISHED)
+        }
+        if (javax.swing.SwingUtilities.isEventDispatchThread()) update.run()
+        else javax.swing.SwingUtilities.invokeLater(update)
+    }
+
+    private var displayedSessionId: String? = null
 }

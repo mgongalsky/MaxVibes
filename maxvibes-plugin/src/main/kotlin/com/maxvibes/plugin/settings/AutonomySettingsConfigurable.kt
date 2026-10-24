@@ -36,8 +36,23 @@ class AutonomySettingsConfigurable(private val project: Project) : Configurable 
     }
 
     override fun apply() {
+        val previousPolicy = settings.load()
+        val previousRetries = settings.loadMaxFormatRetries()
         editor?.apply()
         settingsPanel?.let { settings.saveMaxFormatRetries(it.formatRetries) }
+        val currentPolicy = settings.load()
+        val currentRetries = settings.loadMaxFormatRetries()
+        if (previousPolicy.asMap() != currentPolicy.asMap() || previousRetries != currentRetries) {
+            com.maxvibes.plugin.service.MaxVibesService.getInstance(project).loggerPort.info(
+                "Autonomy", "settings_changed", mapOf(
+                    "source" to "settings_apply",
+                    "previousPolicy" to previousPolicy.asMap().entries.joinToString(",") { "${it.key}=${it.value}" },
+                    "policy" to currentPolicy.asMap().entries.joinToString(",") { "${it.key}=${it.value}" },
+                    "previousFormatRetries" to previousRetries,
+                    "formatRetries" to currentRetries
+                )
+            )
+        }
     }
 
     override fun reset() {

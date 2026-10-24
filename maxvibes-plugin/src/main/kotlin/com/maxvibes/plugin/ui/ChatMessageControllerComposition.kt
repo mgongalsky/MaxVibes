@@ -64,7 +64,25 @@ internal class ChatMessageControllerComposition(
             inputStatusView = callbacks,
             appendToChat = callbacks::appendToChat,
             resetClipboardSession = { sessionId -> service.clipboardService.reset(sessionId) },
-            resetClaudeCodeSession = { sessionId -> service.claudeCodeService.reset(sessionId) },
+            resetClaudeCodeSession = { sessionId ->
+                service.loggerPort.info(
+                    "Autonomy", "interaction_cancelled", mapOf(
+                        "sessionId" to sessionId,
+                        "source" to "background_task_cancel",
+                        "allowAll" to approvalService.isAllowAll(sessionId),
+                        "parkedAction" to turnAutopilot.parkedAction(sessionId)?.name,
+                        "activeSessionId" to chatTreeService.getActiveSession().id
+                    )
+                )
+                service.claudeCodeService.reset(sessionId)
+                service.loggerPort.info(
+                    "Autonomy", "interaction_reset", mapOf(
+                        "sessionId" to sessionId,
+                        "allowAll" to approvalService.isAllowAll(sessionId),
+                        "parkedAction" to turnAutopilot.parkedAction(sessionId)?.name
+                    )
+                )
+            },
             addSystemMessage = { sessionId, text ->
                 chatTreeService.addMessage(sessionId, MessageRole.SYSTEM, text)
             },
@@ -120,8 +138,43 @@ internal class ChatMessageControllerComposition(
     }
 
     private val turnAutopilot: TurnAutopilot by lazy {
+        val diagnosticLogger = object : com.maxvibes.application.port.output.LoggerPort by service.loggerPort {
+            override fun info(tag: String, msg: String, data: Map<String, Any?>?) {
+                if (msg == "turn_started") {
+                    val sessionId = data?.get("sessionId") as? String
+                    val settings = ApprovalPolicySettings.getInstance(project)
+                    service.loggerPort.info(
+                        tag, msg, data.orEmpty() + mapOf(
+                            "allowAll" to sessionId?.let { approvalService.isAllowAll(it) },
+                            "policy" to settings.load().asMap().entries.joinToString(",") { "${it.key}=${it.value}" },
+                            "configuredLimit" to settings.loadAutonomousIterations(),
+                            "formatRetries" to settings.loadMaxFormatRetries(),
+                            "agent" to service.activeCodingAgentName
+                        )
+                    )
+                } else {
+                    service.loggerPort.info(tag, msg, data)
+                }
+            }
+        }
         TurnAutopilot(
-            orchestrator = AgentTurnOrchestrator(decideApproval = approvalService::decide),
+            orchestrator = AgentTurnOrchestrator(decideApproval = { sessionId, kind ->
+                val decision = approvalService.decide(sessionId, kind)
+                runCatching {
+                    val source = (decision as? com.maxvibes.domain.model.approval.ApprovalDecision.Allow)?.source
+                    service.loggerPort.info(
+                        "Autonomy", "approval_evaluated", mapOf(
+                            "sessionId" to sessionId,
+                            "action" to kind.name,
+                            "decision" to if (source == null) "ASK" else "ALLOW",
+                            "source" to (source?.name ?: "POLICY"),
+                            "allowAll" to approvalService.isAllowAll(sessionId),
+                            "activeSessionId" to chatTreeService.getActiveSession().id
+                        )
+                    )
+                }
+                decision
+            }),
             continueTurn = { sessionId, action ->
                 when (action) {
                     AgentActionKind.COMMAND -> commandCoordinator.runAllAutomatically(sessionId)
@@ -145,10 +198,9 @@ internal class ChatMessageControllerComposition(
                 service.notificationService.notifyUserAttention(title, message)
             },
             budget = {
-                AutonomyBudget(
-                    ApprovalPolicySettings.getInstance(project).loadAutonomousIterations()
-                )
-            }
+                AutonomyBudget(ApprovalPolicySettings.getInstance(project).loadAutonomousIterations())
+            },
+            logger = diagnosticLogger
         )
     }
 
@@ -322,51 +374,74 @@ internal class ChatMessageControllerComposition(
         title: String,
         session: ChatSession,
         action: suspend () -> ClaudeCodeStepResult
-    ): Unit = interactionExecutionCoordinator.runClaudeCode(
-        title = title,
-        session = session,
-        action = action,
-        onResult = { result ->
-            val completed = result as? ClaudeCodeStepResult.Completed
-            val checks = completed?.checks.orEmpty()
-            val blockedByCommands = checks.isNotEmpty() && completed?.commands?.isNotEmpty() == true
-            val brokenStep = completed?.malformedModifications?.isNotEmpty() == true ||
-                    completed?.modifications?.any { !it.success } == true
-            // Record failures and prepare checks before the dispatcher can continue automatically.
-            if (brokenStep && completed != null) {
-                reportBrokenStep(session, completed)
-            }
-            if (checks.isNotEmpty() && !blockedByCommands && !brokenStep) {
-                checkCoordinator.presentChecks(checks, session.id, InteractionMode.CLAUDE_CODE)
-            }
-            claudeCodeDispatcher.handleResult(result, session)
-            if (blockedByCommands) {
-                callbacks.appendToChat(
-                    "\u26A0\uFE0F ${checks.size} check(s) skipped \u2014 response mixed them with terminal commands"
+    ) {
+        val operationId = java.util.UUID.randomUUID().toString()
+        service.loggerPort.info(
+            "Autonomy", "interaction_started", mapOf(
+                "sessionId" to session.id,
+                "operationId" to operationId,
+                "allowAll" to approvalService.isAllowAll(session.id),
+                "parkedAction" to turnAutopilot.parkedAction(session.id)?.name,
+                "agent" to service.activeCodingAgentName
+            )
+        )
+        interactionExecutionCoordinator.runClaudeCode(
+            title = title,
+            session = session,
+            action = action,
+            onResult = { result ->
+                val completed = result as? ClaudeCodeStepResult.Completed
+                val checks = completed?.checks.orEmpty()
+                val blockedByCommands = checks.isNotEmpty() && completed?.commands?.isNotEmpty() == true
+                val brokenStep = completed?.malformedModifications?.isNotEmpty() == true ||
+                        completed?.modifications?.any { !it.success } == true
+                service.loggerPort.info(
+                    "Autonomy", "interaction_result", mapOf(
+                        "sessionId" to session.id,
+                        "operationId" to operationId,
+                        "result" to result.javaClass.simpleName,
+                        "allowAll" to approvalService.isAllowAll(session.id),
+                        "activeSessionId" to chatTreeService.getActiveSession().id,
+                        "commands" to completed?.commands?.size,
+                        "checks" to checks.joinToString(",") { it.kind.name },
+                        "checksBlockedByCommands" to blockedByCommands,
+                        "brokenStep" to brokenStep
+                    )
                 )
-            } else if (brokenStep && checks.isNotEmpty()) {
-                callbacks.appendToChat(
-                    "\u26A0\uFE0F ${checks.size} check(s) skipped \u2014 the modifications of this step never reached the code"
-                )
-            }
-            // A Completed response can still contain checks, commands or CONTINUE.
-            // Use the same signal as the autopilot so those intermediate steps stay silent.
-            val message = when (com.maxvibes.application.service.turn.TurnSignalMapper.from(result)) {
-                com.maxvibes.domain.model.turn.TurnSignal.Completed ->
-                    if (completed?.success == false) "Работа завершилась с ошибками. Проверьте чат"
-                    else "Работа завершена. Можно продолжать диалог"
+                // Prepare checks before the dispatcher can continue automatically.
+                if (brokenStep && completed != null) {
+                    reportBrokenStep(session, completed)
+                }
+                if (checks.isNotEmpty() && !blockedByCommands && !brokenStep) {
+                    checkCoordinator.presentChecks(checks, session.id, InteractionMode.CLAUDE_CODE)
+                }
+                claudeCodeDispatcher.handleResult(result, session)
+                if (blockedByCommands) {
+                    callbacks.appendToChat(
+                        "\u26A0\uFE0F ${checks.size} check(s) skipped \u2014 response mixed them with terminal commands"
+                    )
+                } else if (brokenStep && checks.isNotEmpty()) {
+                    callbacks.appendToChat(
+                        "\u26A0\uFE0F ${checks.size} check(s) skipped \u2014 the modifications of this step never reached the code"
+                    )
+                }
+                val message = when (com.maxvibes.application.service.turn.TurnSignalMapper.from(result)) {
+                    com.maxvibes.domain.model.turn.TurnSignal.Completed ->
+                        if (completed?.success == false) "Работа завершилась с ошибками. Проверьте чат"
+                        else "Работа завершена. Можно продолжать диалог"
 
-                is com.maxvibes.domain.model.turn.TurnSignal.Failed ->
-                    "Работа остановилась с ошибкой. Нужно ваше внимание"
+                    is com.maxvibes.domain.model.turn.TurnSignal.Failed ->
+                        "Работа остановилась с ошибкой. Нужно ваше внимание"
 
-                else -> null
+                    else -> null
+                }
+                if (message != null) {
+                    val sessionTitle = chatTreeService.getSessionById(session.id)?.title ?: session.title
+                    service.notificationService.notifyUserAttention(sessionTitle, message)
+                }
             }
-            if (message != null) {
-                val sessionTitle = chatTreeService.getSessionById(session.id)?.title ?: session.title
-                service.notificationService.notifyUserAttention(sessionTitle, message)
-            }
-        }
-    )
+        )
+    }
 
     private fun reportBrokenStep(session: ChatSession, completed: ClaudeCodeStepResult.Completed) {
         val failures = completed.modifications.filterIsInstance<ModificationResult.Failure>()
@@ -524,7 +599,17 @@ internal class ChatMessageControllerComposition(
 
     fun setAllowAllApprovals(enabled: Boolean) {
         val sessionId = chatTreeService.getActiveSession().id
+        val previous = approvalService.isAllowAll(sessionId)
         approvalService.setAllowAll(sessionId, enabled)
+        service.loggerPort.info(
+            "Autonomy", "auto_toggle_changed", mapOf(
+                "sessionId" to sessionId,
+                "source" to "chat_checkbox",
+                "previous" to previous,
+                "enabled" to approvalService.isAllowAll(sessionId),
+                "parkedAction" to turnAutopilot.parkedAction(sessionId)?.name
+            )
+        )
         if (enabled) turnAutopilot.resumeParked(sessionId)
     }
 
@@ -572,13 +657,14 @@ internal class ChatMessageControllerComposition(
 
     private fun announceParked(reason: AwaitReason) {
         callbacks.updateModeIndicator()
+        callbacks.setActivity(ChatActivity.WAITING)
         if (reason == AwaitReason.BUDGET_EXHAUSTED) {
             val limit = ApprovalPolicySettings.getInstance(project).loadAutonomousIterations()
             callbacks.appendToChat(
-                "\u23F8\uFE0F Лимит автономии исчерпан: $limit шаг(ов) подряд без человека. " +
+                "⏸️ Лимит автономии исчерпан: $limit шаг(ов) подряд без человека. " +
                         "Подтвердите следующий шаг или напишите сообщение — счёт начнётся заново."
             )
-            callbacks.setStatus("\u23F8\uFE0F Лимит автономии ($limit) исчерпан")
+            callbacks.setStatus("⏸️ Лимит автономии ($limit) исчерпан — ожидается ваше решение")
         } else if (reason == AwaitReason.POLICY_ASK &&
             hasParkedContinuation(chatTreeService.getActiveSession().id)
         ) {

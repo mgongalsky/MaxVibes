@@ -205,40 +205,78 @@ class LiveTurnPanel(
         isVisible = false
     }
 
-    /** Entry point for the stream listener. Any thread. */
     fun onEvent(event: AgentStreamEvent) {
-        queue.add(event)
-        lastEventAtMs = System.currentTimeMillis()
-        if (pumpRequested.compareAndSet(false, true)) {
-            SwingUtilities.invokeLater { if (!drainTimer.isRunning) drainTimer.start() }
+        if (event is AgentStreamEvent.RateLimitUpdate) return
+        synchronized(queue) {
+            if (disposed || !acceptingEvents) return
+            queue.add(event)
+            lastEventAtMs = System.currentTimeMillis()
+            if (pumpRequested.compareAndSet(false, true)) {
+                SwingUtilities.invokeLater {
+                    if (!disposed && pumpRequested.get() && !drainTimer.isRunning) drainTimer.start()
+                }
+            }
         }
     }
 
-    /** Stops the drain timer. Call from the owning panel's dispose(). */
     fun dispose() {
-        drainTimer.stop()
+        disposed = true
+        val cleanup = Runnable {
+            queue.clear()
+            reset()
+        }
+        if (SwingUtilities.isEventDispatchThread()) cleanup.run()
+        else SwingUtilities.invokeLater(cleanup)
     }
 
     // ---- EDT pump ----
 
     private fun tick() {
+        if (disposed) return
         var changed = false
         while (true) {
             val ev = queue.poll() ?: break
             changed = true
-            if (apply(ev)) return // turn finished; state already reset
+            if (apply(ev)) return
         }
-        if (changed) renderContent()
-        if (turnStartedAtMs != 0L) renderHeader()
+        if (changed && turnStartedAtMs != 0L) renderContent()
+        if (turnStartedAtMs != 0L) {
+            renderHeader()
+        } else {
+            drainTimer.stop()
+            pumpRequested.set(false)
+            // A producer may have enqueued while the pump was still marked requested.
+            if (queue.isNotEmpty() && pumpRequested.compareAndSet(false, true)) drainTimer.start()
+        }
     }
 
-    /** @return true when the event terminated the turn. */
     private fun apply(event: AgentStreamEvent): Boolean {
+        if (event is AgentStreamEvent.RateLimitUpdate) return false
+        if (event is AgentStreamEvent.SessionStarted) {
+            turnTerminated = false
+        } else if (turnTerminated) {
+            // stderr, trailing deltas and duplicate terminal events belong to the closed turn.
+            return false
+        }
+        if (event is AgentStreamEvent.Completed) {
+            turnTerminated = true
+            reset()
+            return true
+        }
+        if (event is AgentStreamEvent.Failed) {
+            val partial = narrationDisplay()
+            turnTerminated = true
+            reset()
+            onPartialFlush(partial, event.reason)
+            return true
+        }
+        // Diagnostics alone are not evidence of an active model request.
+        if (turnStartedAtMs == 0L && event is AgentStreamEvent.Notice) return false
         if (turnStartedAtMs == 0L) activate()
         when (event) {
             is AgentStreamEvent.SessionStarted -> {
                 model = event.model
-                addFeedLine("session ${event.sessionId.take(8)} \u00B7 ${event.model}", neutralColor)
+                addFeedLine("session ${event.sessionId.take(8)} · ${event.model}", neutralColor)
             }
 
             is AgentStreamEvent.NarrationDelta -> {
@@ -254,36 +292,29 @@ class LiveTurnPanel(
             is AgentStreamEvent.ThinkingProgress -> thinkingTokens = event.estimatedTokens
             is AgentStreamEvent.ToolStarted -> {
                 val base = "${event.name} ${event.summary}".trim()
-                val label = feedLabel("\u23F3 $base", neutralColor)
+                val label = feedLabel("⏳ $base", neutralColor)
                 toolRows[event.toolUseId] = ToolRow(System.currentTimeMillis(), label, base)
                 addFeedComponent(label)
             }
 
-            is AgentStreamEvent.RateLimitUpdate -> Unit
             is AgentStreamEvent.ToolFinished -> {
                 val row = toolRows.remove(event.toolUseId)
                 val dur = row?.let {
-                    " \u00B7 ${String.format("%.1f", (System.currentTimeMillis() - it.startedAtMs) / 1000.0)}s"
+                    " · ${String.format("%.1f", (System.currentTimeMillis() - it.startedAtMs) / 1000.0)}s"
                 } ?: ""
                 val base = row?.base ?: (event.summary ?: event.toolUseId)
-                val text = (if (event.ok) "\u2713 " else "\u2717 ") + base + dur
+                val text = (if (event.ok) "✓ " else "✗ ") + base + dur
                 val color = if (event.ok) okColor else errColor
                 if (row != null) {
-                    row.label.text = text; row.label.foreground = color
+                    row.label.text = text
+                    row.label.foreground = color
                 } else addFeedComponent(feedLabel(text, color))
             }
 
-            is AgentStreamEvent.Notice -> addFeedLine("\u2139 ${event.text}", noticeColor)
-            is AgentStreamEvent.Completed -> {
-                reset(); return true
-            }
-
-            is AgentStreamEvent.Failed -> {
-                val partial = narrationDisplay()
-                reset()
-                onPartialFlush(partial, event.reason)
-                return true
-            }
+            is AgentStreamEvent.Notice -> addFeedLine("ℹ ${event.text}", noticeColor)
+            is AgentStreamEvent.RateLimitUpdate,
+            is AgentStreamEvent.Completed,
+            is AgentStreamEvent.Failed -> Unit
         }
         return false
     }
@@ -503,4 +534,30 @@ class LiveTurnPanel(
     }
 
     private fun isPinned(bar: JScrollBar) = bar.value + bar.visibleAmount >= bar.maximum - 16
+    private var turnTerminated = false
+    @Volatile
+    private var disposed = false
+    private var acceptingEvents = true
+
+    /** Authoritative controller state. Called on EDT, independently of transport terminal events. */
+    fun updateActivity(activity: ChatActivity) {
+        check(SwingUtilities.isEventDispatchThread())
+        if (disposed) return
+        if (activity == ChatActivity.RUNNING) {
+            synchronized(queue) {
+                if (!acceptingEvents) {
+                    turnTerminated = false
+                    acceptingEvents = true
+                }
+            }
+        } else {
+            synchronized(queue) {
+                acceptingEvents = false
+                queue.clear()
+            }
+            turnTerminated = true
+            reset()
+            stopButton.isEnabled = false
+        }
+    }
 }

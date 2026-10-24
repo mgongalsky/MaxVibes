@@ -39,6 +39,8 @@ internal class InteractionExecutionCoordinator(
         action: suspend () -> ClipboardStepResult,
         onResult: (ClipboardStepResult) -> Unit
     ) {
+        inputStatusView.setActivity(ChatActivity.RUNNING)
+        inputStatusView.setStatus(title)
         backgroundTaskRunner.run(
             title = "MaxVibes: $title",
             cancellable = true,
@@ -53,9 +55,7 @@ internal class InteractionExecutionCoordinator(
                         "clipboard background action crashed",
                         e as? Exception ?: RuntimeException(e)
                     )
-                    ClipboardStepResult.Error(
-                        message = "Internal error: ${e.javaClass.simpleName}: ${e.message ?: "no message"}"
-                    )
+                    ClipboardStepResult.Error(message = "Internal error: ${e.javaClass.simpleName}: ${e.message ?: "no message"}")
                 }
             },
             onSuccess = onResult,
@@ -64,6 +64,8 @@ internal class InteractionExecutionCoordinator(
                 appendToChat("⚠️ Cancelled")
                 inputStatusView.setInputEnabled(true)
                 inputStatusView.updateModeIndicator()
+                inputStatusView.setActivity(ChatActivity.WAITING)
+                inputStatusView.setStatus("Операция отменена — ожидается ваше действие")
             }
         )
     }
@@ -74,8 +76,7 @@ internal class InteractionExecutionCoordinator(
         action: suspend () -> ClaudeCodeStepResult,
         onResult: (ClaudeCodeStepResult) -> Unit
     ) {
-        // Заголовок уже назван активным агентом — собственная строка здесь врала бы
-        // про Claude Code, когда за диалогом стоит Codex.
+        inputStatusView.setActivity(ChatActivity.RUNNING)
         inputStatusView.setStatus(title)
         backgroundTaskRunner.run(
             title = "MaxVibes: $title",
@@ -91,17 +92,17 @@ internal class InteractionExecutionCoordinator(
                         "claudeCode background action crashed",
                         e as? Exception ?: RuntimeException(e)
                     )
-                    ClaudeCodeStepResult.Error(
-                        message = "Internal error: ${e.javaClass.simpleName}: ${e.message ?: "no message"}"
-                    )
+                    ClaudeCodeStepResult.Error(message = "Internal error: ${e.javaClass.simpleName}: ${e.message ?: "no message"}")
                 }
             },
             onSuccess = onResult,
             onCancel = {
                 resetClaudeCodeSession(session.id)
-                appendToChat("\u26A0\uFE0F Cancelled")
+                appendToChat("⚠️ Cancelled")
                 inputStatusView.setInputEnabled(true)
                 inputStatusView.updateModeIndicator()
+                inputStatusView.setActivity(ChatActivity.WAITING)
+                inputStatusView.setStatus("Операция отменена — ожидается ваше действие")
             }
         )
     }
